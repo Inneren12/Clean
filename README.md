@@ -23,6 +23,24 @@ uvicorn app.main:app --reload
 docker compose up --build
 ```
 
+## Web UI (chat tester)
+
+The minimal Next.js chat UI lives in `web/`. It expects the API base URL in an
+environment variable.
+
+```bash
+cd web
+cp .env.example .env.local
+npm install
+npm run dev
+```
+
+Environment:
+
+```
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+```
+
 ## Health check
 
 ```bash
