@@ -1,13 +1,7 @@
 import json
 
-from fastapi.testclient import TestClient
 
-from app.main import app
-
-client = TestClient(app)
-
-
-def test_chat_turn_state_is_json_serializable():
+def test_chat_turn_state_is_json_serializable(client):
     response = client.post(
         "/v1/chat/turn",
         json={"session_id": "test-session", "message": "2 bed 1 bath standard"},

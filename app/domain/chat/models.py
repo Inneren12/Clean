@@ -25,6 +25,12 @@ class ParsedFields(BaseModel):
     add_ons: AddOns = Field(default_factory=AddOns)
 
 
+class SessionState(BaseModel):
+    session_id: str
+    brand: str = "economy"
+    fields: ParsedFields
+
+
 class ChatTurnRequest(BaseModel):
     session_id: str
     message: str

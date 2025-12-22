@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     cors_origins: List[str] = Field(default_factory=list, env="CORS_ORIGINS")
     rate_limit_per_minute: int = Field(30, env="RATE_LIMIT_PER_MINUTE")
     pricing_config_path: str = Field("pricing/economy_v1.json", env="PRICING_CONFIG_PATH")
+    database_url: str = Field(
+        "postgresql+psycopg://postgres:postgres@postgres:5432/cleaning",
+        env="DATABASE_URL",
+    )
 
     model_config = SettingsConfigDict(env_file=".env")
 

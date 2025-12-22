@@ -1,15 +1,33 @@
+import sys
 from logging.config import fileConfig
-
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
-
+from pathlib import Path
 from alembic import context
+from sqlalchemy import engine_from_config, pool
+from sqlalchemy.engine import make_url
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from app.domain.leads import db_models  # noqa: F401
+from app.infra.db import Base
+from app.settings import settings
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = None
+
+def _sync_database_url(raw_url: str) -> str:
+    url = make_url(raw_url)
+    if url.drivername.endswith("+aiosqlite"):
+        url = url.set(drivername="sqlite")
+    return str(url)
+
+
+config.set_main_option("sqlalchemy.url", _sync_database_url(settings.database_url))
+
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

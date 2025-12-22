@@ -23,12 +23,25 @@ uvicorn app.main:app --reload
 docker compose up --build
 ```
 
-## Sprint 1 Notes / Boundaries
+Apply migrations (required for chat persistence and leads):
 
-- Sprint 1 uses in-memory chat sessions only (no DB persistence yet).
-- The Postgres container is included for Sprint 2 readiness; runtime logic does not depend on it yet.
-- Alembic migrations are present but not applied until Sprint 2.
-- `/v1/leads` is part of Sprint 2 and not implemented in Sprint 1.
+```bash
+alembic upgrade head
+```
+
+## Developer shortcuts (Sprint 2)
+
+```bash
+make dev
+make migrate
+make test
+```
+
+## Sprint 2 Notes / Boundaries
+
+- Chat sessions and leads are persisted in Postgres via SQLAlchemy async.
+- Alembic migrations live in `alembic/`.
+- `/v1/leads` captures booking/contact details with estimate snapshots.
 
 ## Web UI (chat tester)
 
@@ -91,9 +104,9 @@ Sample response:
 
 ```json
 {
-  "pricing_config_id": "economy_v1",
-  "pricing_config_version": 1,
-  "config_hash": "...",
+  "pricing_config_id": "economy",
+  "pricing_config_version": "v1",
+  "config_hash": "sha256:...",
   "rate": 35.0,
   "team_size": 2,
   "time_on_site_hours": 2.5,
@@ -135,18 +148,37 @@ curl -X POST http://localhost:8000/v1/chat/turn \
 
 ## Leads API (Sprint 2)
 
-This endpoint is planned for Sprint 2 and is not available in Sprint 1. The example
-below shows the intended Sprint 2 request/response shape.
-
 ```bash
 curl -X POST http://localhost:8000/v1/leads \
   -H "Content-Type: application/json" \
   -d '{
-    "session_id": "session-123",
-    "contact_name": "Jane Doe",
-    "email": "jane@example.com",
+    "name": "Jane Doe",
     "phone": "780-555-1234",
-    "notes": "Call after 5pm"
+    "email": "jane@example.com",
+    "postal_code": "T5J 0N3",
+    "preferred_dates": ["Sat afternoon", "Sun morning"],
+    "access_notes": "Buzz #1203",
+    "structured_inputs": {
+      "beds": 2,
+      "baths": 2,
+      "cleaning_type": "deep"
+    },
+    "estimate_snapshot": {
+      "pricing_config_id": "economy",
+      "pricing_config_version": "v1",
+      "config_hash": "sha256:...",
+      "rate": 35.0,
+      "team_size": 2,
+      "time_on_site_hours": 3.5,
+      "billed_cleaner_hours": 7.0,
+      "labor_cost": 245.0,
+      "discount_amount": 12.25,
+      "add_ons_cost": 50.0,
+      "total_before_tax": 282.75,
+      "assumptions": [],
+      "missing_info": [],
+      "confidence": 1.0
+    }
   }'
 ```
 
@@ -155,8 +187,7 @@ Sample response:
 ```json
 {
   "lead_id": "e1e955ad-1a2c-45d3-9e4d-6d1f82f9d7ab",
-  "session_id": "session-123",
-  "status": "received"
+  "next_step_text": "Thanks! Our team will confirm your booking and follow up shortly."
 }
 ```
 
@@ -220,9 +251,9 @@ Sample response:
   "reply_text": "Great news! Here's your Economy estimate: $207.50 before tax. Labor: $175.00, Add-ons: $50.00, Discounts: -$17.50. Team size 2, time on site 2.5h. Would you like to book a slot?",
   "handoff_required": false,
   "estimate": {
-    "pricing_config_id": "economy_v1",
-    "pricing_config_version": 1,
-    "config_hash": "...",
+    "pricing_config_id": "economy",
+    "pricing_config_version": "v1",
+    "config_hash": "sha256:...",
     "rate": 35.0,
     "team_size": 1,
     "time_on_site_hours": 4.0,
