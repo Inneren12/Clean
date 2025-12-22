@@ -22,6 +22,9 @@ def test_estimate_api_success():
     body = response.json()
     assert body["pricing_config_id"] == "economy_v1"
     assert "config_hash" in body
+    assert body["team_size"] > 0
+    assert body["labor_cost"] > 0
+    assert body["total_before_tax"] > 0
 
 
 def test_estimate_api_validation_error():
@@ -29,3 +32,5 @@ def test_estimate_api_validation_error():
     assert response.status_code == 422
     body = response.json()
     assert body["title"] == "Validation Error"
+    assert body["request_id"]
+    assert body["errors"]

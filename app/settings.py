@@ -1,5 +1,7 @@
-from pydantic import BaseSettings, Field
 from typing import List
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -8,8 +10,19 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = Field(30, env="RATE_LIMIT_PER_MINUTE")
     pricing_config_path: str = Field("pricing/economy_v1.json", env="PRICING_CONFIG_PATH")
 
-    class Config:
-        env_file = ".env"
+    model_config = SettingsConfigDict(env_file=".env")
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, value: object) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            origins = [origin.strip() for origin in value.split(",")]
+            return [origin for origin in origins if origin]
+        if isinstance(value, list):
+            return value
+        return [str(value)]
 
 
 settings = Settings()

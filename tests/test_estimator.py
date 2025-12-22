@@ -14,6 +14,8 @@ def test_standard_base_case():
     assert response.breakdown.base_hours == 3.0
     assert response.breakdown.labor_cost == 105.0
     assert response.breakdown.total_before_tax == 105.0
+    assert response.labor_cost == response.breakdown.labor_cost
+    assert response.total_before_tax == response.breakdown.total_before_tax
 
 
 def test_rounding_up_time_on_site():
