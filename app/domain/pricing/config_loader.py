@@ -8,7 +8,7 @@ from typing import Any, Dict
 @dataclass(frozen=True)
 class PricingConfig:
     pricing_config_id: str
-    pricing_config_version: int
+    pricing_config_version: str
     config_hash: str
     data: Dict[str, Any]
 
@@ -24,7 +24,7 @@ def load_pricing_config(path: str) -> PricingConfig:
     config_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return PricingConfig(
         pricing_config_id=data["pricing_config_id"],
-        pricing_config_version=int(data["pricing_config_version"]),
-        config_hash=config_hash,
+        pricing_config_version=str(data["pricing_config_version"]),
+        config_hash=f"sha256:{config_hash}",
         data=data,
     )

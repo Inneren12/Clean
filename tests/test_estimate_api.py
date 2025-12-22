@@ -1,11 +1,4 @@
-from fastapi.testclient import TestClient
-
-from app.main import app
-
-client = TestClient(app)
-
-
-def test_estimate_api_success():
+def test_estimate_api_success(client):
     response = client.post(
         "/v1/estimate",
         json={
@@ -20,14 +13,15 @@ def test_estimate_api_success():
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["pricing_config_id"] == "economy_v1"
-    assert "config_hash" in body
+    assert body["pricing_config_id"] == "economy"
+    assert body["pricing_config_version"] == "v1"
+    assert body["config_hash"].startswith("sha256:")
     assert body["team_size"] > 0
     assert body["labor_cost"] > 0
     assert body["total_before_tax"] > 0
 
 
-def test_estimate_api_validation_error():
+def test_estimate_api_validation_error(client):
     response = client.post("/v1/estimate", json={"beds": -1, "baths": 1})
     assert response.status_code == 422
     body = response.json()

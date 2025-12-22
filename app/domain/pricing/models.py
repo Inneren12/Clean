@@ -60,7 +60,7 @@ class EstimateBreakdown(BaseModel):
 
 class EstimateResponse(BaseModel):
     pricing_config_id: str
-    pricing_config_version: int
+    pricing_config_version: str
     config_hash: str
     rate: float
     team_size: int

@@ -1,6 +1,6 @@
 {
-  "pricing_config_id": "economy_v1",
-  "pricing_config_version": 1,
+  "pricing_config_id": "economy",
+  "pricing_config_version": "v1",
   "currency": "CAD",
   "rate_per_cleaner_hour": 35.0,
   "min_cleaner_hours": 3.0,
@@ -24,7 +24,9 @@
   "multi_floor_extra_hours": 0.5,
   "recurring_discounts": {
     "weekly": 0.1,
-    "biweekly": 0.05
+    "biweekly": 0.05,
+    "monthly": 0.0,
+    "one_time": 0.0
   },
   "base_hours_table": [
     {"beds": 1, "baths": 1, "hours": 2.5},
