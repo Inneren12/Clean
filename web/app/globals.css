@@ -15,6 +15,12 @@ body {
   background: #f6f7fb;
 }
 
+pre {
+  white-space: pre-wrap;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
 .page {
   min-height: 100vh;
   display: flex;
