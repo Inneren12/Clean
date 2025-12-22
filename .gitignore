@@ -3,3 +3,8 @@ __pycache__/
 .env
 .pytest_cache/
 .env.*
+!.env.example
+node_modules/
+.next/
+out/
+web/.env.local
