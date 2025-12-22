@@ -1,0 +1,55 @@
+{
+  "pricing_config_id": "economy_v1",
+  "pricing_config_version": 1,
+  "currency": "CAD",
+  "rate_per_cleaner_hour": 35.0,
+  "min_cleaner_hours": 3.0,
+  "time_on_site_rounding_hours": 0.5,
+  "team_size_thresholds": [
+    {"max_cleaner_hours": 4.5, "team_size": 1},
+    {"max_cleaner_hours": 8.0, "team_size": 2},
+    {"max_cleaner_hours": 9999.0, "team_size": 3}
+  ],
+  "multipliers": {
+    "standard": 1.0,
+    "deep": 1.2,
+    "move_out_empty": 1.35,
+    "move_in_empty": 1.35
+  },
+  "heavy_grease_extra_hours": [
+    {"max_beds": 2, "extra_hours": 0.5},
+    {"max_beds": 4, "extra_hours": 1.0},
+    {"max_beds": 999, "extra_hours": 1.5}
+  ],
+  "multi_floor_extra_hours": 0.5,
+  "recurring_discounts": {
+    "weekly": 0.1,
+    "biweekly": 0.05
+  },
+  "base_hours_table": [
+    {"beds": 1, "baths": 1, "hours": 2.5},
+    {"beds": 2, "baths": 1, "hours": 3.0},
+    {"beds": 2, "baths": 2, "hours": 3.5},
+    {"beds": 3, "baths": 2, "hours": 4.0},
+    {"beds": 3, "baths": 3, "hours": 4.5},
+    {"beds": 4, "baths": 2, "hours": 4.5},
+    {"beds": 4, "baths": 3, "hours": 5.0},
+    {"beds": 5, "baths": 3, "hours": 5.5},
+    {"beds": 6, "baths": 4, "hours": 6.5}
+  ],
+  "add_ons": {
+    "oven": 30,
+    "fridge": 20,
+    "microwave": 10,
+    "cabinets": 40,
+    "windows_up_to_5": 30,
+    "balcony": 25,
+    "linen_per_bed": 10,
+    "steam_armchair": 45,
+    "steam_sofa_2": 90,
+    "steam_sofa_3": 110,
+    "steam_sectional": 150,
+    "steam_mattress": 110,
+    "carpet_spot": 35
+  }
+}
