@@ -33,7 +33,8 @@ docker compose up --build
 ## Web UI (chat tester)
 
 The minimal Next.js chat UI lives in `web/`. It expects the API base URL in an
-environment variable.
+environment variable. This is a local Sprint 1 chat tester; before production use,
+upgrade Next.js to a patched version.
 
 ```bash
 cd web
@@ -133,6 +134,9 @@ curl -X POST http://localhost:8000/v1/chat/turn \
 ```
 
 ## Leads API (Sprint 2)
+
+This endpoint is planned for Sprint 2 and is not available in Sprint 1. The example
+below shows the intended Sprint 2 request/response shape.
 
 ```bash
 curl -X POST http://localhost:8000/v1/leads \
