@@ -26,8 +26,18 @@ type EstimateResponse = {
   pricing_config_id: string;
   pricing_config_version: number;
   config_hash: string;
+  rate: number;
+  team_size: number;
+  time_on_site_hours: number;
+  billed_cleaner_hours: number;
+  labor_cost: number;
+  discount_amount: number;
+  add_ons_cost: number;
+  total_before_tax: number;
+  assumptions: string[];
+  missing_info: string[];
   confidence: number;
-  breakdown: EstimateBreakdown;
+  breakdown?: EstimateBreakdown | null;
 };
 
 type ChatTurnResponse = {
@@ -161,13 +171,14 @@ export default function HomePage() {
         {proposedQuestions.length > 0 ? (
           <div className="quick-replies">
             <p className="label">Quick replies</p>
+            <p className="muted">Tap to prefill</p>
             <div className="quick-reply-list">
               {proposedQuestions.map((question) => (
                 <button
                   key={question}
                   type="button"
                   className="quick-reply"
-                  onClick={() => void submitMessage(question)}
+                  onClick={() => setMessageInput(question)}
                   disabled={loading}
                 >
                   {question}
@@ -191,29 +202,35 @@ export default function HomePage() {
             </div>
             <div>
               <p className="label">Team Size</p>
-              <p className="value">{estimate.breakdown.team_size}</p>
+              <p className="value">{estimate.team_size}</p>
             </div>
             <div>
               <p className="label">Time on site (hours)</p>
-              <p className="value">{estimate.breakdown.time_on_site_hours}</p>
+              <p className="value">{estimate.time_on_site_hours}</p>
             </div>
             <div>
               <p className="label">Labor Cost</p>
-              <p className="value">{formatCurrency(estimate.breakdown.labor_cost)}</p>
+              <p className="value">{formatCurrency(estimate.labor_cost)}</p>
             </div>
             <div>
               <p className="label">Add-ons Cost</p>
-              <p className="value">{formatCurrency(estimate.breakdown.add_ons_cost)}</p>
+              <p className="value">{formatCurrency(estimate.add_ons_cost)}</p>
             </div>
             <div>
               <p className="label">Discount</p>
-              <p className="value">-{formatCurrency(estimate.breakdown.discount_amount)}</p>
+              <p className="value">-{formatCurrency(estimate.discount_amount)}</p>
             </div>
             <div>
               <p className="label">Total Before Tax</p>
-              <p className="value total">{formatCurrency(estimate.breakdown.total_before_tax)}</p>
+              <p className="value total">{formatCurrency(estimate.total_before_tax)}</p>
             </div>
           </div>
+          {estimate.breakdown ? (
+            <div className="estimate-breakdown">
+              <p className="label">Debug breakdown</p>
+              <pre className="mono">{JSON.stringify(estimate.breakdown, null, 2)}</pre>
+            </div>
+          ) : null}
         </section>
       ) : null}
     </div>

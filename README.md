@@ -23,6 +23,13 @@ uvicorn app.main:app --reload
 docker compose up --build
 ```
 
+## Sprint 1 Notes / Boundaries
+
+- Sprint 1 uses in-memory chat sessions only (no DB persistence yet).
+- The Postgres container is included for Sprint 2 readiness; runtime logic does not depend on it yet.
+- Alembic migrations are present but not applied until Sprint 2.
+- `/v1/leads` is part of Sprint 2 and not implemented in Sprint 1.
+
 ## Web UI (chat tester)
 
 The minimal Next.js chat UI lives in `web/`. It expects the API base URL in an
@@ -40,6 +47,8 @@ Environment:
 ```
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 ```
+
+Quick replies in the UI prefill the input so users can edit before sending.
 
 ## Health check
 
@@ -123,7 +132,7 @@ curl -X POST http://localhost:8000/v1/chat/turn \
   }'
 ```
 
-## Leads API
+## Leads API (Sprint 2)
 
 ```bash
 curl -X POST http://localhost:8000/v1/leads \

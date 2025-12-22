@@ -79,7 +79,7 @@ def handle_turn(
             session_id=request.session_id,
             intent=intent,
             parsed_fields=merged,
-            state=merged.model_dump(),
+            state=merged.model_dump(mode="json"),
             missing_fields=_missing_fields(merged),
             proposed_questions=["Could you share your contact details so our team can follow up?"],
             reply_text=(
@@ -103,7 +103,7 @@ def handle_turn(
         session_id=request.session_id,
         intent=intent,
         parsed_fields=merged,
-        state=merged.model_dump(),
+        state=merged.model_dump(mode="json"),
         missing_fields=missing,
         proposed_questions=proposed_questions,
         reply_text=reply_text,
