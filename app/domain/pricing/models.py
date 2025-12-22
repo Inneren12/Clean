@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel, Field, conint, confloat
 
 
@@ -62,5 +62,15 @@ class EstimateResponse(BaseModel):
     pricing_config_id: str
     pricing_config_version: int
     config_hash: str
+    rate: float
+    team_size: int
+    time_on_site_hours: float
+    billed_cleaner_hours: float
+    labor_cost: float
+    discount_amount: float
+    add_ons_cost: float
+    total_before_tax: float
+    assumptions: List[str] = Field(default_factory=list)
+    missing_info: List[str] = Field(default_factory=list)
     confidence: float
-    breakdown: EstimateBreakdown
+    breakdown: Optional[EstimateBreakdown] = None

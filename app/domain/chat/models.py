@@ -1,5 +1,6 @@
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
+
 from pydantic import BaseModel, Field, conint
 
 from app.domain.pricing.models import AddOns, CleaningType, Frequency, EstimateResponse
@@ -27,12 +28,16 @@ class ParsedFields(BaseModel):
 class ChatTurnRequest(BaseModel):
     session_id: str
     message: str
+    brand: str = "economy"
+    channel: str = "web"
+    client_context: Optional[Dict[str, object]] = None
 
 
 class ChatTurnResponse(BaseModel):
     session_id: str
     intent: Intent
     parsed_fields: ParsedFields
+    state: Dict[str, object] = Field(default_factory=dict)
     missing_fields: List[str]
     proposed_questions: List[str]
     reply_text: str

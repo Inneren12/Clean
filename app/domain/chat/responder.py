@@ -17,6 +17,10 @@ def build_reply(
 ) -> Tuple[str, List[str]]:
     if estimate:
         breakdown = estimate.breakdown
+        proposed_questions = [
+            "What date and time window would you prefer?",
+            "What is the service address postal code or area?",
+        ]
         reply_text = (
             "Great news! Here's your Economy estimate: "
             f"${breakdown.total_before_tax:.2f} before tax. "
@@ -25,7 +29,7 @@ def build_reply(
             f"Team size {breakdown.team_size}, time on site {breakdown.time_on_site_hours:.1f}h. "
             "Would you like to book a slot?"
         )
-        return reply_text, []
+        return reply_text, proposed_questions
 
     questions = [QUESTION_MAP[field] for field in missing_fields if field in QUESTION_MAP]
     questions = questions[:2]

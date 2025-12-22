@@ -21,7 +21,7 @@ async def chat_turn(
     existing = store.get(request.session_id)
     parsed_state = ParsedFields(**existing.state) if existing else None
     response, merged = handle_turn(request, parsed_state, pricing_config)
-    store.upsert(request.session_id, merged.dict())
+    store.upsert(request.session_id, merged.model_dump())
 
     logger.info(
         "chat_turn",

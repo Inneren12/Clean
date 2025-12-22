@@ -19,15 +19,23 @@ from app.infra.security import RateLimiter
 from app.settings import settings
 
 
-class ProblemDetails(JSONResponse):
-    def __init__(self, status: int, title: str, detail: str, type_: str = "about:blank") -> None:
-        content = {
-            "type": type_,
-            "title": title,
-            "status": status,
-            "detail": detail,
-        }
-        super().__init__(status_code=status, content=content)
+def problem_details(
+    request: Request,
+    status: int,
+    title: str,
+    detail: str,
+    errors: list[dict[str, str]] | None = None,
+    type_: str = "about:blank",
+) -> JSONResponse:
+    content = {
+        "type": type_,
+        "title": title,
+        "status": status,
+        "detail": detail,
+        "request_id": getattr(request.state, "request_id", None),
+        "errors": errors or [],
+    }
+    return JSONResponse(status_code=status, content=content)
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
@@ -68,7 +76,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable):
         client = request.client.host if request.client else "unknown"
         if not self.limiter.allow(client):
-            return ProblemDetails(
+            return problem_details(
+                request=request,
                 status=429,
                 title="Too Many Requests",
                 detail="Rate limit exceeded",
@@ -93,16 +102,24 @@ app.add_middleware(
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    return ProblemDetails(
+    errors = []
+    for error in exc.errors():
+        loc = error.get("loc", [])
+        field = ".".join(str(part) for part in loc if part not in {"body", "query", "path"}) or "body"
+        errors.append({"field": field, "message": error.get("msg", "Invalid value")})
+    return problem_details(
+        request=request,
         status=422,
         title="Validation Error",
-        detail=str(exc),
+        detail="Request validation failed",
+        errors=errors,
     )
 
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    return ProblemDetails(
+    return problem_details(
+        request=request,
         status=500,
         title="Internal Server Error",
         detail="Unexpected error",

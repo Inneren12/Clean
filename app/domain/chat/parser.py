@@ -124,9 +124,6 @@ def parse_message(message: str) -> Tuple[ParsedFields, float, List[str]]:
         missing.append("beds")
     if baths is None:
         missing.append("baths")
-    if cleaning_type is None:
-        missing.append("cleaning_type")
-
     confidence = 1.0 - (len(missing) * 0.2)
     confidence = max(0.0, min(1.0, confidence))
     return parsed, confidence, missing
