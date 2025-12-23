@@ -1,4 +1,4 @@
-.PHONY: dev up down logs wait-db migrate revision psql test
+.PHONY: dev up down logs wait-db migrate revision psql reset-db test
 
 WAIT_DB_COMMAND = docker compose exec -T postgres pg_isready -U postgres -d cleaning
 
@@ -28,6 +28,9 @@ revision:
 
 psql:
 	docker compose exec -T postgres psql -U postgres -d cleaning
+
+reset-db:
+	docker compose down -v
 
 test:
 	pytest

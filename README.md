@@ -24,6 +24,10 @@ FastAPI backend for the Economy MVP pricing and chat system.
    make migrate
    ```
 
+   Some Docker Compose versions ignore/deny `depends_on: condition: service_healthy`.
+   That is OK because `make migrate` waits for Postgres readiness and runs Alembic
+   inside the API container.
+
 4. Run the core endpoints:
 
    ```bash
@@ -53,9 +57,23 @@ FastAPI backend for the Economy MVP pricing and chat system.
          "steam_sofa_3": 0,
          "steam_sectional": 0,
          "steam_mattress": 0,
-         "carpet_spot": 1
-       }
-     }'
+       "carpet_spot": 1
+      }
+    }'
+  ```
+
+   Sample response (trimmed):
+
+   ```json
+   {
+     "pricing_config_id": "economy",
+     "pricing_config_version": "v1",
+     "config_hash": "sha256:...",
+     "estimate": {
+       "team_size": 2,
+       "total_before_tax": 282.75
+     }
+   }
    ```
 
    ```bash
@@ -154,7 +172,7 @@ Quick replies in the UI prefill the input so users can edit before sending.
 
 - Postgres not ready: `make logs` to inspect startup, then re-run `make migrate`.
 - Port conflicts: stop the conflicting process or edit ports in `docker-compose.yml`.
-- Reset DB volume: `docker compose down -v`.
+- Reset DB volume: `make reset-db`.
 
 ## Error format (ProblemDetails)
 
