@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_db_session
 from app.domain.leads.db_models import Lead
 from app.domain.leads.schemas import LeadCreateRequest, LeadResponse
-from app.infra.export import export_lead
+from app.infra.export import export_lead_async
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ async def create_lead(
 
     logger.info("lead_created", extra={"extra": {"lead_id": lead.lead_id}})
     background_tasks.add_task(
-        export_lead,
+        export_lead_async,
         {
             "lead_id": lead.lead_id,
             "name": lead.name,
