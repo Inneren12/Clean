@@ -7,6 +7,7 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+
     services:
       postgres:
         image: postgres:16
@@ -15,7 +16,7 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: cleaning
         ports:
-          - "5433:5432"
+          - 5432/tcp
         options: >-
           --health-cmd="pg_isready -U postgres -d cleaning"
           --health-interval=5s
@@ -23,7 +24,6 @@ jobs:
           --health-retries=20
 
     env:
-      DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5433/cleaning
       PRICING_CONFIG_PATH: pricing/economy_v1.json
       APP_ENV: prod
       STRICT_CORS: "true"
@@ -44,35 +44,31 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Set DATABASE_URL from Postgres service port
+        run: |
+          echo "PGPORT=${{ job.services.postgres.ports[5432] }}" >> $GITHUB_ENV
+          echo "DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports[5432] }}/cleaning" >> $GITHUB_ENV
+          echo "Using PGPORT=${{ job.services.postgres.ports[5432] }}"
+
       - name: Wait for Postgres
         run: |
           python - <<'PY'
           import os, time
           import psycopg
           dsn = os.environ["DATABASE_URL"]
-          for _ in range(60):
+          for i in range(90):
               try:
                   with psycopg.connect(dsn) as conn:
                       with conn.cursor() as cur:
                           cur.execute("select 1;")
                   print("Postgres is ready")
                   break
-              except Exception:
+              except Exception as e:
+                  if i % 10 == 0:
+                      print("Waiting for Postgres...", type(e).__name__)
                   time.sleep(1)
           else:
               raise SystemExit("Postgres not ready in time")
-          PY
-
-      - name: Confirm Postgres connectivity
-        run: |
-          python - <<'PY'
-          import os
-          import psycopg
-          dsn = os.environ["DATABASE_URL"]
-          with psycopg.connect(dsn) as conn:
-              with conn.cursor() as cur:
-                  cur.execute("select current_user, current_database();")
-                  print(cur.fetchone())
           PY
 
       - name: Run migrations
