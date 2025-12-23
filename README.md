@@ -170,7 +170,7 @@ Quick replies in the UI prefill the input so users can edit before sending.
 
 - Postgres not ready: `make logs` to inspect startup, then re-run `make migrate`.
 - Port conflicts: stop the conflicting process or edit ports in `docker-compose.yml`.
-- Reset DB volume: `make reset-db`.
+- Reset DB volume (preferred): `make reset-db`.
 
 ## Error format (ProblemDetails)
 

@@ -113,6 +113,62 @@ def test_create_lead_succeeds_when_webhook_export_fails(client):
         app.state.export_transport = None
 
 
+def test_create_lead_succeeds_when_allowlist_required_skips_export(client):
+    original_app_env = settings.app_env
+    original_mode = settings.export_mode
+    original_url = settings.export_webhook_url
+    original_allowed_hosts = settings.export_webhook_allowed_hosts
+    original_block_private_ips = settings.export_webhook_block_private_ips
+    original_allow_http = settings.export_webhook_allow_http
+
+    settings.app_env = "prod"
+    settings.export_mode = "webhook"
+    settings.export_webhook_url = "https://hook.test/lead"
+    settings.export_webhook_allowed_hosts = []
+    settings.export_webhook_allow_http = False
+    settings.export_webhook_block_private_ips = True
+    app.state.export_resolver = lambda host: ["198.51.100.10"]
+    app.state.export_transport = httpx.MockTransport(lambda request: httpx.Response(204))
+
+    try:
+        estimate_response = client.post(
+            "/v1/estimate",
+            json={
+                "beds": 1,
+                "baths": 1,
+                "cleaning_type": "standard",
+                "heavy_grease": False,
+                "multi_floor": False,
+                "frequency": "one_time",
+                "add_ons": {},
+            },
+        )
+        assert estimate_response.status_code == 200
+        estimate = estimate_response.json()
+
+        lead_payload = {
+            "name": "Allowlist Required",
+            "phone": "780-555-6666",
+            "email": "allowlist@example.com",
+            "preferred_dates": ["Thu afternoon"],
+            "structured_inputs": {"beds": 1, "baths": 1, "cleaning_type": "standard"},
+            "estimate_snapshot": estimate,
+        }
+
+        response = client.post("/v1/leads", json=lead_payload)
+        assert response.status_code == 201
+        assert "lead_id" in response.json()
+    finally:
+        settings.app_env = original_app_env
+        settings.export_mode = original_mode
+        settings.export_webhook_url = original_url
+        settings.export_webhook_allowed_hosts = original_allowed_hosts
+        settings.export_webhook_block_private_ips = original_block_private_ips
+        settings.export_webhook_allow_http = original_allow_http
+        app.state.export_resolver = None
+        app.state.export_transport = None
+
+
 def test_create_lead_rejects_invalid_structured_inputs_key(client):
     estimate_response = client.post(
         "/v1/estimate",
