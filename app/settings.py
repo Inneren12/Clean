@@ -1,3 +1,4 @@
+import json
 from typing import List, Literal
 
 from pydantic import Field, field_validator
@@ -28,7 +29,7 @@ class Settings(BaseSettings):
     export_webhook_allow_http: bool = Field(False, env="EXPORT_WEBHOOK_ALLOW_HTTP")
     export_webhook_block_private_ips: bool = Field(True, env="EXPORT_WEBHOOK_BLOCK_PRIVATE_IPS")
 
-    model_config = SettingsConfigDict(env_file=".env")
+    model_config = SettingsConfigDict(env_file=".env", enable_decoding=False)
 
     @field_validator("cors_origins", mode="before")
     @classmethod
@@ -45,10 +46,18 @@ class Settings(BaseSettings):
         if value is None:
             return []
         if isinstance(value, str):
-            entries = [entry.strip() for entry in value.split(",")]
+            stripped = value.strip()
+            if not stripped:
+                return []
+            if stripped.startswith("[") and stripped.endswith("]"):
+                parsed = json.loads(stripped)
+                if isinstance(parsed, list):
+                    return [str(entry).strip() for entry in parsed if str(entry).strip()]
+                return [str(parsed).strip()] if str(parsed).strip() else []
+            entries = [entry.strip() for entry in stripped.split(",")]
             return [entry for entry in entries if entry]
         if isinstance(value, list):
-            return value
+            return [str(entry).strip() for entry in value if str(entry).strip()]
         return [str(value)]
 
 
