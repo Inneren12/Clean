@@ -1,3 +1,6 @@
+
+Copy
+
 name: CI
 on:
   push:
@@ -42,6 +45,10 @@ jobs:
           echo "PGPORT=$PORT" >> "$GITHUB_ENV"
           echo "DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:$PORT/cleaning" >> "$GITHUB_ENV"
           echo "Using PGPORT=$PORT"
+          # Create .env file for pydantic_settings
+          echo "DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:$PORT/cleaning" > .env
+          echo "PRICING_CONFIG_PATH=pricing/economy_v1.json" >> .env
+          echo "APP_ENV=prod" >> .env
       - name: Wait for Postgres (psycopg DSN)
         run: |
           python - <<'PY'
@@ -64,6 +71,10 @@ jobs:
           else:
               raise SystemExit("Postgres not ready in time")
           PY
+      - name: Debug environment
+        run: |
+          echo "DATABASE_URL is set to: $DATABASE_URL"
+          echo "PGPORT is: $PGPORT"
       - name: Run migrations
         run: alembic upgrade head
       - name: Run tests
