@@ -1,7 +1,8 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, status
+import anyio
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db_session
@@ -14,17 +15,31 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def schedule_export(payload: dict) -> None:
-    asyncio.create_task(export_lead_async(payload))
+def schedule_export(
+    payload: dict,
+    transport: object | None = None,
+    resolver: object | None = None,
+) -> None:
+    async def _spawn() -> None:
+        asyncio.create_task(export_lead_async(payload, transport=transport, resolver=resolver))
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        anyio.from_thread.run(_spawn)
+    else:
+        loop.create_task(export_lead_async(payload, transport=transport, resolver=resolver))
 
 
 @router.post("/v1/leads", response_model=LeadResponse, status_code=status.HTTP_201_CREATED)
 async def create_lead(
     request: LeadCreateRequest,
     background_tasks: BackgroundTasks,
+    http_request: Request,
     session: AsyncSession = Depends(get_db_session),
 ) -> LeadResponse:
     estimate_payload = request.estimate_snapshot.model_dump(mode="json")
+    structured_inputs = request.structured_inputs.model_dump(mode="json")
     utm = request.utm
     utm_source = request.utm_source or (utm.utm_source if utm else None)
     utm_medium = request.utm_medium or (utm.utm_medium if utm else None)
@@ -43,7 +58,7 @@ async def create_lead(
         pets=request.pets,
         allergies=request.allergies,
         notes=request.notes,
-        structured_inputs=request.structured_inputs,
+        structured_inputs=structured_inputs,
         estimate_snapshot=estimate_payload,
         pricing_config_version=request.estimate_snapshot.pricing_config_version,
         config_hash=request.estimate_snapshot.config_hash,
@@ -59,6 +74,8 @@ async def create_lead(
     await session.refresh(lead)
 
     logger.info("lead_created", extra={"extra": {"lead_id": lead.lead_id}})
+    export_transport = getattr(http_request.app.state, "export_transport", None)
+    export_resolver = getattr(http_request.app.state, "export_resolver", None)
     background_tasks.add_task(
         schedule_export,
         {
@@ -86,6 +103,8 @@ async def create_lead(
             "referrer": lead.referrer,
             "created_at": lead.created_at.isoformat(),
         },
+        export_transport,
+        export_resolver,
     )
 
     return LeadResponse(

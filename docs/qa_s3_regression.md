@@ -79,10 +79,18 @@
 10. **Webhook export (if enabled)**
    - Set `EXPORT_MODE=webhook` and `EXPORT_WEBHOOK_URL` to a test endpoint.
    - Create lead; verify webhook receives payload.
+11. **Webhook allowlist + HTTPS enforcement**
+   - Set `EXPORT_WEBHOOK_ALLOWED_HOSTS` to an allowlisted host and confirm exports succeed.
+   - Set URL to an unlisted host or http:// scheme; confirm export is skipped with a log entry.
+12. **Export retry behavior**
+   - Configure a webhook endpoint that returns non-2xx responses.
+   - Confirm retries occur and the lead still creates successfully.
 
 ## Cross-cutting checks
 
-- **CORS**: From the frontend domain, confirm responses include `Access-Control-Allow-Origin`.
+- **CORS**: In prod, confirm missing `CORS_ORIGINS` returns no `Access-Control-Allow-Origin`.
+- **CORS allowlist**: From the frontend domain in `CORS_ORIGINS`, confirm header matches origin.
 - **Rate limiting**: Trigger > RATE_LIMIT_PER_MINUTE requests from one client IP; expect 429 ProblemDetails.
+- **Proxy rate limiting**: When behind a trusted proxy, verify X-Forwarded-For is honored for limits.
 - **PII logs**: Verify logs redact phone/email/address. Ensure no raw request body payloads appear.
 - **Export integration**: When enabled, webhook retries are attempted on non-2xx responses.

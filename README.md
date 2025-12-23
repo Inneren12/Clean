@@ -211,13 +211,34 @@ EXPORT_WEBHOOK_URL=https://example.com/lead-hook
 EXPORT_WEBHOOK_TIMEOUT_SECONDS=5
 EXPORT_WEBHOOK_MAX_RETRIES=3
 EXPORT_WEBHOOK_BACKOFF_SECONDS=1.0
+EXPORT_WEBHOOK_ALLOWED_HOSTS=hook.example.com,api.make.com
+EXPORT_WEBHOOK_ALLOW_HTTP=false
+EXPORT_WEBHOOK_BLOCK_PRIVATE_IPS=true
 ```
 
 Webhook exports run best-effort in a background task and do not block lead creation.
+Webhook validation enforces https by default, host allowlists, and blocks private IP ranges.
+
+## CORS + proxy settings
+
+```
+APP_ENV=prod
+STRICT_CORS=false
+CORS_ORIGINS=https://yourdomain.com
+TRUST_PROXY_HEADERS=false
+TRUSTED_PROXY_IPS=203.0.113.10
+TRUSTED_PROXY_CIDRS=203.0.113.0/24
+```
+
+- In `prod`, `CORS_ORIGINS` must be explicitly set for browser access.
+- In `dev`, missing `CORS_ORIGINS` defaults to `http://localhost:3000` unless `STRICT_CORS=true`.
+- When `TRUST_PROXY_HEADERS=true` and the request comes from a trusted proxy, the rate limiter
+  keys by the first `X-Forwarded-For` address.
 
 ## Assumptions
 
 - If `EXPORT_MODE=sheets`, the API logs a warning and skips export until configured.
+- `updated_at` timestamps are managed by the ORM on update (no database trigger).
 - Webhook exports send the lead snapshot, structured inputs, and UTM fields.
 - When both flat UTM fields and a `utm` object are provided, flat fields take precedence.
 
