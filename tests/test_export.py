@@ -1,7 +1,9 @@
 import asyncio
 import logging
+import socket
 
 import httpx
+import pytest
 
 from app.infra.export import export_lead_async, validate_webhook_url
 from app.settings import settings
@@ -78,16 +80,38 @@ def test_validate_webhook_url_rules():
     resolver_private = lambda host: ["127.0.0.1"]
 
     try:
-        ok, _ = validate_webhook_url("http://allowed.test/hook", resolver=resolver_public)
+        ok, _ = asyncio.run(validate_webhook_url("http://allowed.test/hook", resolver=resolver_public))
         assert not ok
-        ok, _ = validate_webhook_url("https://unlisted.test/hook", resolver=resolver_public)
+        ok, _ = asyncio.run(validate_webhook_url("https://unlisted.test/hook", resolver=resolver_public))
         assert not ok
-        ok, _ = validate_webhook_url("https://127.0.0.1/hook", resolver=resolver_private)
+        ok, _ = asyncio.run(validate_webhook_url("https://127.0.0.1/hook", resolver=resolver_private))
         assert not ok
-        ok, _ = validate_webhook_url("https://allowed.test/hook", resolver=resolver_public)
+        ok, _ = asyncio.run(validate_webhook_url("https://allowed.test/hook", resolver=resolver_public))
         assert ok
     finally:
         settings.export_webhook_allowed_hosts = original_allowed_hosts
         settings.export_webhook_allow_http = original_allow_http
         settings.export_webhook_block_private_ips = original_block_private_ips
         settings.app_env = original_app_env
+
+
+def test_validate_webhook_url_uses_injected_resolver(monkeypatch):
+    original_allowed_hosts = settings.export_webhook_allowed_hosts
+    original_block_private_ips = settings.export_webhook_block_private_ips
+
+    settings.export_webhook_allowed_hosts = ["allowed.test"]
+    settings.export_webhook_block_private_ips = True
+
+    def _raise_if_called(*args, **kwargs):
+        raise AssertionError("getaddrinfo should not be called when resolver is injected")
+
+    monkeypatch.setattr(socket, "getaddrinfo", _raise_if_called)
+
+    resolver = lambda host: ["8.8.8.8"]
+
+    try:
+        ok, _ = asyncio.run(validate_webhook_url("https://allowed.test/hook", resolver=resolver))
+        assert ok
+    finally:
+        settings.export_webhook_allowed_hosts = original_allowed_hosts
+        settings.export_webhook_block_private_ips = original_block_private_ips
