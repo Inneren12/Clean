@@ -1,8 +1,8 @@
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from app.domain.pricing.models import EstimateResponse
+from app.domain.pricing.models import AddOns, CleaningType, EstimateRequest, EstimateResponse, Frequency
 
 
 class UTMParams(BaseModel):
@@ -13,7 +13,33 @@ class UTMParams(BaseModel):
     utm_content: Optional[str] = None
 
 
+class LeadStructuredInputs(EstimateRequest):
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("cleaning_type", mode="before")
+    @classmethod
+    def default_cleaning_type(cls, value):
+        return CleaningType.standard if value is None else value
+
+    @field_validator("frequency", mode="before")
+    @classmethod
+    def default_frequency(cls, value):
+        return Frequency.one_time if value is None else value
+
+    @field_validator("heavy_grease", "multi_floor", mode="before")
+    @classmethod
+    def default_booleans(cls, value):
+        return False if value is None else value
+
+    @field_validator("add_ons", mode="before")
+    @classmethod
+    def default_add_ons(cls, value):
+        return AddOns() if value is None else value
+
+
 class LeadCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(..., min_length=1)
     phone: str = Field(..., min_length=1)
     email: Optional[EmailStr] = None
@@ -25,7 +51,7 @@ class LeadCreateRequest(BaseModel):
     pets: Optional[str] = None
     allergies: Optional[str] = None
     notes: Optional[str] = None
-    structured_inputs: Dict[str, Any]
+    structured_inputs: LeadStructuredInputs
     estimate_snapshot: EstimateResponse
     utm_source: Optional[str] = None
     utm_medium: Optional[str] = None
