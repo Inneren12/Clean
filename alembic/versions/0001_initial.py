@@ -23,7 +23,7 @@ def upgrade() -> None:
             "updated_at",
             sa.DateTime(timezone=True),
             server_default=sa.func.now(),
-            onupdate=sa.func.now(),
+            # ORM-managed updated_at (no database trigger).
             nullable=False,
         ),
     )
@@ -56,7 +56,7 @@ def upgrade() -> None:
             "updated_at",
             sa.DateTime(timezone=True),
             server_default=sa.func.now(),
-            onupdate=sa.func.now(),
+            # ORM-managed updated_at (no database trigger).
             nullable=False,
         ),
     )

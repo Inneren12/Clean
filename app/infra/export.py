@@ -5,6 +5,7 @@ from ipaddress import ip_address
 from typing import Any, Callable, Dict, Iterable
 from urllib.parse import urlparse
 
+import anyio
 import httpx
 
 from app.settings import settings
@@ -30,7 +31,7 @@ async def export_lead_async(
         if not url:
             logger.error("export_webhook_missing_url")
             return
-        is_valid, reason = validate_webhook_url(url, resolver=resolver)
+        is_valid, reason = await validate_webhook_url(url, resolver=resolver)
         if not is_valid:
             logger.error(
                 "export_webhook_invalid_url",
@@ -81,7 +82,7 @@ async def _post_with_retry_async(
     )
 
 
-def validate_webhook_url(url: str, resolver: Resolver | None = None) -> tuple[bool, str]:
+async def validate_webhook_url(url: str, resolver: Resolver | None = None) -> tuple[bool, str]:
     parsed = urlparse(url)
     if not parsed.scheme or not parsed.netloc:
         return False, "invalid_url"
@@ -103,8 +104,10 @@ def validate_webhook_url(url: str, resolver: Resolver | None = None) -> tuple[bo
         return True, "ok"
     if host.lower() == "localhost":
         return False, "private_ip_blocked"
-    resolver = resolver or _resolve_host_ips
-    ips = list(resolver(host))
+    if resolver is None:
+        ips = await _resolve_host_ips_async(host)
+    else:
+        ips = list(resolver(host))
     if not ips:
         return False, "dns_lookup_failed"
     for ip in ips:
@@ -113,9 +116,9 @@ def validate_webhook_url(url: str, resolver: Resolver | None = None) -> tuple[bo
     return True, "ok"
 
 
-def _resolve_host_ips(host: str) -> Iterable[str]:
+async def _resolve_host_ips_async(host: str) -> Iterable[str]:
     try:
-        infos = socket.getaddrinfo(host, None)
+        infos = await anyio.to_thread.run_sync(socket.getaddrinfo, host, None)
     except OSError:
         return []
     addresses = []
