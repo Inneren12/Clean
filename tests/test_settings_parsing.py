@@ -12,12 +12,21 @@ from app.settings import Settings
         ('["https://a.com","https://b.com"]', ["https://a.com", "https://b.com"]),
     ],
 )
-def test_cors_origins_parsing(monkeypatch, env_value, expected):
+@pytest.mark.parametrize(
+    "env_name, attr_name",
+    [
+        ("CORS_ORIGINS", "cors_origins"),
+        ("EXPORT_WEBHOOK_ALLOWED_HOSTS", "export_webhook_allowed_hosts"),
+        ("TRUSTED_PROXY_IPS", "trusted_proxy_ips"),
+        ("TRUSTED_PROXY_CIDRS", "trusted_proxy_cidrs"),
+    ],
+)
+def test_list_env_parsing(monkeypatch, env_name, attr_name, env_value, expected):
     if env_value is None:
-        monkeypatch.delenv("CORS_ORIGINS", raising=False)
+        monkeypatch.delenv(env_name, raising=False)
     else:
-        monkeypatch.setenv("CORS_ORIGINS", env_value)
+        monkeypatch.setenv(env_name, env_value)
 
     settings = Settings(_env_file=None)
 
-    assert settings.cors_origins == expected
+    assert getattr(settings, attr_name) == expected

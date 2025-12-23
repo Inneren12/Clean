@@ -25,7 +25,7 @@ jobs:
       PRICING_CONFIG_PATH: pricing/economy_v1.json
       APP_ENV: prod
       STRICT_CORS: "true"
-      CORS_ORIGINS: '["https://example.com"]'
+      CORS_ORIGINS: https://example.com
       EXPORT_MODE: off
       RATE_LIMIT_PER_MINUTE: "30"
       TRUST_PROXY_HEADERS: "false"
