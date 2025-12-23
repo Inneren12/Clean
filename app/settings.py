@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -13,6 +13,11 @@ class Settings(BaseSettings):
         "postgresql+psycopg://postgres:postgres@postgres:5432/cleaning",
         env="DATABASE_URL",
     )
+    export_mode: Literal["off", "webhook", "sheets"] = Field("off", env="EXPORT_MODE")
+    export_webhook_url: str | None = Field(None, env="EXPORT_WEBHOOK_URL")
+    export_webhook_timeout_seconds: int = Field(5, env="EXPORT_WEBHOOK_TIMEOUT_SECONDS")
+    export_webhook_max_retries: int = Field(3, env="EXPORT_WEBHOOK_MAX_RETRIES")
+    export_webhook_backoff_seconds: float = Field(1.0, env="EXPORT_WEBHOOK_BACKOFF_SECONDS")
 
     model_config = SettingsConfigDict(env_file=".env")
 
