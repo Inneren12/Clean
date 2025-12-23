@@ -1,5 +1,5 @@
+import asyncio
 import logging
-import time
 from typing import Any, Dict
 
 import httpx
@@ -9,7 +9,8 @@ from app.settings import settings
 logger = logging.getLogger(__name__)
 
 
-def export_lead(payload: Dict[str, Any]) -> None:
+async def export_lead_async(payload: Dict[str, Any]) -> None:
+    """Export leads best-effort; never block lead creation."""
     if settings.export_mode == "off":
         return
     if settings.export_mode == "sheets":
@@ -20,17 +21,17 @@ def export_lead(payload: Dict[str, Any]) -> None:
         if not url:
             logger.error("export_webhook_missing_url")
             return
-        _post_with_retry(url, payload)
+        await _post_with_retry_async(url, payload)
 
 
-def _post_with_retry(url: str, payload: Dict[str, Any]) -> None:
+async def _post_with_retry_async(url: str, payload: Dict[str, Any]) -> None:
     timeout = settings.export_webhook_timeout_seconds
     retries = settings.export_webhook_max_retries
     backoff = settings.export_webhook_backoff_seconds
     for attempt in range(1, retries + 1):
         try:
-            with httpx.Client(timeout=timeout) as client:
-                response = client.post(url, json=payload)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(url, json=payload)
             if 200 <= response.status_code < 300:
                 logger.info(
                     "export_webhook_success",
@@ -52,7 +53,8 @@ def _post_with_retry(url: str, payload: Dict[str, Any]) -> None:
                 "export_webhook_error",
                 extra={"extra": {"lead_id": payload.get("lead_id"), "attempt": attempt, "error": str(exc)}},
             )
-        time.sleep(backoff * attempt)
+        if attempt < retries:
+            await asyncio.sleep(backoff * attempt)
     logger.error(
         "export_webhook_failed",
         extra={"extra": {"lead_id": payload.get("lead_id"), "attempts": retries}},

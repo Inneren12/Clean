@@ -213,7 +213,7 @@ EXPORT_WEBHOOK_MAX_RETRIES=3
 EXPORT_WEBHOOK_BACKOFF_SECONDS=1.0
 ```
 
-Webhook exports run in a background task and do not block lead creation.
+Webhook exports run best-effort in a background task and do not block lead creation.
 
 ## Assumptions
 
