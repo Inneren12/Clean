@@ -21,7 +21,7 @@ jobs:
           --health-cmd="pg_isready -U postgres -d cleaning"
           --health-interval=5s
           --health-timeout=5s
-          --health-retries=20
+          --health-retries=30
 
     env:
       PRICING_CONFIG_PATH: pricing/economy_v1.json
@@ -46,19 +46,24 @@ jobs:
 
       - name: Set DATABASE_URL from Postgres service port
         run: |
-          echo "PGPORT=${{ job.services.postgres.ports[5432] }}" >> $GITHUB_ENV
-          echo "DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports[5432] }}/cleaning" >> $GITHUB_ENV
-          echo "Using PGPORT=${{ job.services.postgres.ports[5432] }}"
+          PORT="${{ job.services.postgres.ports[5432] }}"
+          echo "PGPORT=$PORT" >> "$GITHUB_ENV"
+          echo "DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:$PORT/cleaning" >> "$GITHUB_ENV"
+          echo "Using PGPORT=$PORT"
 
-      - name: Wait for Postgres
+      - name: Wait for Postgres (psycopg DSN)
         run: |
           python - <<'PY'
           import os, time
           import psycopg
-          dsn = os.environ["DATABASE_URL"]
-          for i in range(90):
+
+          sa_url = os.environ["DATABASE_URL"]
+          # psycopg does NOT understand "postgresql+psycopg://"
+          dsn = sa_url.replace("postgresql+psycopg://", "postgresql://", 1)
+
+          for i in range(120):
               try:
-                  with psycopg.connect(dsn) as conn:
+                  with psycopg.connect(dsn, connect_timeout=3) as conn:
                       with conn.cursor() as cur:
                           cur.execute("select 1;")
                   print("Postgres is ready")
