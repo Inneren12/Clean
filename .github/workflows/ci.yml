@@ -70,10 +70,15 @@ jobs:
           PY
       - name: Debug environment
         run: |
-          echo "DATABASE_URL is set to: $DATABASE_URL"
-          echo "PGPORT is: $PGPORT"
+          PORT="${{ job.services.postgres.ports[5432] }}"
+          echo "Postgres is running on port: $PORT"
+          echo "DATABASE_URL will be: postgresql+psycopg://postgres:postgres@127.0.0.1:$PORT/cleaning"
       - name: Run migrations
-        run: alembic upgrade head
+        run: |
+          PORT="${{ job.services.postgres.ports[5432] }}"
+          export DATABASE_URL="postgresql+psycopg://postgres:postgres@127.0.0.1:$PORT/cleaning"
+          echo "Running migrations with DATABASE_URL=$DATABASE_URL"
+          alembic upgrade head
       - name: Run tests
         run: pytest
   web:
@@ -86,6 +91,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - name: Install & build
+        run: |
+          npm ci
+          npm run build
       - name: Install & build
         run: |
           npm ci
