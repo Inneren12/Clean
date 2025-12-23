@@ -57,9 +57,9 @@ FastAPI backend for the Economy MVP pricing and chat system.
          "steam_sofa_3": 0,
          "steam_sectional": 0,
          "steam_mattress": 0,
-       "carpet_spot": 1
-      }
-    }'
+         "carpet_spot": 1
+       }
+     }'
   ```
 
    Sample response (trimmed):
@@ -69,10 +69,8 @@ FastAPI backend for the Economy MVP pricing and chat system.
      "pricing_config_id": "economy",
      "pricing_config_version": "v1",
      "config_hash": "sha256:...",
-     "estimate": {
-       "team_size": 2,
-       "total_before_tax": 282.75
-     }
+     "team_size": 2,
+     "total_before_tax": 282.75
    }
    ```
 
