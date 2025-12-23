@@ -2,9 +2,9 @@
 
 ## Preconditions
 
-- API running: `docker compose up --build`
-- Migrations applied: `alembic upgrade head`
-- Postgres reachable on `localhost:5432`
+- API running: `make up`
+- Migrations applied: `make migrate`
+- Postgres reachable via Docker (`make psql`)
 
 ## Step-by-step flow
 
@@ -74,18 +74,42 @@
 1. **Confirm chat session persistence**
 
    ```bash
-   psql postgresql://postgres:postgres@localhost:5432/cleaning \
-     -c "SELECT session_id, state_json FROM chat_sessions WHERE session_id = 'qa-session-001';"
+   make psql
+   ```
+
+   ```sql
+   SELECT session_id, state_json FROM chat_sessions WHERE session_id = 'qa-session-001';
    ```
 
 2. **Confirm lead snapshot**
 
-   ```bash
-   psql postgresql://postgres:postgres@localhost:5432/cleaning \
-     -c "SELECT lead_id, pricing_config_version, config_hash FROM leads ORDER BY created_at DESC LIMIT 1;"
+   ```sql
+   SELECT lead_id, pricing_config_version, config_hash
+   FROM leads
+   ORDER BY created_at DESC
+   LIMIT 1;
    ```
 
-3. **Verify logs do not expose PII**
+3. **Confirm estimate snapshot metadata is present**
+
+   ```sql
+   SELECT
+     estimate_snapshot->>'pricing_config_version' AS pricing_config_version,
+     estimate_snapshot->>'config_hash' AS config_hash
+   FROM leads
+   ORDER BY created_at DESC
+   LIMIT 1;
+   ```
+
+4. **Verify logs do not expose PII**
 
    - Check application logs for redacted phone/email/address strings.
    - Ensure no raw contact details appear in structured logs.
+
+## Optional: Host-based DB inspection
+
+If you want to use host `psql`, point it at localhost:
+
+```bash
+psql postgresql://postgres:postgres@localhost:5432/cleaning
+```
