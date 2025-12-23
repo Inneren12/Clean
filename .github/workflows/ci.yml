@@ -1,13 +1,10 @@
 name: CI
-
 on:
   push:
   pull_request:
-
 jobs:
   backend:
     runs-on: ubuntu-latest
-
     services:
       postgres:
         image: postgres:16
@@ -22,7 +19,6 @@ jobs:
           --health-interval=5s
           --health-timeout=5s
           --health-retries=30
-
     env:
       PRICING_CONFIG_PATH: pricing/economy_v1.json
       APP_ENV: prod
@@ -31,36 +27,29 @@ jobs:
       EXPORT_MODE: off
       RATE_LIMIT_PER_MINUTE: "30"
       TRUST_PROXY_HEADERS: "false"
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
       - name: Set DATABASE_URL from Postgres service port
         run: |
           PORT="${{ job.services.postgres.ports[5432] }}"
           echo "PGPORT=$PORT" >> "$GITHUB_ENV"
           echo "DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:$PORT/cleaning" >> "$GITHUB_ENV"
           echo "Using PGPORT=$PORT"
-
       - name: Wait for Postgres (psycopg DSN)
         run: |
           python - <<'PY'
           import os, time
           import psycopg
-
           sa_url = os.environ["DATABASE_URL"]
           # psycopg does NOT understand "postgresql+psycopg://"
           dsn = sa_url.replace("postgresql+psycopg://", "postgresql://", 1)
-
           for i in range(120):
               try:
                   with psycopg.connect(dsn, connect_timeout=3) as conn:
@@ -75,13 +64,10 @@ jobs:
           else:
               raise SystemExit("Postgres not ready in time")
           PY
-
       - name: Run migrations
         run: alembic upgrade head
-
       - name: Run tests
         run: pytest
-
   web:
     runs-on: ubuntu-latest
     defaults:
@@ -89,11 +75,9 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-
       - name: Install & build
         run: |
           npm ci
