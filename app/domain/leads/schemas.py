@@ -5,6 +5,14 @@ from pydantic import BaseModel, EmailStr, Field
 from app.domain.pricing.models import EstimateResponse
 
 
+class UTMParams(BaseModel):
+    utm_source: Optional[str] = None
+    utm_medium: Optional[str] = None
+    utm_campaign: Optional[str] = None
+    utm_term: Optional[str] = None
+    utm_content: Optional[str] = None
+
+
 class LeadCreateRequest(BaseModel):
     name: str = Field(..., min_length=1)
     phone: str = Field(..., min_length=1)
@@ -24,6 +32,7 @@ class LeadCreateRequest(BaseModel):
     utm_campaign: Optional[str] = None
     utm_term: Optional[str] = None
     utm_content: Optional[str] = None
+    utm: Optional[UTMParams] = None
     referrer: Optional[str] = None
 
 

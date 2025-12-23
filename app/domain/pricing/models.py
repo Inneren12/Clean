@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import List, Optional
-from pydantic import BaseModel, Field, conint, confloat
+from pydantic import BaseModel, Field, conint, confloat, ConfigDict
 
 
 class CleaningType(str, Enum):
@@ -18,6 +18,8 @@ class Frequency(str, Enum):
 
 
 class AddOns(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     oven: bool = False
     fridge: bool = False
     microwave: bool = False

@@ -18,3 +18,6 @@ class RateLimiter:
             return False
         timestamps.append(now)
         return True
+
+    def reset(self) -> None:
+        self._requests.clear()

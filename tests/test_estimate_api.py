@@ -26,5 +26,22 @@ def test_estimate_api_validation_error(client):
     assert response.status_code == 422
     body = response.json()
     assert body["title"] == "Validation Error"
+    assert body["type"].endswith("validation-error")
     assert body["request_id"]
     assert body["errors"]
+
+
+def test_estimate_api_invalid_add_on_key(client):
+    response = client.post(
+        "/v1/estimate",
+        json={
+            "beds": 2,
+            "baths": 1,
+            "cleaning_type": "standard",
+            "add_ons": {"not_real": True},
+        },
+    )
+    assert response.status_code == 422
+    body = response.json()
+    assert body["errors"]
+    assert any(error["field"] == "add_ons.not_real" for error in body["errors"])

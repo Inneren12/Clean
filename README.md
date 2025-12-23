@@ -178,7 +178,7 @@ Quick replies in the UI prefill the input so users can edit before sending.
 
 ```json
 {
-  "type": "about:blank",
+  "type": "https://example.com/problems/validation-error",
   "title": "Validation Error",
   "status": 422,
   "detail": "Request validation failed",
@@ -191,6 +191,37 @@ Quick replies in the UI prefill the input so users can edit before sending.
   ]
 }
 ```
+
+Other errors use the same envelope with `type` values such as
+`https://example.com/problems/domain-error`,
+`https://example.com/problems/rate-limit`, and
+`https://example.com/problems/server-error`.
+
+## Logging + privacy
+
+- Logs are JSON formatted and redact phone numbers, emails, and street addresses.
+- Do not log raw request bodies or full lead payloads.
+- Prefer logging identifiers (lead_id, session_id) and status codes.
+
+## Lead export (optional)
+
+Configure outbound export via environment variables:
+
+```
+EXPORT_MODE=off|webhook|sheets
+EXPORT_WEBHOOK_URL=https://example.com/lead-hook
+EXPORT_WEBHOOK_TIMEOUT_SECONDS=5
+EXPORT_WEBHOOK_MAX_RETRIES=3
+EXPORT_WEBHOOK_BACKOFF_SECONDS=1.0
+```
+
+Webhook exports run in a background task and do not block lead creation.
+
+## Assumptions
+
+- If `EXPORT_MODE=sheets`, the API logs a warning and skips export until configured.
+- Webhook exports send the lead snapshot, structured inputs, and UTM fields.
+- When both flat UTM fields and a `utm` object are provided, flat fields take precedence.
 
 ## Tests
 

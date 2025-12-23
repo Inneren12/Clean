@@ -6,13 +6,30 @@ from typing import Any, Dict
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 PHONE_RE = re.compile(r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b")
-ADDRESS_RE = re.compile(r"\b\d{1,5}\s+[A-Za-z0-9.\-\s]+\b(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct)\b", re.IGNORECASE)
+ADDRESS_RE = re.compile(
+    r"\b\d{1,6}\s+[A-Za-z0-9.\-\s]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|"
+    r"Lane|Ln|Way|Court|Ct|Crescent|Cres|Trail|Trl|Place|Pl)\b",
+    re.IGNORECASE,
+)
+PII_KEYS = {"phone", "email", "address"}
 
 
 def redact_pii(value: str) -> str:
     value = EMAIL_RE.sub("[REDACTED_EMAIL]", value)
     value = PHONE_RE.sub("[REDACTED_PHONE]", value)
     value = ADDRESS_RE.sub("[REDACTED_ADDRESS]", value)
+    return value
+
+
+def _sanitize_value(value: Any, key: str | None = None) -> Any:
+    if key and key.lower() in PII_KEYS:
+        return "[REDACTED]"
+    if isinstance(value, str):
+        return redact_pii(value)
+    if isinstance(value, list):
+        return [_sanitize_value(item) for item in value]
+    if isinstance(value, dict):
+        return {item_key: _sanitize_value(item_value, item_key) for item_key, item_value in value.items()}
     return value
 
 
@@ -25,11 +42,7 @@ class RedactingJsonFormatter(logging.Formatter):
             "logger": record.name,
         }
         if hasattr(record, "extra") and isinstance(record.extra, dict):
-            extra = {
-                key: redact_pii(str(value)) if isinstance(value, str) else value
-                for key, value in record.extra.items()
-            }
-            payload.update(extra)
+            payload.update(_sanitize_value(record.extra))
         return json.dumps(payload, ensure_ascii=False)
 
 

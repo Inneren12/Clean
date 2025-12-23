@@ -11,11 +11,18 @@ from app.domain.pricing.config_loader import PricingConfig
 RED_FLAG_KEYWORDS = [
     "mold",
     "renovation",
+    "renovating",
+    "renovated",
     "construction dust",
+    "construction",
     "hoarding",
+    "hoarder",
     "biohazard",
+    "hazardous waste",
     "feces",
     "needles",
+    "blood",
+    "asbestos",
 ]
 
 REQUIRED_FIELDS = ["beds", "baths"]
