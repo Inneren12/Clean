@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, status
@@ -11,6 +12,10 @@ from app.infra.export import export_lead_async
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def schedule_export(payload: dict) -> None:
+    asyncio.create_task(export_lead_async(payload))
 
 
 @router.post("/v1/leads", response_model=LeadResponse, status_code=status.HTTP_201_CREATED)
@@ -55,7 +60,7 @@ async def create_lead(
 
     logger.info("lead_created", extra={"extra": {"lead_id": lead.lead_id}})
     background_tasks.add_task(
-        export_lead_async,
+        schedule_export,
         {
             "lead_id": lead.lead_id,
             "name": lead.name,
