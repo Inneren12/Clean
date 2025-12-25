@@ -41,3 +41,8 @@ class BookingResponse(BaseModel):
     status: str
     starts_at: datetime
     duration_minutes: int
+    deposit_required: bool
+    deposit_cents: int | None = None
+    deposit_policy: list[str]
+    deposit_status: str | None = None
+    checkout_url: str | None = None

@@ -154,6 +154,18 @@ make test
 - Lead pipeline: admin endpoints use deterministic statuses (`NEW → CONTACTED → BOOKED → DONE/CANCELLED`). `POST /v1/admin/leads/{lead_id}/status` transitions a lead and `GET /v1/admin/leads?status=CONTACTED` filters the admin list.
 - Frontend: after an estimate, the web UI shows the next three days of slots and books directly via the API.
 
+## Deposits (Sprint E)
+
+- Policy: deposits are required for weekend bookings, move-out/empty or deep cleans, and new clients (no prior CONFIRMED/DONE bookings). The decision and reasons are stored on each booking.
+- Amount: `DEPOSIT_PERCENT` (default 25%) of the lead's `estimate_snapshot.total_before_tax`, charged in `DEPOSIT_CURRENCY` (default CAD). Deposit URLs can include `{CHECKOUT_SESSION_ID}` and `{BOOKING_ID}` placeholders.
+- Checkout: `POST /v1/bookings` returns a `checkout_url` when a deposit is required. Configure `STRIPE_SECRET_KEY`, `STRIPE_SUCCESS_URL`, and `STRIPE_CANCEL_URL` for live links.
+- Webhook: `POST /v1/stripe/webhook` verifies the Stripe signature (`STRIPE_WEBHOOK_SECRET`). `checkout.session.completed` with `payment_status=paid` confirms the booking; expired/failed payments cancel the pending booking to free the slot.
+
+### Cancellation / refund policy
+
+- Unpaid deposits auto-cancel when the checkout session expires or via the 30-minute pending cleanup job.
+- Paid deposits confirm the booking. For cancellations more than 24 hours before the start time, process manual refunds in Stripe; within 24 hours, deposits are non-refundable for this MVP.
+
 ## Web UI (chat tester)
 
 The minimal Next.js chat UI lives in `web/`. It expects the API base URL in an

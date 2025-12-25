@@ -9,3 +9,4 @@ sqlalchemy==2.0.34
 psycopg[binary]==3.2.3
 aiosqlite==0.20.0
 email-validator==2.2.0
+stripe==11.2.0
