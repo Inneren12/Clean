@@ -15,6 +15,13 @@ class EmailAdapter:
     def __init__(self, http_client: httpx.AsyncClient | None = None) -> None:
         self.http_client = http_client
 
+    async def send_email(self, recipient: str, subject: str, body: str) -> None:
+        if settings.email_mode == "off":
+            return
+        if not recipient:
+            return
+        await self._send_email(to_email=recipient, subject=subject, body=body)
+
     async def send_request_received(self, lead: Any) -> None:
         if settings.email_mode == "off":
             return
@@ -28,7 +35,7 @@ class EmailAdapter:
             "If you have any updates, just reply to this email."
         )
         try:
-            await self._send_email(to_email=lead.email, subject=subject, body=body)
+            await self.send_email(recipient=lead.email, subject=subject, body=body)
             logger.info("email_request_received_sent", extra={"extra": {"lead_id": getattr(lead, "lead_id", None)}})
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -37,14 +44,12 @@ class EmailAdapter:
             )
 
     async def send_booking_confirmed(self, recipient: str, context: dict[str, str] | None = None) -> None:
-        if settings.email_mode == "off":
-            return
         subject = "Cleaning booking confirmed"
         body = "Your booking has been confirmed. Our crew will see you soon!"
         if context:
             notes = "\n".join(f"- {key}: {value}" for key, value in context.items())
             body = f"{body}\n\nDetails:\n{notes}"
-        await self._send_email(to_email=recipient, subject=subject, body=body)
+        await self.send_email(recipient=recipient, subject=subject, body=body)
 
     async def _send_email(self, to_email: str, subject: str, body: str) -> None:
         if settings.email_mode == "sendgrid":

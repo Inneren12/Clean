@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from app.domain.bookings import db_models as booking_db_models  # noqa: F401
 from app.domain.leads import db_models  # noqa: F401
 from app.infra.db import Base
 from app.settings import settings

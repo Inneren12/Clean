@@ -1,6 +1,8 @@
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, status
+import logging
+
+from fastapi import APIRouter, Depends, Request, status
 from fastapi.exceptions import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,8 +10,11 @@ from app.api.routes_admin import verify_admin
 from app.dependencies import get_db_session
 from app.domain.bookings import schemas as booking_schemas
 from app.domain.bookings import service as booking_service
+from app.domain.leads.db_models import Lead
+from app.domain.notifications import email_service
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/v1/slots", response_model=booking_schemas.SlotAvailabilityResponse)
@@ -28,6 +33,7 @@ async def get_slots(
 @router.post("/v1/bookings", response_model=booking_schemas.BookingResponse, status_code=status.HTTP_201_CREATED)
 async def create_booking(
     request: booking_schemas.BookingCreateRequest,
+    http_request: Request,
     session: AsyncSession = Depends(get_db_session),
 ) -> booking_schemas.BookingResponse:
     try:
@@ -39,6 +45,18 @@ async def create_booking(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    email_adapter = getattr(http_request.app.state, "email_adapter", None)
+    if booking.lead_id:
+        lead = await session.get(Lead, booking.lead_id)
+        if lead:
+            try:
+                await email_service.send_booking_pending_email(session, email_adapter, booking, lead)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "booking_pending_email_failed",
+                    extra={"extra": {"booking_id": booking.booking_id, "lead_id": booking.lead_id}},
+                )
 
     return booking_schemas.BookingResponse(
         booking_id=booking.booking_id,
