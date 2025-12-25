@@ -172,6 +172,12 @@ make test
 - Metrics: `GET /v1/admin/metrics?from=...&to=...` (Basic auth) returns conversion counts, average estimated revenue, and estimator accuracy (estimated vs actual duration). Add `format=csv` to download the summary as CSV.
 - Completion workflow: `POST /v1/admin/bookings/{booking_id}/complete` records `actual_duration_minutes` and marks the booking as `DONE` for estimator accuracy reporting. Use `POST /v1/admin/bookings/{booking_id}/confirm` to manually confirm non-deposit bookings.
 
+## Referrals (Sprint G)
+
+- Each lead receives a unique `referral_code` on creation. The web form accepts a `referral_code` field (or `ref`/`referral` query param) so new clients can attribute their booking.
+- `/v1/leads` accepts `referral_code` to attribute the request. Invalid codes return `400` to avoid silent abuse.
+- Credits are tracked in `referral_credits` with a unique `referred_lead_id` to enforce one credit per new client; admin leads responses include `referral_code`, `referred_by_code`, and `referral_credits` counts for visibility.
+
 ## Web UI (chat tester)
 
 The minimal Next.js chat UI lives in `web/`. It expects the API base URL in an

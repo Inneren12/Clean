@@ -78,11 +78,15 @@ class LeadCreateRequest(BaseModel):
     utm_content: Optional[str] = None
     utm: Optional[UTMParams] = None
     referrer: Optional[str] = None
+    referral_code: Optional[str] = Field(
+        default=None, min_length=4, max_length=16, description="Referral code applied"
+    )
 
 
 class LeadResponse(BaseModel):
     lead_id: str
     next_step_text: str
+    referral_code: str
 
 
 class AdminLeadResponse(BaseModel):
@@ -96,6 +100,9 @@ class AdminLeadResponse(BaseModel):
     created_at: str
     referrer: Optional[str] = None
     status: LeadStatus
+    referral_code: str
+    referred_by_code: Optional[str] = None
+    referral_credits: int
 
 
 class AdminLeadStatusUpdateRequest(BaseModel):
@@ -104,7 +111,11 @@ class AdminLeadStatusUpdateRequest(BaseModel):
     status: LeadStatus
 
 
-def admin_lead_from_model(model) -> AdminLeadResponse:
+def admin_lead_from_model(model, referral_credit_count: int | None = None) -> AdminLeadResponse:
+    credits_attr = getattr(model, "__dict__", {}).get("referral_credits")
+    credit_count = referral_credit_count
+    if credit_count is None:
+        credit_count = len(credits_attr) if credits_attr is not None else 0
     return AdminLeadResponse(
         lead_id=model.lead_id,
         name=model.name,
@@ -116,4 +127,7 @@ def admin_lead_from_model(model) -> AdminLeadResponse:
         created_at=model.created_at.isoformat(),
         referrer=model.referrer,
         status=model.status or LEAD_STATUS_NEW,
+        referral_code=model.referral_code,
+        referred_by_code=model.referred_by_code,
+        referral_credits=credit_count,
     )
