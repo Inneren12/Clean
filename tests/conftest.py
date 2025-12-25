@@ -7,10 +7,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import pytest
+import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.domain.bookings import db_models as booking_db_models  # noqa: F401
 from app.domain.leads import db_models  # noqa: F401
 from app.infra.db import Base, get_db_session
 from app.main import app
@@ -27,6 +29,7 @@ def test_engine():
     async def init_models() -> None:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(sa.insert(booking_db_models.Team).values(team_id=1, name="Default Team"))
 
     asyncio.run(init_models())
     yield engine
@@ -44,6 +47,7 @@ def clean_database(test_engine):
         async with test_engine.begin() as conn:
             for table in reversed(Base.metadata.sorted_tables):
                 await conn.execute(table.delete())
+            await conn.execute(sa.insert(booking_db_models.Team).values(team_id=1, name="Default Team"))
 
     asyncio.run(truncate_tables())
     yield

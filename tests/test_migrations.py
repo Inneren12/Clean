@@ -20,3 +20,5 @@ def test_alembic_upgrade_head(tmp_path):
     tables = inspector.get_table_names()
     assert "leads" in tables
     assert "chat_sessions" in tables
+    assert "teams" in tables
+    assert "bookings" in tables

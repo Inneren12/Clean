@@ -9,8 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.api.routes_chat import router as chat_router
 from app.api.routes_admin import router as admin_router
+from app.api.routes_bookings import router as bookings_router
+from app.api.routes_chat import router as chat_router
 from app.api.routes_estimate import router as estimate_router
 from app.api.routes_health import router as health_router
 from app.api.routes_leads import router as leads_router
@@ -194,6 +195,7 @@ def create_app(app_settings) -> FastAPI:
     app.include_router(health_router)
     app.include_router(estimate_router)
     app.include_router(chat_router)
+    app.include_router(bookings_router)
     app.include_router(leads_router)
     app.include_router(admin_router)
     return app
