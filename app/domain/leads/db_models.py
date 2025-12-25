@@ -6,6 +6,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
 from app.infra.db import Base
+from app.domain.leads.statuses import default_lead_status
 
 
 class ChatSession(Base):
@@ -45,6 +46,7 @@ class Lead(Base):
     estimate_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
     pricing_config_version: Mapped[str] = mapped_column(String(32), nullable=False)
     config_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default=default_lead_status)
     utm_source: Mapped[str | None] = mapped_column(String(100))
     utm_medium: Mapped[str | None] = mapped_column(String(100))
     utm_campaign: Mapped[str | None] = mapped_column(String(100))

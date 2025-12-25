@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_db_session
 from app.domain.leads.db_models import Lead
 from app.domain.leads.schemas import LeadCreateRequest, LeadResponse
+from app.domain.leads.statuses import LEAD_STATUS_NEW
 from app.infra.export import export_lead_async
 from app.infra.email import EmailAdapter
 
@@ -81,6 +82,7 @@ async def create_lead(
         estimate_snapshot=estimate_payload,
         pricing_config_version=request.estimate_snapshot.pricing_config_version,
         config_hash=request.estimate_snapshot.config_hash,
+        status=LEAD_STATUS_NEW,
         utm_source=utm_source,
         utm_medium=utm_medium,
         utm_campaign=utm_campaign,
@@ -115,6 +117,7 @@ async def create_lead(
             "estimate_snapshot": lead.estimate_snapshot,
             "pricing_config_version": lead.pricing_config_version,
             "config_hash": lead.config_hash,
+            "status": lead.status,
             "utm_source": lead.utm_source,
             "utm_medium": lead.utm_medium,
             "utm_campaign": lead.utm_campaign,

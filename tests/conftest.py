@@ -50,6 +50,9 @@ def clean_database(test_engine):
             await conn.execute(sa.insert(booking_db_models.Team).values(team_id=1, name="Default Team"))
 
     asyncio.run(truncate_tables())
+    rate_limiter = getattr(app.state, "rate_limiter", None)
+    if rate_limiter:
+        rate_limiter.reset()
     yield
 
 

@@ -1,10 +1,26 @@
 from typing import List, Optional
 
 from typing import List, Optional
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.domain.pricing.models import AddOns, CleaningType, EstimateRequest, EstimateResponse, Frequency
+from app.domain.leads.statuses import (
+    LEAD_STATUS_BOOKED,
+    LEAD_STATUS_CANCELLED,
+    LEAD_STATUS_CONTACTED,
+    LEAD_STATUS_DONE,
+    LEAD_STATUS_NEW,
+)
+
+LeadStatus = Literal[
+    LEAD_STATUS_NEW,
+    LEAD_STATUS_CONTACTED,
+    LEAD_STATUS_BOOKED,
+    LEAD_STATUS_DONE,
+    LEAD_STATUS_CANCELLED,
+]
 
 
 class UTMParams(BaseModel):
@@ -79,3 +95,25 @@ class AdminLeadResponse(BaseModel):
     notes: Optional[str] = None
     created_at: str
     referrer: Optional[str] = None
+    status: LeadStatus
+
+
+class AdminLeadStatusUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: LeadStatus
+
+
+def admin_lead_from_model(model) -> AdminLeadResponse:
+    return AdminLeadResponse(
+        lead_id=model.lead_id,
+        name=model.name,
+        email=model.email,
+        phone=model.phone,
+        postal_code=model.postal_code,
+        preferred_dates=model.preferred_dates,
+        notes=model.notes,
+        created_at=model.created_at.isoformat(),
+        referrer=model.referrer,
+        status=model.status or LEAD_STATUS_NEW,
+    )

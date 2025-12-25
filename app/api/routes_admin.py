@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_db_session
 from app.domain.bookings.db_models import Booking
 from app.domain.leads.db_models import Lead
-from app.domain.leads.schemas import AdminLeadResponse
+from app.domain.leads.schemas import AdminLeadResponse, AdminLeadStatusUpdateRequest, admin_lead_from_model
+from app.domain.leads.statuses import assert_valid_transition, is_valid_status
 from app.domain.notifications import email_service
 from app.settings import settings
 
@@ -35,30 +36,45 @@ async def verify_admin(credentials: HTTPBasicCredentials = Depends(security)) ->
 
 @router.get("/v1/admin/leads", response_model=List[AdminLeadResponse])
 async def list_leads(
-    status_filter: Optional[str] = Query(default="NEW", alias="status"),
+    status_filter: Optional[str] = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     session: AsyncSession = Depends(get_db_session),
     _: None = Depends(verify_admin),
 ) -> List[AdminLeadResponse]:
     stmt = select(Lead).order_by(Lead.created_at.desc()).limit(limit)
+    if status_filter:
+        normalized = status_filter.upper()
+        if not is_valid_status(normalized):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid lead status filter: {status_filter}",
+            )
+        stmt = stmt.where(Lead.status == normalized)
     result = await session.execute(stmt)
     leads = result.scalars().all()
-    response: List[AdminLeadResponse] = []
-    for lead in leads:
-        response.append(
-            AdminLeadResponse(
-                lead_id=lead.lead_id,
-                name=lead.name,
-                email=lead.email,
-                phone=lead.phone,
-                postal_code=lead.postal_code,
-                preferred_dates=lead.preferred_dates,
-                notes=lead.notes,
-                created_at=lead.created_at.isoformat(),
-                referrer=lead.referrer,
-            )
-        )
-    return response
+    return [admin_lead_from_model(lead) for lead in leads]
+
+
+@router.post("/v1/admin/leads/{lead_id}/status", response_model=AdminLeadResponse)
+async def update_lead_status(
+    lead_id: str,
+    request: AdminLeadStatusUpdateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    _: None = Depends(verify_admin),
+) -> AdminLeadResponse:
+    lead = await session.get(Lead, lead_id)
+    if lead is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
+
+    try:
+        assert_valid_transition(lead.status, request.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    lead.status = request.status
+    await session.commit()
+    await session.refresh(lead)
+    return admin_lead_from_model(lead)
 
 
 @router.post("/v1/admin/email-scan", status_code=status.HTTP_202_ACCEPTED)
