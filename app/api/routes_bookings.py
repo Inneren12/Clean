@@ -4,13 +4,14 @@ import logging
 
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.exceptions import HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.routes_admin import verify_admin
 from app.dependencies import get_db_session
 from app.domain.bookings import schemas as booking_schemas
 from app.domain.bookings import service as booking_service
-from app.domain.leads.db_models import Lead
+from app.domain.leads.db_models import Lead, ReferralRedemption
 from app.domain.notifications import email_service
 from app.infra import stripe as stripe_infra
 from app.settings import settings
@@ -69,6 +70,54 @@ async def create_booking(
                 deposit_decision=deposit_decision,
                 commit=False,
             )
+
+            referral_credit_cents = 0
+            if request.referral_code:
+                if not request.lead_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="lead_id is required to apply a referral code",
+                    )
+
+                referrer_result = await session.execute(
+                    select(Lead).where(Lead.referral_code == request.referral_code)
+                )
+                referrer = referrer_result.scalar_one_or_none()
+                if referrer is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Referral code not found",
+                    )
+
+                if referrer.lead_id == request.lead_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Cannot redeem your own referral code",
+                    )
+
+                redemption_result = await session.execute(
+                    select(ReferralRedemption).where(
+                        ReferralRedemption.referred_lead_id == request.lead_id
+                    )
+                )
+                redemption = redemption_result.scalar_one_or_none()
+                if redemption is None:
+                    referral_credit_cents = settings.referral_credit_cents
+                    redemption = ReferralRedemption(
+                        referrer_lead_id=referrer.lead_id,
+                        referred_lead_id=request.lead_id,
+                        booking_id=booking.booking_id,
+                        referral_code=request.referral_code,
+                        credit_cents=referral_credit_cents,
+                    )
+                    session.add(redemption)
+                else:
+                    referral_credit_cents = 0
+                    if redemption.booking_id is None:
+                        redemption.booking_id = booking.booking_id
+
+                booking.referral_code_applied = request.referral_code
+                booking.referral_credit_cents = referral_credit_cents
 
             if deposit_decision.required and deposit_decision.deposit_cents:
                 stripe_client = stripe_infra.resolve_client(http_request.app.state)
@@ -131,6 +180,8 @@ async def create_booking(
         deposit_policy=booking.deposit_policy,
         deposit_status=booking.deposit_status,
         checkout_url=checkout_url,
+        referral_code_applied=booking.referral_code_applied,
+        referral_credit_cents=booking.referral_credit_cents,
     )
 
 

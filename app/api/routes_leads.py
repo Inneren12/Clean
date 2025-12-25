@@ -124,6 +124,7 @@ async def create_lead(
             "utm_term": lead.utm_term,
             "utm_content": lead.utm_content,
             "referrer": lead.referrer,
+            "referral_code": lead.referral_code,
             "created_at": lead.created_at.isoformat(),
         },
         export_transport,
@@ -134,4 +135,5 @@ async def create_lead(
     return LeadResponse(
         lead_id=lead.lead_id,
         next_step_text="Thanks! Our team will confirm your booking and follow up shortly.",
+        referral_code=lead.referral_code,
     )

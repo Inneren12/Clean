@@ -45,6 +45,8 @@ class Booking(Base):
     deposit_cents: Mapped[int | None] = mapped_column(Integer)
     deposit_policy: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     deposit_status: Mapped[str | None] = mapped_column(String(32))
+    referral_code_applied: Mapped[str | None] = mapped_column(String(16))
+    referral_credit_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     stripe_checkout_session_id: Mapped[str | None] = mapped_column(String(255))
     stripe_payment_intent_id: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(

@@ -25,6 +25,7 @@ class BookingCreateRequest(BaseModel):
     starts_at: datetime
     time_on_site_hours: float = Field(gt=0)
     lead_id: str | None = None
+    referral_code: str | None = None
 
     @property
     def duration_minutes(self) -> int:
@@ -46,3 +47,5 @@ class BookingResponse(BaseModel):
     deposit_policy: list[str]
     deposit_status: str | None = None
     checkout_url: str | None = None
+    referral_code_applied: str | None = None
+    referral_credit_cents: int

@@ -166,6 +166,12 @@ make test
 - Unpaid deposits auto-cancel when the checkout session expires or via the 30-minute pending cleanup job.
 - Paid deposits confirm the booking. For cancellations more than 24 hours before the start time, process manual refunds in Stripe; within 24 hours, deposits are non-refundable for this MVP.
 
+## Referrals (Sprint G)
+
+- Each lead receives a unique `referral_code` returned from `/v1/leads` and shown in the admin lead list.
+- Booking creation accepts an optional `referral_code` alongside `lead_id`. Valid codes apply a one-time credit (default `$20`, configured via `REFERRAL_CREDIT_CENTS`) per new client.
+- Redemptions are tracked in `referral_redemptions` and surfaced in the admin API as referral attribution and earned credit totals.
+
 ## Web UI (chat tester)
 
 The minimal Next.js chat UI lives in `web/`. It expects the API base URL in an

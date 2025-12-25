@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     stripe_cancel_url: str = Field("http://localhost:3000/deposit-cancelled", env="STRIPE_CANCEL_URL")
     deposit_percent: float = Field(0.25, env="DEPOSIT_PERCENT")
     deposit_currency: str = Field("cad", env="DEPOSIT_CURRENCY")
+    referral_credit_cents: int = Field(2000, env="REFERRAL_CREDIT_CENTS")
 
     model_config = SettingsConfigDict(env_file=".env", enable_decoding=False)
 
@@ -76,6 +77,13 @@ class Settings(BaseSettings):
     def validate_deposit_percent(cls, value: float) -> float:
         if value < 0 or value > 1:
             raise ValueError("deposit_percent must be between 0 and 1")
+        return value
+
+    @field_validator("referral_credit_cents")
+    @classmethod
+    def validate_referral_credit(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("referral_credit_cents cannot be negative")
         return value
 
     @property

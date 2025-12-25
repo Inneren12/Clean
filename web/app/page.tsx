@@ -53,6 +53,20 @@ type SlotAvailability = {
   slots: string[];
 };
 
+type BookingResponse = {
+  booking_id: string;
+  status: string;
+  starts_at: string;
+  duration_minutes: number;
+  deposit_required: boolean;
+  deposit_cents?: number | null;
+  deposit_policy: string[];
+  deposit_status?: string | null;
+  checkout_url?: string | null;
+  referral_code_applied?: string | null;
+  referral_credit_cents: number;
+};
+
 const STORAGE_KEY = 'economy_chat_session_id';
 const UTM_STORAGE_KEY = 'economy_utm_params';
 const REFERRER_STORAGE_KEY = 'economy_referrer';
@@ -140,6 +154,10 @@ export default function HomePage() {
   const [leadSubmitting, setLeadSubmitting] = useState(false);
   const [leadError, setLeadError] = useState<string | null>(null);
   const [leadSuccess, setLeadSuccess] = useState(false);
+  const [leadId, setLeadId] = useState<string | null>(null);
+  const [issuedReferralCode, setIssuedReferralCode] = useState<string | null>(null);
+  const [referralCodeInput, setReferralCodeInput] = useState('');
+  const [nextStepText, setNextStepText] = useState<string | null>(null);
   const [leadForm, setLeadForm] = useState({
     name: '',
     phone: '',
@@ -300,6 +318,9 @@ export default function HomePage() {
         if (data.estimate) {
           setShowLeadForm(false);
           setLeadSuccess(false);
+          setLeadId(null);
+          setIssuedReferralCode(null);
+          setNextStepText(null);
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unexpected error';
@@ -367,6 +388,14 @@ export default function HomePage() {
         throw new Error(errorText || `Request failed: ${response.status}`);
       }
 
+      const payload = (await response.json()) as {
+        lead_id: string;
+        next_step_text: string;
+        referral_code: string;
+      };
+      setLeadId(payload.lead_id);
+      setIssuedReferralCode(payload.referral_code);
+      setNextStepText(payload.next_step_text);
       setLeadSuccess(true);
       setShowLeadForm(false);
     } catch (err) {
@@ -394,7 +423,8 @@ export default function HomePage() {
         body: JSON.stringify({
           starts_at: selectedSlot,
           time_on_site_hours: estimate.time_on_site_hours,
-          lead_id: undefined
+          lead_id: leadId || undefined,
+          referral_code: referralCodeInput || undefined
         })
       });
 
@@ -403,8 +433,12 @@ export default function HomePage() {
         throw new Error(text || `Booking failed: ${response.status}`);
       }
 
-      const booking = (await response.json()) as { booking_id: string; starts_at: string };
-      setBookingSuccess(`Booked slot for ${formatSlotTime(booking.starts_at)}`);
+      const booking = (await response.json()) as BookingResponse;
+      let successMessage = `Booked slot for ${formatSlotTime(booking.starts_at)}`;
+      if (booking.referral_credit_cents > 0) {
+        successMessage += ` · Referral credit applied (${formatCurrency(booking.referral_credit_cents / 100)})`;
+      }
+      setBookingSuccess(successMessage);
       await loadSlots();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unexpected booking error';
@@ -412,7 +446,7 @@ export default function HomePage() {
     } finally {
       setBookingSubmitting(false);
     }
-  }, [apiBaseUrl, estimate, loadSlots, selectedSlot]);
+  }, [apiBaseUrl, estimate, leadId, loadSlots, referralCodeInput, selectedSlot]);
 
   return (
     <div className="landing">
@@ -718,6 +752,17 @@ export default function HomePage() {
                       ))}
                     </div>
                   ) : null}
+                  <div className="referral-input">
+                    <label className="full">
+                      <span className="label">Referral code (optional)</span>
+                      <input
+                        type="text"
+                        value={referralCodeInput}
+                        onChange={(event) => setReferralCodeInput(event.target.value)}
+                        placeholder="Share code from a friend"
+                      />
+                    </label>
+                  </div>
                   <div className="booking-actions">
                     <button
                       type="button"
@@ -735,10 +780,13 @@ export default function HomePage() {
                 {leadSuccess ? (
                   <div className="lead-confirmation">
                     <h4>Request received</h4>
-                    <p>
-                      Thanks! We&apos;ve saved your booking request. Our team will confirm your
-                      preferred times shortly.
-                    </p>
+                    <p>{nextStepText || "Thanks! We've saved your booking request."}</p>
+                    {issuedReferralCode ? (
+                      <p className="muted">
+                        Your referral code: <code>{issuedReferralCode}</code>. Share this with friends
+                        for future credits.
+                      </p>
+                    ) : null}
                   </div>
                 ) : (
                   <div className="lead-cta">

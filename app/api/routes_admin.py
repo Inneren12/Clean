@@ -3,12 +3,14 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from sqlalchemy import select
+from collections import defaultdict
+
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db_session
 from app.domain.bookings.db_models import Booking
-from app.domain.leads.db_models import Lead
+from app.domain.leads.db_models import Lead, ReferralRedemption
 from app.domain.leads.schemas import AdminLeadResponse, AdminLeadStatusUpdateRequest, admin_lead_from_model
 from app.domain.leads.statuses import assert_valid_transition, is_valid_status
 from app.domain.notifications import email_service
@@ -52,7 +54,42 @@ async def list_leads(
         stmt = stmt.where(Lead.status == normalized)
     result = await session.execute(stmt)
     leads = result.scalars().all()
-    return [admin_lead_from_model(lead) for lead in leads]
+    if not leads:
+        return []
+
+    lead_ids = [lead.lead_id for lead in leads]
+    code_lookup = {lead.lead_id: lead.referral_code for lead in leads}
+
+    redemptions_result = await session.execute(
+        select(ReferralRedemption).where(
+            or_(
+                ReferralRedemption.referrer_lead_id.in_(lead_ids),
+                ReferralRedemption.referred_lead_id.in_(lead_ids),
+            )
+        )
+    )
+    redemptions = redemptions_result.scalars().all()
+
+    referred_map = {redemption.referred_lead_id: redemption for redemption in redemptions}
+    earned_totals: dict[str, int] = defaultdict(int)
+    earned_counts: dict[str, int] = defaultdict(int)
+    for redemption in redemptions:
+        earned_totals[redemption.referrer_lead_id] += redemption.credit_cents
+        earned_counts[redemption.referrer_lead_id] += 1
+
+    responses = []
+    for lead in leads:
+        redemption = referred_map.get(lead.lead_id)
+        referred_by_code = code_lookup.get(redemption.referrer_lead_id) if redemption else None
+        responses.append(
+            admin_lead_from_model(
+                lead,
+                referred_by_code=referred_by_code,
+                referral_credits_cents=earned_totals.get(lead.lead_id, 0),
+                referral_redemptions_count=earned_counts.get(lead.lead_id, 0),
+            )
+        )
+    return responses
 
 
 @router.post("/v1/admin/leads/{lead_id}/status", response_model=AdminLeadResponse)

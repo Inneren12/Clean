@@ -83,6 +83,7 @@ class LeadCreateRequest(BaseModel):
 class LeadResponse(BaseModel):
     lead_id: str
     next_step_text: str
+    referral_code: str
 
 
 class AdminLeadResponse(BaseModel):
@@ -96,6 +97,10 @@ class AdminLeadResponse(BaseModel):
     created_at: str
     referrer: Optional[str] = None
     status: LeadStatus
+    referral_code: str
+    referred_by_code: Optional[str] = None
+    referral_credits_cents: int
+    referral_redemptions_count: int
 
 
 class AdminLeadStatusUpdateRequest(BaseModel):
@@ -104,7 +109,13 @@ class AdminLeadStatusUpdateRequest(BaseModel):
     status: LeadStatus
 
 
-def admin_lead_from_model(model) -> AdminLeadResponse:
+def admin_lead_from_model(
+    model,
+    *,
+    referred_by_code: str | None = None,
+    referral_credits_cents: int = 0,
+    referral_redemptions_count: int = 0,
+) -> AdminLeadResponse:
     return AdminLeadResponse(
         lead_id=model.lead_id,
         name=model.name,
@@ -116,4 +127,8 @@ def admin_lead_from_model(model) -> AdminLeadResponse:
         created_at=model.created_at.isoformat(),
         referrer=model.referrer,
         status=model.status or LEAD_STATUS_NEW,
+        referral_code=model.referral_code,
+        referred_by_code=referred_by_code,
+        referral_credits_cents=referral_credits_cents,
+        referral_redemptions_count=referral_redemptions_count,
     )

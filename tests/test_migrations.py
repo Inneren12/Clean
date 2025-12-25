@@ -23,3 +23,11 @@ def test_alembic_upgrade_head(tmp_path):
     assert "teams" in tables
     assert "bookings" in tables
     assert "email_events" in tables
+    assert "referral_redemptions" in tables
+
+    lead_columns = {column["name"] for column in inspector.get_columns("leads")}
+    assert "referral_code" in lead_columns
+
+    booking_columns = {column["name"] for column in inspector.get_columns("bookings")}
+    assert "referral_code_applied" in booking_columns
+    assert "referral_credit_cents" in booking_columns

@@ -469,6 +469,14 @@ pre {
   gap: 8px;
 }
 
+.referral-input {
+  margin: 12px 0;
+}
+
+.referral-input input {
+  margin-top: 6px;
+}
+
 .success {
   color: #0f766e;
   margin: 0;

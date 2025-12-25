@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
@@ -47,6 +47,12 @@ class Lead(Base):
     pricing_config_version: Mapped[str] = mapped_column(String(32), nullable=False)
     config_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=default_lead_status)
+    referral_code: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        unique=True,
+        default=lambda: uuid.uuid4().hex[:12],
+    )
     utm_source: Mapped[str | None] = mapped_column(String(100))
     utm_medium: Mapped[str | None] = mapped_column(String(100))
     utm_campaign: Mapped[str | None] = mapped_column(String(100))
@@ -63,4 +69,39 @@ class Lead(Base):
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
+    )
+
+
+class ReferralRedemption(Base):
+    __tablename__ = "referral_redemptions"
+
+    redemption_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
+    )
+    referrer_lead_id: Mapped[str] = mapped_column(
+        ForeignKey("leads.lead_id"),
+        nullable=False,
+    )
+    referred_lead_id: Mapped[str] = mapped_column(
+        ForeignKey("leads.lead_id"),
+        nullable=False,
+        unique=True,
+    )
+    booking_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    referral_code: Mapped[str] = mapped_column(String(16), nullable=False)
+    credit_cents: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_referrals_referrer", "referrer_lead_id"),
     )
