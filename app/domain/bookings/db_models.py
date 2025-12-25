@@ -59,3 +59,29 @@ class Booking(Base):
         Index("ix_bookings_starts_status", "starts_at", "status"),
         Index("ix_bookings_status", "status"),
     )
+
+
+class EmailEvent(Base):
+    __tablename__ = "email_events"
+
+    event_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
+    )
+    booking_id: Mapped[str] = mapped_column(ForeignKey("bookings.booking_id"), nullable=False)
+    email_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    recipient: Mapped[str] = mapped_column(String(255), nullable=False)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    body: Mapped[str] = mapped_column(String(2000), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    booking: Mapped[Booking] = relationship("Booking", backref="email_events")
+
+    __table_args__ = (
+        Index("ix_email_events_booking_type", "booking_id", "email_type"),
+    )

@@ -150,6 +150,7 @@ make test
 - Slot search: `GET /v1/slots?date=YYYY-MM-DD&time_on_site_hours=H[.H]&postal_code=XYZ` returns 30-minute slots between 09:00–18:00 with a 30-minute buffer between jobs.
 - Booking creation: `POST /v1/bookings` with `starts_at` (ISO8601) and `time_on_site_hours` creates a `PENDING` booking and removes the slot from future searches.
 - Cleanup: `POST /v1/admin/cleanup` (Basic auth using `ADMIN_BASIC_USERNAME`/`ADMIN_BASIC_PASSWORD`) deletes `PENDING` bookings older than 30 minutes so cron/Cloudflare Scheduler can call it.
+- Email workflow v1: booking creation sends a pending notification when a lead email is present. `POST /v1/admin/email-scan` delivers 24h reminders once per booking using `email_events` dedupe, and `POST /v1/admin/bookings/{booking_id}/resend-last-email` replays the latest message for troubleshooting.
 - Frontend: after an estimate, the web UI shows the next three days of slots and books directly via the API.
 
 ## Web UI (chat tester)

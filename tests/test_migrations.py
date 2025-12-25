@@ -22,3 +22,4 @@ def test_alembic_upgrade_head(tmp_path):
     assert "chat_sessions" in tables
     assert "teams" in tables
     assert "bookings" in tables
+    assert "email_events" in tables
