@@ -151,6 +151,7 @@ make test
 - Booking creation: `POST /v1/bookings` with `starts_at` (ISO8601) and `time_on_site_hours` creates a `PENDING` booking and removes the slot from future searches.
 - Cleanup: `POST /v1/admin/cleanup` (Basic auth using `ADMIN_BASIC_USERNAME`/`ADMIN_BASIC_PASSWORD`) deletes `PENDING` bookings older than 30 minutes so cron/Cloudflare Scheduler can call it.
 - Email workflow v1: booking creation sends a pending notification when a lead email is present. `POST /v1/admin/email-scan` delivers 24h reminders once per booking using `email_events` dedupe, and `POST /v1/admin/bookings/{booking_id}/resend-last-email` replays the latest message for troubleshooting.
+- Lead pipeline: admin endpoints use deterministic statuses (`NEW → CONTACTED → BOOKED → DONE/CANCELLED`). `POST /v1/admin/leads/{lead_id}/status` transitions a lead and `GET /v1/admin/leads?status=CONTACTED` filters the admin list.
 - Frontend: after an estimate, the web UI shows the next three days of slots and books directly via the API.
 
 ## Web UI (chat tester)
