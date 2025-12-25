@@ -124,6 +124,7 @@ def create_app(app_settings) -> FastAPI:
     app.state.export_transport = None
     app.state.export_resolver = None
     app.state.email_adapter = EmailAdapter()
+    app.state.stripe_client = None
 
     app.add_middleware(RateLimitMiddleware, limiter=rate_limiter, app_settings=app_settings)
     app.add_middleware(LoggingMiddleware)

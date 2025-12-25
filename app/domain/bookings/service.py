@@ -1,16 +1,27 @@
 import math
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 
-from sqlalchemy import Select, and_, select
+from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.bookings.db_models import Booking, Team
+from app.domain.notifications import email_service
+from app.domain.pricing.models import CleaningType
+from app.domain.leads.db_models import Lead
 
 WORK_START_HOUR = 9
 WORK_END_HOUR = 18
 SLOT_STEP_MINUTES = 30
 BUFFER_MINUTES = 30
 BLOCKING_STATUSES = {"PENDING", "CONFIRMED"}
+
+
+@dataclass
+class DepositDecision:
+    required: bool
+    reasons: list[str]
+    deposit_cents: int | None = None
 
 
 def round_duration_minutes(time_on_site_hours: float) -> int:
@@ -40,6 +51,42 @@ def _booking_window_filters(day_start: datetime, day_end: datetime) -> Select:
             Booking.status.in_(BLOCKING_STATUSES),
         )
     )
+
+
+async def _has_existing_history(session: AsyncSession, lead_id: str) -> bool:
+    stmt = select(Booking.booking_id).where(
+        Booking.lead_id == lead_id, Booking.status.in_({"CONFIRMED", "DONE"})
+    )
+    result = await session.execute(stmt.limit(1))
+    return result.scalar_one_or_none() is not None
+
+
+async def evaluate_deposit_policy(
+    session: AsyncSession, lead: Lead | None, starts_at: datetime, deposit_percent: float
+) -> DepositDecision:
+    normalized = _normalize_datetime(starts_at)
+    reasons: list[str] = []
+
+    if normalized.weekday() >= 5:
+        reasons.append("weekend")
+
+    estimated_total = None
+    if lead:
+        cleaning_type = (lead.structured_inputs or {}).get("cleaning_type")
+        if cleaning_type in {CleaningType.deep.value, CleaningType.move_out_empty.value}:
+            reasons.append("heavy_cleaning")
+
+        if not await _has_existing_history(session, lead.lead_id):
+            reasons.append("new_client")
+
+        estimated_total = (lead.estimate_snapshot or {}).get("total_before_tax")
+
+    required = bool(reasons)
+    deposit_cents = None
+    if required and estimated_total is not None:
+        deposit_cents = max(0, math.ceil(float(estimated_total) * deposit_percent * 100))
+
+    return DepositDecision(required=required, reasons=reasons, deposit_cents=deposit_cents)
 
 
 async def ensure_default_team(session: AsyncSession) -> Team:
@@ -102,11 +149,13 @@ async def create_booking(
     duration_minutes: int,
     lead_id: str | None,
     session: AsyncSession,
+    deposit_decision: DepositDecision | None = None,
 ) -> Booking:
     normalized = _normalize_datetime(starts_at)
     if not await is_slot_available(normalized, duration_minutes, session):
         raise ValueError("Requested slot is no longer available")
 
+    decision = deposit_decision or DepositDecision(required=False, reasons=[], deposit_cents=None)
     team = await ensure_default_team(session)
     booking = Booking(
         team_id=team.team_id,
@@ -114,8 +163,86 @@ async def create_booking(
         starts_at=normalized,
         duration_minutes=duration_minutes,
         status="PENDING",
+        deposit_required=decision.required,
+        deposit_cents=decision.deposit_cents,
+        deposit_policy=decision.reasons,
+        deposit_status="pending" if decision.required else None,
     )
     session.add(booking)
+    await session.commit()
+    await session.refresh(booking)
+    return booking
+
+
+async def attach_checkout_session(
+    session: AsyncSession, booking_id: str, checkout_session_id: str, payment_intent_id: str | None = None
+) -> Booking | None:
+    booking = await session.get(Booking, booking_id)
+    if booking is None:
+        return None
+
+    booking.stripe_checkout_session_id = checkout_session_id
+    if payment_intent_id:
+        booking.stripe_payment_intent_id = payment_intent_id
+    if booking.deposit_required:
+        booking.deposit_status = booking.deposit_status or "pending"
+    await session.commit()
+    await session.refresh(booking)
+    return booking
+
+
+async def mark_deposit_paid(
+    session: AsyncSession, checkout_session_id: str | None, payment_intent_id: str | None, email_adapter
+) -> Booking | None:
+    conditions = []
+    if checkout_session_id:
+        conditions.append(Booking.stripe_checkout_session_id == checkout_session_id)
+    if payment_intent_id:
+        conditions.append(Booking.stripe_payment_intent_id == payment_intent_id)
+    if not conditions:
+        return None
+
+    stmt = select(Booking).where(or_(*conditions)).limit(1)
+    result = await session.execute(stmt)
+    booking = result.scalar_one_or_none()
+    if booking is None:
+        return None
+
+    booking.deposit_status = "paid"
+    booking.status = "CONFIRMED"
+    if payment_intent_id:
+        booking.stripe_payment_intent_id = payment_intent_id
+    await session.commit()
+    await session.refresh(booking)
+
+    if booking.lead_id:
+        lead = await session.get(Lead, booking.lead_id)
+        if lead:
+            await email_service.send_booking_confirmed_email(session, email_adapter, booking, lead)
+
+    return booking
+
+
+async def mark_deposit_failed(
+    session: AsyncSession, checkout_session_id: str | None, payment_intent_id: str | None, failure_status: str = "expired"
+) -> Booking | None:
+    conditions = []
+    if checkout_session_id:
+        conditions.append(Booking.stripe_checkout_session_id == checkout_session_id)
+    if payment_intent_id:
+        conditions.append(Booking.stripe_payment_intent_id == payment_intent_id)
+    if not conditions:
+        return None
+
+    stmt = select(Booking).where(or_(*conditions)).limit(1)
+    result = await session.execute(stmt)
+    booking = result.scalar_one_or_none()
+    if booking is None:
+        return None
+
+    booking.deposit_status = failure_status
+    if booking.status == "PENDING":
+        booking.status = "CANCELLED"
     await session.commit()
     await session.refresh(booking)
     return booking

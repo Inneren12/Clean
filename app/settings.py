@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     )
     export_webhook_allow_http: bool = Field(False, env="EXPORT_WEBHOOK_ALLOW_HTTP")
     export_webhook_block_private_ips: bool = Field(True, env="EXPORT_WEBHOOK_BLOCK_PRIVATE_IPS")
+    stripe_secret_key: str | None = Field(None, env="STRIPE_SECRET_KEY")
+    stripe_webhook_secret: str | None = Field(None, env="STRIPE_WEBHOOK_SECRET")
+    stripe_success_url: str = Field("http://localhost:3000/deposit-success?session_id={CHECKOUT_SESSION_ID}", env="STRIPE_SUCCESS_URL")
+    stripe_cancel_url: str = Field("http://localhost:3000/deposit-cancelled", env="STRIPE_CANCEL_URL")
+    deposit_percent: float = Field(0.25, env="DEPOSIT_PERCENT")
+    deposit_currency: str = Field("cad", env="DEPOSIT_CURRENCY")
 
     model_config = SettingsConfigDict(env_file=".env", enable_decoding=False)
 
@@ -64,6 +70,13 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_list_raw(cls, value: object) -> str | None:
         return cls._normalize_raw_list(value)
+
+    @field_validator("deposit_percent")
+    @classmethod
+    def validate_deposit_percent(cls, value: float) -> float:
+        if value < 0 or value > 1:
+            raise ValueError("deposit_percent must be between 0 and 1")
+        return value
 
     @property
     def cors_origins(self) -> list[str]:
