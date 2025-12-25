@@ -9,6 +9,7 @@ from app.dependencies import get_db_session
 from app.domain.leads.db_models import Lead
 from app.domain.leads.schemas import LeadCreateRequest, LeadResponse
 from app.infra.export import export_lead_async
+from app.infra.email import EmailAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,24 @@ def schedule_export(
         anyio.from_thread.run(_spawn)
     else:
         loop.create_task(export_lead_async(payload, transport=transport, resolver=resolver))
+
+
+def schedule_email_request_received(adapter: EmailAdapter | None, lead: Lead) -> None:
+    if adapter is None:
+        return
+
+    async def _spawn() -> None:
+        try:
+            await adapter.send_request_received(lead)
+        except Exception:  # noqa: BLE001
+            logger.warning("email_background_failed", extra={"extra": {"lead_id": lead.lead_id}})
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        anyio.from_thread.run(_spawn)
+    else:
+        loop.create_task(_spawn())
 
 
 @router.post("/v1/leads", response_model=LeadResponse, status_code=status.HTTP_201_CREATED)
@@ -76,6 +95,7 @@ async def create_lead(
     logger.info("lead_created", extra={"extra": {"lead_id": lead.lead_id}})
     export_transport = getattr(http_request.app.state, "export_transport", None)
     export_resolver = getattr(http_request.app.state, "export_resolver", None)
+    email_adapter: EmailAdapter | None = getattr(http_request.app.state, "email_adapter", None)
     background_tasks.add_task(
         schedule_export,
         {
@@ -106,6 +126,7 @@ async def create_lead(
         export_transport,
         export_resolver,
     )
+    background_tasks.add_task(schedule_email_request_received, email_adapter, lead)
 
     return LeadResponse(
         lead_id=lead.lead_id,

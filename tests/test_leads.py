@@ -7,6 +7,7 @@ from app.settings import settings
 from app.main import app
 
 from app.domain.leads.db_models import Lead
+from app.infra.email import EmailAdapter
 
 
 def test_create_lead_persists_snapshot(client, async_session_maker):
@@ -111,6 +112,46 @@ def test_create_lead_succeeds_when_webhook_export_fails(client):
         settings.export_webhook_allow_http = original_allow_http
         app.state.export_resolver = None
         app.state.export_transport = None
+
+
+def test_create_lead_succeeds_when_email_adapter_errors(client):
+    class FailingAdapter(EmailAdapter):
+        async def send_request_received(self, lead):  # type: ignore[override]
+            raise RuntimeError("expected_failure")
+
+    original_adapter = getattr(app.state, "email_adapter", None)
+    app.state.email_adapter = FailingAdapter()
+
+    try:
+        estimate_response = client.post(
+            "/v1/estimate",
+            json={
+                "beds": 1,
+                "baths": 1,
+                "cleaning_type": "standard",
+                "heavy_grease": False,
+                "multi_floor": False,
+                "frequency": "one_time",
+                "add_ons": {},
+            },
+        )
+        assert estimate_response.status_code == 200
+        estimate = estimate_response.json()
+
+        lead_payload = {
+            "name": "Email Failure",
+            "phone": "780-555-9999",
+            "email": "email@example.com",
+            "preferred_dates": ["Fri"],
+            "structured_inputs": {"beds": 1, "baths": 1, "cleaning_type": "standard"},
+            "estimate_snapshot": estimate,
+        }
+
+        response = client.post("/v1/leads", json=lead_payload)
+        assert response.status_code == 201
+        assert "lead_id" in response.json()
+    finally:
+        app.state.email_adapter = original_adapter
 
 
 def test_create_lead_succeeds_when_allowlist_required_skips_export(client):

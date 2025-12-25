@@ -49,6 +49,7 @@ async def _post_with_retry_async(
     timeout = settings.export_webhook_timeout_seconds
     retries = settings.export_webhook_max_retries
     backoff = settings.export_webhook_backoff_seconds
+    last_error_code = "unknown"
     for attempt in range(1, retries + 1):
         try:
             async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
@@ -59,6 +60,7 @@ async def _post_with_retry_async(
                     extra={"extra": {"lead_id": payload.get("lead_id"), "status_code": response.status_code}},
                 )
                 return
+            last_error_code = f"status_{response.status_code}"
             logger.warning(
                 "export_webhook_non_200",
                 extra={
@@ -70,6 +72,7 @@ async def _post_with_retry_async(
                 },
             )
         except Exception as exc:  # noqa: BLE001
+            last_error_code = type(exc).__name__
             logger.warning(
                 "export_webhook_error",
                 extra={"extra": {"lead_id": payload.get("lead_id"), "attempt": attempt, "error": str(exc)}},
@@ -78,7 +81,13 @@ async def _post_with_retry_async(
             await asyncio.sleep(backoff * attempt)
     logger.error(
         "export_webhook_failed",
-        extra={"extra": {"lead_id": payload.get("lead_id"), "attempts": retries}},
+        extra={
+            "extra": {
+                "lead_id": payload.get("lead_id"),
+                "attempts": retries,
+                "last_error_code": last_error_code,
+            }
+        },
     )
 
 

@@ -28,6 +28,17 @@ class Settings(BaseSettings):
         "postgresql+psycopg://postgres:postgres@postgres:5432/cleaning",
         env="DATABASE_URL",
     )
+    email_mode: Literal["off", "sendgrid", "smtp"] = Field("off", env="EMAIL_MODE")
+    email_from: str | None = Field(None, env="EMAIL_FROM")
+    email_from_name: str | None = Field(None, env="EMAIL_FROM_NAME")
+    sendgrid_api_key: str | None = Field(None, env="SENDGRID_API_KEY")
+    smtp_host: str | None = Field(None, env="SMTP_HOST")
+    smtp_port: int | None = Field(None, env="SMTP_PORT")
+    smtp_username: str | None = Field(None, env="SMTP_USERNAME")
+    smtp_password: str | None = Field(None, env="SMTP_PASSWORD")
+    smtp_use_tls: bool = Field(True, env="SMTP_USE_TLS")
+    admin_basic_username: str | None = Field(None, env="ADMIN_BASIC_USERNAME")
+    admin_basic_password: str | None = Field(None, env="ADMIN_BASIC_PASSWORD")
     export_mode: Literal["off", "webhook", "sheets"] = Field("off", env="EXPORT_MODE")
     export_webhook_url: str | None = Field(None, env="EXPORT_WEBHOOK_URL")
     export_webhook_timeout_seconds: int = Field(5, env="EXPORT_WEBHOOK_TIMEOUT_SECONDS")
@@ -85,6 +96,14 @@ class Settings(BaseSettings):
     @export_webhook_allowed_hosts.setter
     def export_webhook_allowed_hosts(self, value: list[str] | str | None) -> None:
         self.export_webhook_allowed_hosts_raw = self._normalize_raw_list(value)
+
+    @property
+    def email_sender(self) -> str | None:
+        return self.email_from
+
+    @email_sender.setter
+    def email_sender(self, value: str | None) -> None:
+        self.email_from = value
 
     @staticmethod
     def _normalize_raw_list(value: object) -> str | None:
