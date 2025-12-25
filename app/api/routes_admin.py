@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.analytics import schemas as analytics_schemas
@@ -22,7 +23,7 @@ from app.dependencies import get_db_session
 from app.domain.bookings.db_models import Booking
 from app.domain.bookings import schemas as booking_schemas
 from app.domain.bookings import service as booking_service
-from app.domain.leads.db_models import Lead
+from app.domain.leads.db_models import Lead, ReferralCredit
 from app.domain.leads.schemas import AdminLeadResponse, AdminLeadStatusUpdateRequest, admin_lead_from_model
 from app.domain.leads.statuses import assert_valid_transition, is_valid_status
 from app.domain.notifications import email_service
@@ -55,7 +56,15 @@ async def list_leads(
     session: AsyncSession = Depends(get_db_session),
     _: None = Depends(verify_admin),
 ) -> List[AdminLeadResponse]:
-    stmt = select(Lead).order_by(Lead.created_at.desc()).limit(limit)
+    stmt = (
+        select(Lead)
+        .options(
+            selectinload(Lead.referral_credits),
+            selectinload(Lead.referred_credit),
+        )
+        .order_by(Lead.created_at.desc())
+        .limit(limit)
+    )
     if status_filter:
         normalized = status_filter.upper()
         if not is_valid_status(normalized):
@@ -88,7 +97,10 @@ async def update_lead_status(
     lead.status = request.status
     await session.commit()
     await session.refresh(lead)
-    return admin_lead_from_model(lead)
+    credit_count = await session.scalar(
+        select(func.count()).select_from(ReferralCredit).where(ReferralCredit.referrer_lead_id == lead.lead_id)
+    )
+    return admin_lead_from_model(lead, referral_credit_count=int(credit_count or 0))
 
 
 @router.post("/v1/admin/email-scan", status_code=status.HTTP_202_ACCEPTED)

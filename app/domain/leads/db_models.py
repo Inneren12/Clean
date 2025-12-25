@@ -1,8 +1,12 @@
+from __future__ import annotations
+
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, func
-from sqlalchemy.orm import Mapped, mapped_column
+from typing import Optional
+
+from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
 from app.infra.db import Base
@@ -53,6 +57,13 @@ class Lead(Base):
     utm_term: Mapped[str | None] = mapped_column(String(100))
     utm_content: Mapped[str | None] = mapped_column(String(100))
     referrer: Mapped[str | None] = mapped_column(String(255))
+    referral_code: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        unique=True,
+        default=lambda: str(uuid.uuid4()).replace("-", "")[:16],
+    )
+    referred_by_code: Mapped[str | None] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -63,4 +74,45 @@ class Lead(Base):
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
+    )
+
+    referral_credits: Mapped[list["ReferralCredit"]] = relationship(
+        "ReferralCredit",
+        back_populates="referrer",
+        foreign_keys="ReferralCredit.referrer_lead_id",
+    )
+    referred_credit: Mapped[Optional["ReferralCredit"]] = relationship(
+        "ReferralCredit",
+        back_populates="referred",
+        foreign_keys="ReferralCredit.referred_lead_id",
+        uselist=False,
+    )
+
+
+class ReferralCredit(Base):
+    __tablename__ = "referral_credits"
+
+    credit_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
+    )
+    referrer_lead_id: Mapped[str] = mapped_column(
+        ForeignKey("leads.lead_id"), nullable=False
+    )
+    referred_lead_id: Mapped[str] = mapped_column(
+        ForeignKey("leads.lead_id"), nullable=False, unique=True
+    )
+    applied_code: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    referrer: Mapped[Lead] = relationship(
+        Lead, back_populates="referral_credits", foreign_keys=[referrer_lead_id]
+    )
+    referred: Mapped[Lead] = relationship(
+        Lead, back_populates="referred_credit", foreign_keys=[referred_lead_id]
     )

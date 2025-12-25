@@ -56,6 +56,7 @@ type SlotAvailability = {
 const STORAGE_KEY = 'economy_chat_session_id';
 const UTM_STORAGE_KEY = 'economy_utm_params';
 const REFERRER_STORAGE_KEY = 'economy_referrer';
+const REFERRAL_CODE_KEY = 'economy_referral_code';
 
 const packages = [
   {
@@ -140,6 +141,7 @@ export default function HomePage() {
   const [leadSubmitting, setLeadSubmitting] = useState(false);
   const [leadError, setLeadError] = useState<string | null>(null);
   const [leadSuccess, setLeadSuccess] = useState(false);
+  const [issuedReferralCode, setIssuedReferralCode] = useState<string | null>(null);
   const [leadForm, setLeadForm] = useState({
     name: '',
     phone: '',
@@ -151,7 +153,8 @@ export default function HomePage() {
     parking: '',
     pets: '',
     allergies: '',
-    notes: ''
+    notes: '',
+    referral_code: ''
   });
   const [utmParams, setUtmParams] = useState<Record<string, string>>({});
   const [referrer, setReferrer] = useState<string | null>(null);
@@ -188,6 +191,7 @@ export default function HomePage() {
     }
     const storedUtm = window.localStorage.getItem(UTM_STORAGE_KEY);
     const storedReferrer = window.localStorage.getItem(REFERRER_STORAGE_KEY);
+    const storedReferralCode = window.localStorage.getItem(REFERRAL_CODE_KEY);
     const storedValues = storedUtm ? (JSON.parse(storedUtm) as Record<string, string>) : {};
 
     const params = new URLSearchParams(window.location.search);
@@ -204,6 +208,13 @@ export default function HomePage() {
       window.localStorage.setItem(UTM_STORAGE_KEY, JSON.stringify(values));
     }
     setUtmParams(values);
+
+    const referralFromUrl = params.get('referral') || params.get('ref');
+    const nextReferralCode = referralFromUrl || storedReferralCode;
+    if (nextReferralCode) {
+      window.localStorage.setItem(REFERRAL_CODE_KEY, nextReferralCode);
+      setLeadForm((prev) => ({ ...prev, referral_code: nextReferralCode }));
+    }
 
     const nextReferrer = document.referrer || storedReferrer;
     if (nextReferrer) {
@@ -335,6 +346,7 @@ export default function HomePage() {
     }
     setLeadSubmitting(true);
     setLeadError(null);
+    setIssuedReferralCode(null);
     try {
       const payload = {
         name: leadForm.name,
@@ -351,7 +363,8 @@ export default function HomePage() {
         structured_inputs: structuredInputs,
         estimate_snapshot: estimate,
         ...utmParams,
-        referrer
+        referrer,
+        referral_code: leadForm.referral_code || undefined
       };
 
       const response = await fetch(`${apiBaseUrl}/v1/leads`, {
@@ -367,8 +380,11 @@ export default function HomePage() {
         throw new Error(errorText || `Request failed: ${response.status}`);
       }
 
+      const leadResponse = (await response.json()) as { lead_id: string; referral_code?: string };
+
       setLeadSuccess(true);
       setShowLeadForm(false);
+      setIssuedReferralCode(leadResponse.referral_code ?? null);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unexpected error';
       setLeadError(message);
@@ -739,6 +755,12 @@ export default function HomePage() {
                       Thanks! We&apos;ve saved your booking request. Our team will confirm your
                       preferred times shortly.
                     </p>
+                    {issuedReferralCode ? (
+                      <p className="muted">
+                        Your referral code: <strong>{issuedReferralCode}</strong>. Share it with
+                        friends so both of you get credit when they book.
+                      </p>
+                    ) : null}
                   </div>
                 ) : (
                   <div className="lead-cta">
@@ -855,6 +877,17 @@ export default function HomePage() {
                           onChange={(event) =>
                             handleLeadFieldChange('allergies', event.target.value)
                           }
+                        />
+                      </label>
+                      <label>
+                        <span>Referral code</span>
+                        <input
+                          type="text"
+                          value={leadForm.referral_code}
+                          onChange={(event) =>
+                            handleLeadFieldChange('referral_code', event.target.value.toUpperCase())
+                          }
+                          placeholder="ABC12345"
                         />
                       </label>
                       <label className="full">
