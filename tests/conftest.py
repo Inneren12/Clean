@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.domain.analytics import db_models as analytics_db_models  # noqa: F401
 from app.domain.bookings import db_models as booking_db_models  # noqa: F401
 from app.domain.leads import db_models  # noqa: F401
 from app.infra.db import Base, get_db_session

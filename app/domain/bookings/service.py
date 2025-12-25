@@ -5,6 +5,12 @@ from datetime import date, datetime, time, timedelta, timezone
 from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.analytics.service import (
+    EventType,
+    estimated_duration_from_booking,
+    estimated_revenue_from_lead,
+    log_event,
+)
 from app.domain.bookings.db_models import Booking, Team
 from app.domain.notifications import email_service
 from app.domain.pricing.models import CleaningType
@@ -217,10 +223,21 @@ async def mark_deposit_paid(
     if booking is None:
         return None
 
+    already_confirmed = booking.deposit_status == "paid" and booking.status == "CONFIRMED"
     booking.deposit_status = "paid"
     booking.status = "CONFIRMED"
     if payment_intent_id:
         booking.stripe_payment_intent_id = payment_intent_id
+    lead = await session.get(Lead, booking.lead_id) if booking.lead_id else None
+    if not already_confirmed:
+        await log_event(
+            session,
+            event_type=EventType.booking_confirmed,
+            booking=booking,
+            lead=lead,
+            estimated_revenue_cents=estimated_revenue_from_lead(lead),
+            estimated_duration_minutes=estimated_duration_from_booking(booking),
+        )
     await session.commit()
     await session.refresh(booking)
 
@@ -269,3 +286,33 @@ async def cleanup_stale_bookings(session: AsyncSession, older_than: timedelta) -
     if deleted:
         await session.commit()
     return deleted
+
+
+async def mark_booking_completed(
+    session: AsyncSession, booking_id: str, actual_duration_minutes: int
+) -> Booking | None:
+    if actual_duration_minutes <= 0:
+        raise ValueError("actual_duration_minutes must be positive")
+
+    booking = await session.get(Booking, booking_id)
+    if booking is None:
+        return None
+
+    if booking.actual_duration_minutes is not None:
+        raise ValueError("Booking already completed")
+
+    booking.actual_duration_minutes = actual_duration_minutes
+    booking.status = "DONE"
+    lead = await session.get(Lead, booking.lead_id) if booking.lead_id else None
+    await log_event(
+        session,
+        event_type=EventType.job_completed,
+        booking=booking,
+        lead=lead,
+        estimated_revenue_cents=estimated_revenue_from_lead(lead),
+        estimated_duration_minutes=estimated_duration_from_booking(booking),
+        actual_duration_minutes=actual_duration_minutes,
+    )
+    await session.commit()
+    await session.refresh(booking)
+    return booking
