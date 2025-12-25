@@ -166,6 +166,12 @@ make test
 - Unpaid deposits auto-cancel when the checkout session expires or via the 30-minute pending cleanup job.
 - Paid deposits confirm the booking. For cancellations more than 24 hours before the start time, process manual refunds in Stripe; within 24 hours, deposits are non-refundable for this MVP.
 
+## Analytics (Sprint F)
+
+- Event log: `event_logs` captures `lead_created`, `booking_created`, `booking_confirmed`, and `job_completed` events with UTM/referrer context for conversion tracking.
+- Metrics: `GET /v1/admin/metrics?from=...&to=...` (Basic auth) returns conversion counts, average estimated revenue, and estimator accuracy (estimated vs actual duration). Add `format=csv` to download the summary as CSV.
+- Completion workflow: `POST /v1/admin/bookings/{booking_id}/complete` records `actual_duration_minutes` and marks the booking as `DONE` for estimator accuracy reporting. Use `POST /v1/admin/bookings/{booking_id}/confirm` to manually confirm non-deposit bookings.
+
 ## Web UI (chat tester)
 
 The minimal Next.js chat UI lives in `web/`. It expects the API base URL in an
