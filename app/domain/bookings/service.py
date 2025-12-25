@@ -96,7 +96,7 @@ async def ensure_default_team(session: AsyncSession) -> Team:
         return team
     team = Team(name="Default Team")
     session.add(team)
-    await session.commit()
+    await session.flush()
     await session.refresh(team)
     return team
 
@@ -150,6 +150,7 @@ async def create_booking(
     lead_id: str | None,
     session: AsyncSession,
     deposit_decision: DepositDecision | None = None,
+    commit: bool = True,
 ) -> Booking:
     normalized = _normalize_datetime(starts_at)
     if not await is_slot_available(normalized, duration_minutes, session):
@@ -169,13 +170,19 @@ async def create_booking(
         deposit_status="pending" if decision.required else None,
     )
     session.add(booking)
-    await session.commit()
+    await session.flush()
     await session.refresh(booking)
+    if commit:
+        await session.commit()
     return booking
 
 
 async def attach_checkout_session(
-    session: AsyncSession, booking_id: str, checkout_session_id: str, payment_intent_id: str | None = None
+    session: AsyncSession,
+    booking_id: str,
+    checkout_session_id: str,
+    payment_intent_id: str | None = None,
+    commit: bool = True,
 ) -> Booking | None:
     booking = await session.get(Booking, booking_id)
     if booking is None:
@@ -186,8 +193,10 @@ async def attach_checkout_session(
         booking.stripe_payment_intent_id = payment_intent_id
     if booking.deposit_required:
         booking.deposit_status = booking.deposit_status or "pending"
-    await session.commit()
+    await session.flush()
     await session.refresh(booking)
+    if commit:
+        await session.commit()
     return booking
 
 
