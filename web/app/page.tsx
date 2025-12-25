@@ -47,6 +47,12 @@ type ChatTurnResponse = {
   state: Record<string, unknown>;
 };
 
+type SlotAvailability = {
+  date: string;
+  duration_minutes: number;
+  slots: string[];
+};
+
 const STORAGE_KEY = 'economy_chat_session_id';
 const UTM_STORAGE_KEY = 'economy_utm_params';
 const REFERRER_STORAGE_KEY = 'economy_referrer';
@@ -149,6 +155,13 @@ export default function HomePage() {
   });
   const [utmParams, setUtmParams] = useState<Record<string, string>>({});
   const [referrer, setReferrer] = useState<string | null>(null);
+  const [slotsByDate, setSlotsByDate] = useState<SlotAvailability[]>([]);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  const [slotsError, setSlotsError] = useState<string | null>(null);
+  const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
+  const [bookingSubmitting, setBookingSubmitting] = useState(false);
+  const [bookingSuccess, setBookingSuccess] = useState<string | null>(null);
+  const [bookingError, setBookingError] = useState<string | null>(null);
 
   const apiBaseUrl = useMemo(
     () => process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000',
@@ -198,6 +211,52 @@ export default function HomePage() {
     }
     setReferrer(nextReferrer || null);
   }, []);
+
+  const loadSlots = useCallback(async () => {
+    if (!estimate) {
+      setSlotsByDate([]);
+      setSelectedSlot(null);
+      return;
+    }
+    setSlotsLoading(true);
+    setSlotsError(null);
+    setBookingSuccess(null);
+    setBookingError(null);
+    setSelectedSlot(null);
+    try {
+      const upcomingDates = getNextThreeDates();
+      const responses = await Promise.all(
+        upcomingDates.map(async (day) => {
+          const params = new URLSearchParams({
+            date: day,
+            time_on_site_hours: String(estimate.time_on_site_hours)
+          });
+          if (leadForm.postal_code) {
+            params.append('postal_code', leadForm.postal_code);
+          }
+          const response = await fetch(`${apiBaseUrl}/v1/slots?${params.toString()}`);
+          if (!response.ok) {
+            const text = await response.text();
+            throw new Error(text || `Failed to load slots for ${day}`);
+          }
+          const payload = (await response.json()) as SlotAvailability;
+          return payload;
+        })
+      );
+      setSlotsByDate(responses);
+      const firstAvailable = responses.find((entry) => entry.slots.length > 0)?.slots[0];
+      setSelectedSlot(firstAvailable ?? null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to load slots';
+      setSlotsError(message);
+    } finally {
+      setSlotsLoading(false);
+    }
+  }, [apiBaseUrl, estimate, leadForm.postal_code]);
+
+  useEffect(() => {
+    void loadSlots();
+  }, [loadSlots]);
 
   const submitMessage = useCallback(
     async (text: string) => {
@@ -317,6 +376,43 @@ export default function HomePage() {
       setLeadSubmitting(false);
     }
   };
+
+  const bookSelectedSlot = useCallback(async () => {
+    if (!estimate || !selectedSlot) {
+      setBookingError('Please select a slot to book.');
+      return;
+    }
+    setBookingSubmitting(true);
+    setBookingError(null);
+    setBookingSuccess(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/v1/bookings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          starts_at: selectedSlot,
+          time_on_site_hours: estimate.time_on_site_hours,
+          lead_id: undefined
+        })
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Booking failed: ${response.status}`);
+      }
+
+      const booking = (await response.json()) as { booking_id: string; starts_at: string };
+      setBookingSuccess(`Booked slot for ${formatSlotTime(booking.starts_at)}`);
+      await loadSlots();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unexpected booking error';
+      setBookingError(message);
+    } finally {
+      setBookingSubmitting(false);
+    }
+  }, [apiBaseUrl, estimate, loadSlots, selectedSlot]);
 
   return (
     <div className="landing">
@@ -582,6 +678,60 @@ export default function HomePage() {
                   </div>
                 ) : null}
 
+                <div className="slots-card">
+                  <div className="slots-header">
+                    <div>
+                      <p className="label">Book a time</p>
+                      <p className="muted">Next 3 days · 30 minute steps · {estimate.time_on_site_hours} hours on site</p>
+                    </div>
+                    <button type="button" className="ghost" onClick={() => void loadSlots()} disabled={slotsLoading}>
+                      {slotsLoading ? 'Refreshing...' : 'Refresh'}
+                    </button>
+                  </div>
+                  {slotsError ? <p className="error">{slotsError}</p> : null}
+                  {slotsLoading ? <p className="muted">Loading slots...</p> : null}
+                  {!slotsLoading && slotsByDate.length === 0 ? (
+                    <p className="muted">Slots will appear after your estimate.</p>
+                  ) : null}
+                  {!slotsLoading && slotsByDate.length > 0 ? (
+                    <div className="slot-grid">
+                      {slotsByDate.map((day) => (
+                        <div key={day.date} className="slot-column">
+                          <p className="label">{formatSlotDateHeading(day.date)}</p>
+                          <div className="slot-list">
+                            {day.slots.length === 0 ? (
+                              <p className="muted">No openings</p>
+                            ) : (
+                              day.slots.map((slot) => (
+                                <button
+                                  key={slot}
+                                  type="button"
+                                  className={`slot-button ${selectedSlot === slot ? 'selected' : ''}`}
+                                  onClick={() => setSelectedSlot(slot)}
+                                >
+                                  {formatSlotTime(slot)}
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="booking-actions">
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={() => void bookSelectedSlot()}
+                      disabled={bookingSubmitting || !selectedSlot || slotsLoading}
+                    >
+                      {bookingSubmitting ? 'Booking…' : selectedSlot ? `Book ${formatSlotTime(selectedSlot)}` : 'Select a slot'}
+                    </button>
+                    {bookingSuccess ? <p className="success">{bookingSuccess}</p> : null}
+                    {bookingError ? <p className="error">{bookingError}</p> : null}
+                  </div>
+                </div>
+
                 {leadSuccess ? (
                   <div className="lead-confirmation">
                     <h4>Request received</h4>
@@ -742,4 +892,31 @@ function formatCurrency(amount: number) {
     currency: 'CAD',
     maximumFractionDigits: 2
   }).format(amount);
+}
+
+function getNextThreeDates(): string[] {
+  const today = new Date();
+  return Array.from({ length: 3 }).map((_, index) => {
+    const next = new Date(today);
+    next.setDate(today.getDate() + index);
+    return next.toISOString().slice(0, 10);
+  });
+}
+
+function formatSlotTime(slot: string): string {
+  const date = new Date(slot);
+  return date.toLocaleTimeString('en-CA', {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short'
+  });
+}
+
+function formatSlotDateHeading(day: string): string {
+  const date = new Date(`${day}T00:00:00`);
+  return date.toLocaleDateString('en-CA', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric'
+  });
 }
