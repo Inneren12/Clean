@@ -6,8 +6,9 @@ from types import SimpleNamespace
 import stripe
 import sqlalchemy as sa
 
-from app.domain.bookings.db_models import Booking
+from app.domain.bookings.db_models import Booking, EmailEvent
 from app.domain.leads.db_models import Lead
+from app.infra import stripe as stripe_infra
 from app.main import app
 from app.settings import settings
 
@@ -62,6 +63,45 @@ def _booking_start_on_weekend() -> str:
     return start.isoformat()
 
 
+def _booking_start_on_weekday() -> str:
+    today = datetime.now(tz=timezone.utc)
+    days_ahead = 1
+    while (today + timedelta(days=days_ahead)).weekday() >= 5:
+        days_ahead += 1
+    start = (today + timedelta(days=days_ahead)).replace(hour=10, minute=0, second=0, microsecond=0)
+    return start.isoformat()
+
+
+def _count_bookings(async_session_maker) -> int:
+    async def _count() -> int:
+        async with async_session_maker() as session:
+            result = await session.execute(sa.select(sa.func.count()).select_from(Booking))
+            return int(result.scalar_one())
+
+    import asyncio
+
+    return asyncio.run(_count())
+
+
+def _count_email_events(async_session_maker) -> int:
+    async def _count() -> int:
+        async with async_session_maker() as session:
+            result = await session.execute(sa.select(sa.func.count()).select_from(EmailEvent))
+            return int(result.scalar_one())
+
+    import asyncio
+
+    return asyncio.run(_count())
+
+
+class RecordingAdapter:
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str, str]] = []
+
+    async def send_email(self, recipient: str, subject: str, body: str) -> None:
+        self.sent.append((recipient, subject, body))
+
+
 def test_booking_response_includes_deposit_policy(client, async_session_maker, monkeypatch):
     settings.stripe_secret_key = "sk_test"
     settings.stripe_webhook_secret = "whsec_test"
@@ -84,6 +124,75 @@ def test_booking_response_includes_deposit_policy(client, async_session_maker, m
         assert data["checkout_url"] == "https://example.com/checkout"
     finally:
         app.state.stripe_client = original_client
+
+
+def test_missing_stripe_key_does_not_create_booking(client, async_session_maker):
+    original_secret = settings.stripe_secret_key
+    settings.stripe_secret_key = None
+    adapter = RecordingAdapter()
+    original_adapter = getattr(app.state, "email_adapter", None)
+    app.state.email_adapter = adapter
+
+    lead_id = _seed_lead(async_session_maker)
+    payload = {
+        "starts_at": _booking_start_on_weekend(),
+        "time_on_site_hours": 2,
+        "lead_id": lead_id,
+    }
+
+    try:
+        response = client.post("/v1/bookings", json=payload)
+        assert response.status_code == 503
+        assert _count_bookings(async_session_maker) == 0
+        assert _count_email_events(async_session_maker) == 0
+        assert adapter.sent == []
+    finally:
+        app.state.email_adapter = original_adapter
+        settings.stripe_secret_key = original_secret
+
+
+def test_checkout_failure_rolls_back_booking(client, async_session_maker, monkeypatch):
+    original_secret = settings.stripe_secret_key
+    settings.stripe_secret_key = "sk_test"
+    adapter = RecordingAdapter()
+    original_adapter = getattr(app.state, "email_adapter", None)
+    app.state.email_adapter = adapter
+
+    def _raise(**_: object) -> None:
+        raise RuntimeError("stripe_down")
+
+    monkeypatch.setattr(stripe_infra, "create_checkout_session", _raise)
+    lead_id = _seed_lead(async_session_maker)
+    payload = {
+        "starts_at": _booking_start_on_weekend(),
+        "time_on_site_hours": 2,
+        "lead_id": lead_id,
+    }
+
+    try:
+        response = client.post("/v1/bookings", json=payload)
+        assert response.status_code == 503
+        assert _count_bookings(async_session_maker) == 0
+        assert _count_email_events(async_session_maker) == 0
+        assert adapter.sent == []
+    finally:
+        app.state.email_adapter = original_adapter
+        settings.stripe_secret_key = original_secret
+
+
+def test_non_deposit_booking_persists(client, async_session_maker):
+    original_secret = settings.stripe_secret_key
+    settings.stripe_secret_key = None
+    payload = {"starts_at": _booking_start_on_weekday(), "time_on_site_hours": 1}
+
+    try:
+        response = client.post("/v1/bookings", json=payload)
+        assert response.status_code == 201
+        data = response.json()
+        assert data["deposit_required"] is False
+        assert _count_bookings(async_session_maker) == 1
+    finally:
+        settings.stripe_secret_key = original_secret
 
 
 def test_webhook_confirms_booking(client, async_session_maker):
