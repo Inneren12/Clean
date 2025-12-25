@@ -53,7 +53,7 @@ def clean_database(test_engine):
     asyncio.run(truncate_tables())
     rate_limiter = getattr(app.state, "rate_limiter", None)
     if rate_limiter:
-        rate_limiter.reset()
+        asyncio.run(rate_limiter.reset())
     yield
 
 

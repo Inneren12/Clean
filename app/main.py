@@ -18,7 +18,7 @@ from app.api.routes_leads import router as leads_router
 from app.domain.errors import DomainError
 from app.infra.email import EmailAdapter
 from app.infra.logging import configure_logging
-from app.infra.security import RateLimiter, resolve_client_key
+from app.infra.security import RateLimiter, create_rate_limiter, resolve_client_key
 from app.settings import settings
 
 PROBLEM_TYPE_VALIDATION = "https://example.com/problems/validation-error"
@@ -91,7 +91,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             trusted_proxy_ips=self.app_settings.trusted_proxy_ips,
             trusted_proxy_cidrs=self.app_settings.trusted_proxy_cidrs,
         )
-        if not self.limiter.allow(client):
+        if not await self.limiter.allow(client):
             return problem_details(
                 request=request,
                 status=429,
@@ -116,15 +116,16 @@ def create_app(app_settings) -> FastAPI:
     configure_logging()
     app = FastAPI(title="Cleaning Economy Bot", version="1.0.0")
 
-    rate_limiter = RateLimiter(
-        app_settings.rate_limit_per_minute,
-        cleanup_minutes=app_settings.rate_limit_cleanup_minutes,
-    )
+    rate_limiter = create_rate_limiter(app_settings)
     app.state.rate_limiter = rate_limiter
     app.state.export_transport = None
     app.state.export_resolver = None
     app.state.email_adapter = EmailAdapter()
     app.state.stripe_client = None
+
+    @app.on_event("shutdown")
+    async def shutdown_limiter() -> None:
+        await rate_limiter.close()
 
     app.add_middleware(RateLimitMiddleware, limiter=rate_limiter, app_settings=app_settings)
     app.add_middleware(LoggingMiddleware)

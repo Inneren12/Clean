@@ -1,10 +1,12 @@
+import asyncio
+
 from app.main import app
 
 
 def test_rate_limit_returns_problem_details(client):
     limiter = app.state.rate_limiter
     previous_limit = limiter.requests_per_minute
-    limiter.reset()
+    asyncio.run(limiter.reset())
     limiter.requests_per_minute = 1
     try:
         first = client.get("/healthz")
@@ -17,4 +19,4 @@ def test_rate_limit_returns_problem_details(client):
         assert body["request_id"]
     finally:
         limiter.requests_per_minute = previous_limit
-        limiter.reset()
+        asyncio.run(limiter.reset())
