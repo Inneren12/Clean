@@ -268,6 +268,13 @@ TRUSTED_PROXY_CIDRS=203.0.113.0/24
 - When `TRUST_PROXY_HEADERS=true` and the request comes from a trusted proxy, the rate limiter
   keys by the first `X-Forwarded-For` address.
 
+## Rate limiting backend
+
+- Default: in-memory sliding window, suitable for single-instance deployments.
+- Set `REDIS_URL=redis://user:pass@host:6379/0` to switch to Redis-backed limiting for
+  horizontal scaling. The Redis backend prunes expired entries automatically with key TTLs and
+  falls back to allow requests (with a warning) if Redis is unavailable.
+
 ## Assumptions
 
 - If `EXPORT_MODE=sheets`, the API logs a warning and skips export until configured.

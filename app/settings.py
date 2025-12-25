@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     cors_origins_raw: str | None = Field(None, env="CORS_ORIGINS", validation_alias="cors_origins")
     app_env: Literal["dev", "prod"] = Field("prod", env="APP_ENV")
     strict_cors: bool = Field(False, env="STRICT_CORS")
+    redis_url: str | None = Field(None, env="REDIS_URL")
     rate_limit_per_minute: int = Field(30, env="RATE_LIMIT_PER_MINUTE")
     rate_limit_cleanup_minutes: int = Field(10, env="RATE_LIMIT_CLEANUP_MINUTES")
     trust_proxy_headers: bool = Field(False, env="TRUST_PROXY_HEADERS")
