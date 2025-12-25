@@ -1,5 +1,7 @@
 from typing import List, Optional
 
+from typing import List, Optional
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.domain.pricing.models import AddOns, CleaningType, EstimateRequest, EstimateResponse, Frequency
@@ -65,3 +67,15 @@ class LeadCreateRequest(BaseModel):
 class LeadResponse(BaseModel):
     lead_id: str
     next_step_text: str
+
+
+class AdminLeadResponse(BaseModel):
+    lead_id: str
+    name: str
+    email: Optional[EmailStr] = None
+    phone: str
+    postal_code: Optional[str] = None
+    preferred_dates: List[str]
+    notes: Optional[str] = None
+    created_at: str
+    referrer: Optional[str] = None
