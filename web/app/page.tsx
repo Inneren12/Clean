@@ -363,6 +363,7 @@ export default function HomePage() {
     setLeadError(null);
     setIssuedReferralCode(null);
     try {
+      const normalizedReferralCode = leadForm.referral_code.trim().toUpperCase();
       const payload = {
         name: leadForm.name,
         phone: leadForm.phone,
@@ -379,7 +380,7 @@ export default function HomePage() {
         estimate_snapshot: estimate,
         ...utmParams,
         referrer,
-        referral_code: leadForm.referral_code || undefined
+        referral_code: normalizedReferralCode || undefined
       };
 
       const response = await fetch(`${apiBaseUrl}/v1/leads`, {

@@ -272,8 +272,10 @@ TRUSTED_PROXY_CIDRS=203.0.113.0/24
 
 - Default: in-memory sliding window, suitable for single-instance deployments.
 - Set `REDIS_URL=redis://user:pass@host:6379/0` to switch to Redis-backed limiting for
-  horizontal scaling. The Redis backend prunes expired entries automatically with key TTLs and
-  falls back to allow requests (with a warning) if Redis is unavailable.
+  horizontal scaling. The Redis backend enforces the window atomically via a Lua script
+  (server time, single eval) and prunes expired entries automatically with key TTLs.
+  Reset only removes `rate-limit:*` keys (no `FLUSHDB`) and the limiter fails open with
+  a warning if Redis is unavailable.
 
 ## Assumptions
 

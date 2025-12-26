@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import anyio
 import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
@@ -70,7 +71,12 @@ def clean_database(test_engine):
     reset = getattr(rate_limiter, "reset", None) if rate_limiter else None
     if reset:
         if inspect.iscoroutinefunction(reset):
-            asyncio.run(reset())
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                asyncio.run(reset())
+            else:
+                anyio.from_thread.run(reset)
         else:
             reset()
     yield

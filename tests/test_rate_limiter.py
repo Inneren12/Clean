@@ -37,6 +37,27 @@ class FakeRedis:
             self._sequences.clear()
             self.evalsha_calls = 0
 
+    async def scan(self, cursor: int = 0, match: str | None = None, count: int | None = None):  # noqa: ARG002
+        async with self._lock:
+            keys = set(self._zsets.keys()) | set(self._sequences.keys())
+            if match:
+                import fnmatch
+
+                keys = {key for key in keys if fnmatch.fnmatch(key, match)}
+        return 0, list(keys)
+
+    async def delete(self, *keys: str):
+        async with self._lock:
+            removed = 0
+            for key in keys:
+                if key in self._zsets:
+                    self._zsets.pop(key, None)
+                    removed += 1
+                if key in self._sequences:
+                    self._sequences.pop(key, None)
+                    removed += 1
+            return removed
+
     async def aclose(self):
         return None
 
@@ -105,14 +126,15 @@ async def test_redis_rate_limiter_is_atomic_under_concurrency():
 
     results: list[bool] = []
 
-    async def make_request(start_event: asyncio.Event):
+    async def make_request(start_event: anyio.Event):
         await start_event.wait()
         results.append(await limiter.allow("client-3"))
 
-    start_event = asyncio.Event()
+    start_event = anyio.Event()
     async with anyio.create_task_group() as tg:
         tg.start_soon(make_request, start_event)
         tg.start_soon(make_request, start_event)
+        await anyio.sleep(0)
         start_event.set()
 
     assert sorted(results) == [False, True]
