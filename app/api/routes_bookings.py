@@ -132,7 +132,6 @@ async def create_booking(
                     estimated_duration_minutes=estimated_duration_from_booking(booking),
                 )
     except ValueError as exc:
-        await session.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     if booking.lead_id and lead:

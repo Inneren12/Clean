@@ -130,10 +130,3 @@ def test_admin_updates_lead_status_with_valid_transition(client, async_session_m
         json={"status": "DONE"},
     )
     assert invalid.status_code == 400
-@pytest.fixture(autouse=True)
-def restore_admin_settings():
-    original_username = settings.admin_basic_username
-    original_password = settings.admin_basic_password
-    yield
-    settings.admin_basic_username = original_username
-    settings.admin_basic_password = original_password
