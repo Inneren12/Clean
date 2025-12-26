@@ -61,7 +61,6 @@ class Lead(Base):
         String(16),
         nullable=False,
         unique=True,
-        default=lambda: str(uuid.uuid4()).replace("-", "")[:16],
     )
     referred_by_code: Mapped[str | None] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(

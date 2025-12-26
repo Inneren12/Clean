@@ -24,6 +24,7 @@ from app.domain.bookings.db_models import Booking
 from app.domain.bookings import schemas as booking_schemas
 from app.domain.bookings import service as booking_service
 from app.domain.leads.db_models import Lead, ReferralCredit
+from app.domain.leads.service import grant_referral_credit
 from app.domain.leads.schemas import AdminLeadResponse, AdminLeadStatusUpdateRequest, admin_lead_from_model
 from app.domain.leads.statuses import assert_valid_transition, is_valid_status
 from app.domain.notifications import email_service
@@ -311,6 +312,20 @@ async def confirm_booking(
                         "event_type": "booking_confirmed",
                         "booking_id": booking.booking_id,
                         "lead_id": booking.lead_id,
+                        "reason": type(exc).__name__,
+                    }
+                },
+            )
+    if lead:
+        try:
+            await grant_referral_credit(session, lead)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "referral_credit_failed",
+                extra={
+                    "extra": {
+                        "booking_id": booking.booking_id,
+                        "lead_id": lead.lead_id,
                         "reason": type(exc).__name__,
                     }
                 },
