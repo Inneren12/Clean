@@ -950,6 +950,11 @@ function getNextThreeDates(): string[] {
   });
 }
 
+function dateFromYMDInUtc(day: string): Date {
+  const [year, month, dayOfMonth] = day.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, dayOfMonth, 12, 0, 0));
+}
+
 function formatSlotTime(slot: string): string {
   const date = new Date(slot);
   return date.toLocaleTimeString('en-CA', {
@@ -961,7 +966,7 @@ function formatSlotTime(slot: string): string {
 }
 
 function formatSlotDateHeading(day: string): string {
-  const date = new Date(`${day}T00:00:00`);
+  const date = dateFromYMDInUtc(day);
   return date.toLocaleDateString('en-CA', {
     weekday: 'short',
     month: 'short',

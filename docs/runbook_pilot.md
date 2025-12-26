@@ -46,14 +46,14 @@ async def main():
         if lead is None:
             result = await session.execute(select(Lead).order_by(Lead.created_at.desc()).limit(1))
             lead = result.scalar_one()
-        await EmailAdapter().send_request_received(lead)
+    await EmailAdapter().send_request_received(lead)
 
 
 asyncio.run(main())
 PY
 ```
 
-Both flows return `201` for lead creation even when email/export are best-effort failures.
+Lead creation returns `201` while email/export delivery remains best-effort and may fail independently.
 
 ## Rotating secrets
 

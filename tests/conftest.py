@@ -17,6 +17,7 @@ from app.domain.bookings import db_models as booking_db_models  # noqa: F401
 from app.domain.leads import db_models  # noqa: F401
 from app.infra.db import Base, get_db_session
 from app.main import app
+from app.settings import settings
 
 
 @pytest.fixture(scope="session")
@@ -40,6 +41,15 @@ def test_engine():
 @pytest.fixture(scope="session")
 def async_session_maker(test_engine):
     return async_sessionmaker(test_engine, expire_on_commit=False)
+
+
+@pytest.fixture(autouse=True)
+def restore_admin_settings():
+    original_username = settings.admin_basic_username
+    original_password = settings.admin_basic_password
+    yield
+    settings.admin_basic_username = original_username
+    settings.admin_basic_password = original_password
 
 
 @pytest.fixture(autouse=True)

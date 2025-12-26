@@ -4,6 +4,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import Select, and_, delete, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.analytics.service import (
@@ -23,6 +24,7 @@ SLOT_STEP_MINUTES = 30
 BUFFER_MINUTES = 30
 BLOCKING_STATUSES = {"PENDING", "CONFIRMED"}
 LOCAL_TZ = ZoneInfo("America/Edmonton")
+DEFAULT_TEAM_NAME = "Default Team"
 
 
 @dataclass
@@ -76,7 +78,7 @@ async def evaluate_deposit_policy(
     normalized = _normalize_datetime(starts_at)
     reasons: list[str] = []
 
-    if normalized.weekday() >= 5:
+    if normalized.astimezone(LOCAL_TZ).weekday() >= 5:
         reasons.append("weekend")
 
     estimated_total = None
@@ -99,18 +101,35 @@ async def evaluate_deposit_policy(
 
 
 async def ensure_default_team(session: AsyncSession, lock: bool = False) -> Team:
-    stmt = select(Team).order_by(Team.team_id).limit(1)
+    stmt = select(Team).where(Team.name == DEFAULT_TEAM_NAME).order_by(Team.team_id).limit(1)
     if lock:
         stmt = stmt.with_for_update()
     result = await session.execute(stmt)
     team = result.scalar_one_or_none()
     if team:
         return team
-    team = Team(name="Default Team")
+    team = Team(name=DEFAULT_TEAM_NAME)
     session.add(team)
-    await session.flush()
-    await session.refresh(team)
-    return team
+
+    nested_transaction = await session.begin_nested() if session.in_transaction() else None
+
+    try:
+        await session.flush()
+    except IntegrityError:
+        if nested_transaction is not None:
+            await nested_transaction.rollback()
+        else:
+            await session.rollback()
+
+        result = await session.execute(stmt)
+        team = result.scalar_one()
+        return team
+    else:
+        if nested_transaction is not None:
+            await nested_transaction.commit()
+
+        await session.refresh(team)
+        return team
 
 
 async def generate_slots(
