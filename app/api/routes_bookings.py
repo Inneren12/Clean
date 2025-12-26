@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Request, status
 from fastapi.exceptions import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.routes_admin import verify_admin
+from app.api.routes_admin import require_admin
 from app.domain.analytics.service import (
     EventType,
     estimated_duration_from_booking,
@@ -159,7 +159,7 @@ async def create_booking(
 @router.post("/v1/admin/cleanup", status_code=status.HTTP_202_ACCEPTED)
 async def cleanup_pending_bookings(
     session: AsyncSession = Depends(get_db_session),
-    _: None = Depends(verify_admin),
+    role: str = Depends(require_admin),
 ) -> dict[str, int]:
     deleted = await booking_service.cleanup_stale_bookings(session, timedelta(minutes=30))
     return {"deleted": deleted}

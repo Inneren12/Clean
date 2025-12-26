@@ -2,6 +2,10 @@ import json
 from typing import Literal
 
 from pydantic import Field, field_validator
+import json
+from typing import Literal
+
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -40,6 +44,8 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = Field(True, env="SMTP_USE_TLS")
     admin_basic_username: str | None = Field(None, env="ADMIN_BASIC_USERNAME")
     admin_basic_password: str | None = Field(None, env="ADMIN_BASIC_PASSWORD")
+    dispatcher_basic_username: str | None = Field(None, env="DISPATCHER_BASIC_USERNAME")
+    dispatcher_basic_password: str | None = Field(None, env="DISPATCHER_BASIC_PASSWORD")
     export_mode: Literal["off", "webhook", "sheets"] = Field("off", env="EXPORT_MODE")
     export_webhook_url: str | None = Field(None, env="EXPORT_WEBHOOK_URL")
     export_webhook_timeout_seconds: int = Field(5, env="EXPORT_WEBHOOK_TIMEOUT_SECONDS")

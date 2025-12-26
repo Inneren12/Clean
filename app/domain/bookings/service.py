@@ -25,6 +25,12 @@ BUFFER_MINUTES = 30
 BLOCKING_STATUSES = {"PENDING", "CONFIRMED"}
 LOCAL_TZ = ZoneInfo("America/Edmonton")
 DEFAULT_TEAM_NAME = "Default Team"
+BOOKING_TRANSITIONS = {
+    "PENDING": {"CONFIRMED", "CANCELLED"},
+    "CONFIRMED": {"DONE", "CANCELLED"},
+    "DONE": set(),
+    "CANCELLED": set(),
+}
 
 
 @dataclass
@@ -44,6 +50,16 @@ def _normalize_datetime(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def assert_valid_booking_transition(current: str, target: str) -> None:
+    if current == target:
+        return
+    allowed = BOOKING_TRANSITIONS.get(current, set())
+    if not allowed:
+        raise ValueError(f"Booking is already in terminal status: {current}")
+    if target not in allowed:
+        raise ValueError(f"Cannot transition booking from {current} to {target}")
 
 
 def _day_window(target_date: date) -> tuple[datetime, datetime]:
@@ -218,6 +234,27 @@ async def create_booking(
 
     team = await ensure_default_team(session, lock=True)
     return await _create(team)
+
+
+async def reschedule_booking(
+    session: AsyncSession,
+    booking: Booking,
+    starts_at: datetime,
+    duration_minutes: int,
+) -> Booking:
+    normalized = _normalize_datetime(starts_at)
+    team_stmt = select(Team).where(Team.team_id == booking.team_id).with_for_update()
+    team_result = await session.execute(team_stmt)
+    team = team_result.scalar_one()
+
+    if not await is_slot_available(normalized, duration_minutes, session, team_id=team.team_id):
+        raise ValueError("Requested slot is no longer available")
+
+    booking.starts_at = normalized
+    booking.duration_minutes = duration_minutes
+    await session.commit()
+    await session.refresh(booking)
+    return booking
 
 
 async def attach_checkout_session(
