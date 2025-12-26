@@ -42,6 +42,24 @@ def _make_lead_payload(name: str = "Reminder Lead") -> dict:
     }
 
 
+async def _seed_returning_lead(async_session_maker) -> str:
+    async with async_session_maker() as session:
+        lead = Lead(**_make_lead_payload(name="Booking Lead"))
+        session.add(lead)
+        await session.commit()
+        await session.refresh(lead)
+        history_booking = Booking(
+            team_id=1,
+            lead_id=lead.lead_id,
+            starts_at=datetime.now(tz=timezone.utc) - timedelta(days=7),
+            duration_minutes=60,
+            status="DONE",
+        )
+        session.add(history_booking)
+        await session.commit()
+        return lead.lead_id
+
+
 def _configure_admin():
     settings.admin_basic_username = "admin"
     settings.admin_basic_password = "secret"
@@ -211,17 +229,9 @@ def test_create_booking_succeeds_when_email_fails(client, async_session_maker):
     original_adapter = getattr(app.state, "email_adapter", None)
     app.state.email_adapter = FailingAdapter()
 
-    async def _seed_lead() -> str:
-        async with async_session_maker() as session:
-            lead = Lead(**_make_lead_payload(name="Booking Lead"))
-            session.add(lead)
-            await session.commit()
-            await session.refresh(lead)
-            return lead.lead_id
-
     import asyncio
 
-    lead_id = asyncio.run(_seed_lead())
+    lead_id = asyncio.run(_seed_returning_lead(async_session_maker))
 
     starts_at_local = datetime.now(tz=LOCAL_TZ).replace(hour=10, minute=0, second=0, microsecond=0) + timedelta(days=1)
     if starts_at_local.weekday() >= 5:

@@ -56,7 +56,10 @@ async def create_booking(
         deposit_percent=settings.deposit_percent,
     )
 
-    if deposit_decision.required and deposit_decision.deposit_cents:
+    if deposit_decision.required and deposit_decision.deposit_cents is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Deposit estimate unavailable")
+
+    if deposit_decision.required:
         if not settings.stripe_secret_key:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Deposits unavailable")
 
@@ -74,6 +77,23 @@ async def create_booking(
                 deposit_decision=deposit_decision,
                 manage_transaction=False,
             )
+
+            if booking.lead_id and lead:
+                await log_event(
+                    session,
+                    event_type=EventType.booking_created,
+                    booking=booking,
+                    lead=lead,
+                    estimated_revenue_cents=estimated_revenue_from_lead(lead),
+                    estimated_duration_minutes=estimated_duration_from_booking(booking),
+                )
+            else:
+                await log_event(
+                    session,
+                    event_type=EventType.booking_created,
+                    booking=booking,
+                    estimated_duration_minutes=estimated_duration_from_booking(booking),
+                )
 
             if deposit_decision.required and deposit_decision.deposit_cents:
                 stripe_client = stripe_infra.resolve_client(http_request.app.state)
@@ -115,22 +135,8 @@ async def create_booking(
                         detail="Failed to create deposit session",
                     ) from exc
 
-            if booking.lead_id and lead:
-                await log_event(
-                    session,
-                    event_type=EventType.booking_created,
-                    booking=booking,
-                    lead=lead,
-                    estimated_revenue_cents=estimated_revenue_from_lead(lead),
-                    estimated_duration_minutes=estimated_duration_from_booking(booking),
-                )
-            else:
-                await log_event(
-                    session,
-                    event_type=EventType.booking_created,
-                    booking=booking,
-                    estimated_duration_minutes=estimated_duration_from_booking(booking),
-                )
+        if booking:
+            await session.refresh(booking)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
@@ -184,12 +190,19 @@ async def stripe_webhook(http_request: Request, session: AsyncSession = Depends(
         logger.warning("stripe_webhook_invalid", extra={"extra": {"reason": type(exc).__name__}})
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Stripe webhook") from exc
 
-    event_type = event.get("type")
-    payload_object = event.get("data", {}).get("object", {})
-    session_id = payload_object.get("id")
-    payment_intent_id = payload_object.get("payment_intent") or payload_object.get("id")
+    def _safe_get(source: object, key: str, default: object | None = None):
+        if isinstance(source, dict):
+            return source.get(key, default)
+        return getattr(source, key, default)
 
-    if event_type == "checkout.session.completed" and payload_object.get("payment_status") == "paid":
+    event_type = _safe_get(event, "type")
+    data = _safe_get(event, "data", {}) or {}
+    payload_object = _safe_get(data, "object", {}) or {}
+    session_id = _safe_get(payload_object, "id")
+    payment_intent_id = _safe_get(payload_object, "payment_intent") or _safe_get(payload_object, "id")
+    payment_status = _safe_get(payload_object, "payment_status")
+
+    if event_type == "checkout.session.completed" and payment_status == "paid":
         await booking_service.mark_deposit_paid(
             session=session,
             checkout_session_id=session_id,

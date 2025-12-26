@@ -156,9 +156,9 @@ make test
 
 ## Deposits (Sprint E)
 
-- Policy: deposits are required for weekend bookings, move-out/empty or deep cleans, and new clients (no prior CONFIRMED/DONE bookings). The decision and reasons are stored on each booking.
+- Policy: deposits are required for weekend bookings (America/Edmonton day), move-out/empty or deep cleans, and new clients (no prior CONFIRMED/DONE bookings). The decision and reasons are stored on each booking.
 - Amount: `DEPOSIT_PERCENT` (default 25%) of the lead's `estimate_snapshot.total_before_tax`, charged in `DEPOSIT_CURRENCY` (default CAD). Deposit URLs can include `{CHECKOUT_SESSION_ID}` and `{BOOKING_ID}` placeholders.
-- Checkout: `POST /v1/bookings` returns a `checkout_url` when a deposit is required. Configure `STRIPE_SECRET_KEY`, `STRIPE_SUCCESS_URL`, and `STRIPE_CANCEL_URL` for live links.
+- Checkout: `POST /v1/bookings` returns a `checkout_url` when a deposit is required. Configure `STRIPE_SECRET_KEY`, `STRIPE_SUCCESS_URL`, and `STRIPE_CANCEL_URL` for live links. Booking creation is transactional—if Stripe is unavailable or checkout creation fails, no pending booking remains to block the slot.
 - Webhook: `POST /v1/stripe/webhook` verifies the Stripe signature (`STRIPE_WEBHOOK_SECRET`). `checkout.session.completed` with `payment_status=paid` confirms the booking; expired/failed payments cancel the pending booking to free the slot.
 
 ### Cancellation / refund policy

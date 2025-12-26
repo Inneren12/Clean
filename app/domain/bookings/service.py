@@ -340,6 +340,9 @@ async def mark_deposit_failed(
     if booking is None:
         return None
 
+    if booking.deposit_status == "paid":
+        return booking
+
     booking.deposit_status = failure_status
     if booking.status == "PENDING":
         booking.status = "CANCELLED"

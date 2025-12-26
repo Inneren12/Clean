@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-const STORAGE_KEY = "admin_basic_token";
+const STORAGE_USERNAME_KEY = "admin_basic_username";
+const STORAGE_PASSWORD_KEY = "admin_basic_password";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const EDMONTON_TZ = "America/Edmonton";
 
@@ -32,34 +33,61 @@ function formatDateTime(value: string) {
   }).format(dt);
 }
 
+function formatYMDInTz(date: Date, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = formatter.formatToParts(date);
+  const lookup: Record<string, string> = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${lookup.year}-${lookup.month}-${lookup.day}`;
+}
+
+function ymdToDate(ymd: string) {
+  const [year, month, day] = ymd.split("-").map((value) => parseInt(value, 10));
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+}
+
+function addDaysYMD(day: string, delta: number) {
+  const base = ymdToDate(day);
+  base.setUTCDate(base.getUTCDate() + delta);
+  return formatYMDInTz(base, EDMONTON_TZ);
+}
+
+function bookingLocalYMD(startsAt: string) {
+  return formatYMDInTz(new Date(startsAt), EDMONTON_TZ);
+}
+
 export default function AdminPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [token, setToken] = useState<string | null>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [leadStatusFilter, setLeadStatusFilter] = useState<string>("");
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     const today = new Date();
-    return today.toISOString().slice(0, 10);
+    return formatYMDInTz(today, EDMONTON_TZ);
   });
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      setToken(stored);
-    }
+    const storedUsername = window.localStorage.getItem(STORAGE_USERNAME_KEY);
+    const storedPassword = window.localStorage.getItem(STORAGE_PASSWORD_KEY);
+    if (storedUsername) setUsername(storedUsername);
+    if (storedPassword) setPassword(storedPassword);
   }, []);
 
   const authHeaders = useMemo<Record<string, string>>(() => {
-    if (!token) return {} as Record<string, string>;
-    return { Authorization: `Basic ${token}` };
-  }, [token]);
+    if (!username || !password) return {} as Record<string, string>;
+    const encoded = btoa(`${username}:${password}`);
+    return { Authorization: `Basic ${encoded}` };
+  }, [username, password]);
 
   const loadLeads = async () => {
-    if (!token) return;
+    if (!username || !password) return;
     const filter = leadStatusFilter ? `?status=${encodeURIComponent(leadStatusFilter)}` : "";
     const response = await fetch(`${API_BASE}/v1/admin/leads${filter}`, {
       headers: authHeaders,
@@ -71,9 +99,10 @@ export default function AdminPage() {
   };
 
   const loadBookings = async () => {
-    if (!token) return;
+    if (!username || !password) return;
+    const endDate = addDaysYMD(selectedDate, 6);
     const response = await fetch(
-      `${API_BASE}/v1/admin/bookings?from=${selectedDate}&to=${selectedDate}`,
+      `${API_BASE}/v1/admin/bookings?from=${selectedDate}&to=${endDate}`,
       { headers: authHeaders, cache: "no-store" }
     );
     if (!response.ok) return;
@@ -83,19 +112,30 @@ export default function AdminPage() {
 
   useEffect(() => {
     void loadLeads();
-  }, [token, leadStatusFilter]);
+  }, [authHeaders, leadStatusFilter]);
 
   useEffect(() => {
     void loadBookings();
-  }, [token, selectedDate]);
+  }, [authHeaders, selectedDate]);
 
   const saveCredentials = () => {
-    const encoded = btoa(`${username}:${password}`);
-    setToken(encoded);
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(STORAGE_KEY, encoded);
+      window.localStorage.setItem(STORAGE_USERNAME_KEY, username);
+      window.localStorage.setItem(STORAGE_PASSWORD_KEY, password);
     }
     setMessage("Saved credentials");
+  };
+
+  const clearCredentials = () => {
+    setUsername("");
+    setPassword("");
+    setBookings([]);
+    setLeads([]);
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(STORAGE_USERNAME_KEY);
+      window.localStorage.removeItem(STORAGE_PASSWORD_KEY);
+    }
+    setMessage("Cleared credentials");
   };
 
   const updateLeadStatus = async (leadId: string, status: string) => {
@@ -146,16 +186,22 @@ export default function AdminPage() {
   };
 
   const weekView = useMemo(() => {
-    const start = new Date(selectedDate);
+    const start = ymdToDate(selectedDate);
+    const formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: EDMONTON_TZ,
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    });
     const days: { label: string; date: string; items: Booking[] }[] = [];
     for (let i = 0; i < 7; i++) {
       const d = new Date(start);
-      d.setDate(start.getDate() + i);
-      const key = d.toISOString().slice(0, 10);
+      d.setUTCDate(start.getUTCDate() + i);
+      const key = formatYMDInTz(d, EDMONTON_TZ);
       days.push({
-        label: d.toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }),
+        label: formatter.format(d),
         date: key,
-        items: bookings.filter((b) => b.starts_at.startsWith(key)),
+        items: bookings.filter((b) => bookingLocalYMD(b.starts_at) === key),
       });
     }
     return days;
@@ -178,6 +224,9 @@ export default function AdminPage() {
         />
         <button type="button" onClick={saveCredentials}>
           Save
+        </button>
+        <button type="button" onClick={clearCredentials}>
+          Clear
         </button>
       </div>
       {message ? <p>{message}</p> : null}
@@ -222,7 +271,9 @@ export default function AdminPage() {
           <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} />
         </label>
         <ul>
-          {bookings.map((booking) => (
+          {bookings
+            .filter((booking) => bookingLocalYMD(booking.starts_at) === selectedDate)
+            .map((booking) => (
             <li key={booking.booking_id} style={{ marginBottom: "0.5rem" }}>
               <div>
                 <strong>{booking.status}</strong> – {formatDateTime(booking.starts_at)} – {booking.duration_minutes}m
@@ -240,7 +291,7 @@ export default function AdminPage() {
                 </button>
               </div>
             </li>
-          ))}
+            ))}
         </ul>
         <h3>Week view</h3>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "0.5rem" }}>
