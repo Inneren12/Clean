@@ -40,9 +40,9 @@ The registry URI is discovered from the ECR login step (`aws-actions/amazon-ecr-
 Requests reach the container through a minimal Worker proxy (Cloudflare’s default): a Worker receives the request and forwards it to the running container instance with `container.fetch(request)`.
 
 Steps:
-1. Build and push the Docker image (replace registry/namespace):
-   - `docker build -t <registry>/clean-api:<tag> .`
-   - `docker push <registry>/clean-api:<tag>`
+1. Build and push the Docker image.
+   - Recommended: run the GitHub Action **Deploy to Cloudflare Containers (ECR push)** with the desired `image_tag`; it builds from the repository and pushes to ECR.
+   - The resulting tag looks like `<account>.dkr.ecr.<region>.amazonaws.com/<repository>:<tag>`.
 2. Create a Container app using that image tag.
 3. Configure **port 8000** and health check path `/healthz`.
 4. Add environment variables (leave secrets in Cloudflare, not in git):

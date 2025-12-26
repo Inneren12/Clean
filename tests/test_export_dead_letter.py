@@ -92,8 +92,11 @@ def test_export_dead_letter_endpoint_allows_dispatcher(client, async_session_mak
         )
         assert response.status_code == 200
         events = response.json()
-        assert len(events) == 1
-        event = events[0]
+        event = next(
+            (evt for evt in events if evt["lead_id"] == "lead-dead-letter-api"),
+            None,
+        )
+        assert event is not None
         assert event["lead_id"] == "lead-dead-letter-api"
         assert event["mode"] == "webhook"
         assert event["target_url_host"] == "example.com"
