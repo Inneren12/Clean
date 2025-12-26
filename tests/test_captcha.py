@@ -1,5 +1,4 @@
-import httpx
-from httpx import MockTransport, Request, Response
+from httpx import MockTransport, Response
 
 from app.main import app
 from app.settings import settings
@@ -75,7 +74,7 @@ def test_leads_captcha_turnstile_accepts_valid_token(client):
     settings.captcha_mode = "turnstile"
     settings.turnstile_secret_key = "secret-key"
     app.state.turnstile_transport = MockTransport(
-        lambda request: Response(200, request=Request("POST", request.url), json={"success": True})
+        lambda request: Response(200, request=request, json={"success": True})
     )
 
     lead_payload = _lead_payload(client)

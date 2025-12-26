@@ -1,6 +1,5 @@
 import anyio
 from httpx import MockTransport, Request, Response
-from requests.auth import HTTPBasicAuth
 from sqlalchemy import select
 
 from app.domain.export_events.db_models import ExportEvent
@@ -89,7 +88,7 @@ def test_export_dead_letter_endpoint_allows_dispatcher(client, async_session_mak
 
         response = client.get(
             "/v1/admin/export-dead-letter",
-            auth=HTTPBasicAuth("dispatcher", "password"),
+            auth=("dispatcher", "password"),
         )
         assert response.status_code == 200
         events = response.json()
