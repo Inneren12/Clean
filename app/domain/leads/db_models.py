@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import secrets
+import string
 import uuid
 from datetime import datetime
 
@@ -9,8 +11,16 @@ from sqlalchemy import DateTime, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
-from app.infra.db import Base
 from app.domain.leads.statuses import default_lead_status
+from app.infra.db import Base
+
+
+CHARSET = string.ascii_uppercase + string.digits
+CODE_LENGTH = 8
+
+
+def generate_referral_code() -> str:
+    return "".join(secrets.choice(CHARSET) for _ in range(CODE_LENGTH))
 
 
 class ChatSession(Base):
@@ -61,7 +71,6 @@ class Lead(Base):
         String(16),
         nullable=False,
         unique=True,
-        default=lambda: str(uuid.uuid4()).replace("-", "")[:16],
     )
     referred_by_code: Mapped[str | None] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(
@@ -87,6 +96,11 @@ class Lead(Base):
         foreign_keys="ReferralCredit.referred_lead_id",
         uselist=False,
     )
+
+    def __init__(self, **kwargs: object) -> None:
+        if not kwargs.get("referral_code"):
+            kwargs["referral_code"] = generate_referral_code()
+        super().__init__(**kwargs)
 
 
 class ReferralCredit(Base):

@@ -24,6 +24,12 @@ def test_alembic_upgrade_head(tmp_path):
     assert "teams" in tables
     assert "bookings" in tables
     assert "email_events" in tables
+    assert "event_logs" in tables
+    assert "referral_credits" in tables
+
+    lead_columns = {col["name"] for col in inspector.get_columns("leads")}
+    assert "referral_code" in lead_columns
+    assert "referred_by_code" in lead_columns
 
 
 def test_default_team_dedupe_is_fk_safe(tmp_path):

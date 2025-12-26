@@ -6,6 +6,7 @@ import string
 import anyio
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db_session
@@ -15,7 +16,7 @@ from app.domain.analytics.service import (
     estimated_revenue_from_lead,
     log_event,
 )
-from app.domain.leads.db_models import Lead, ReferralCredit
+from app.domain.leads.db_models import Lead
 from app.domain.leads.schemas import LeadCreateRequest, LeadResponse
 from app.domain.leads.statuses import LEAD_STATUS_NEW
 from app.infra.export import export_lead_async
@@ -64,13 +65,18 @@ def schedule_email_request_received(adapter: EmailAdapter | None, lead: Lead) ->
         loop.create_task(_spawn())
 
 
-async def _generate_referral_code(session: AsyncSession) -> str:
+async def _generate_referral_code(session: AsyncSession, lead: Lead) -> str:
     for _ in range(10):
         candidate = "".join(secrets.choice(CHARSET) for _ in range(REFERRAL_CODE_LENGTH))
-        result = await session.execute(
-            select(Lead.lead_id).where(Lead.referral_code == candidate)
-        )
-        if result.scalar_one_or_none() is None:
+        lead.referral_code = candidate
+        savepoint = await session.begin_nested()
+        try:
+            await session.flush()
+        except IntegrityError:
+            await savepoint.rollback()
+            continue
+        else:
+            await savepoint.commit()
             return candidate
     raise RuntimeError("Unable to allocate referral code")
 
@@ -101,8 +107,6 @@ async def create_lead(
             if referrer is None:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid referral code")
 
-        generated_code = await _generate_referral_code(session)
-
         lead = Lead(
             name=request.name,
             phone=request.phone,
@@ -126,20 +130,11 @@ async def create_lead(
             utm_term=utm_term,
             utm_content=utm_content,
             referrer=request.referrer,
-            referral_code=generated_code,
+            referral_code="",
             referred_by_code=request.referral_code if referrer else None,
         )
         session.add(lead)
-        await session.flush()
-
-        if referrer:
-            session.add(
-                ReferralCredit(
-                    referrer_lead_id=referrer.lead_id,
-                    referred_lead_id=lead.lead_id,
-                    applied_code=referrer.referral_code,
-                )
-            )
+        await _generate_referral_code(session, lead)
 
         try:
             await log_event(

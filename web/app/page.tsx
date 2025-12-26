@@ -142,6 +142,7 @@ export default function HomePage() {
   const [leadError, setLeadError] = useState<string | null>(null);
   const [leadSuccess, setLeadSuccess] = useState(false);
   const [issuedReferralCode, setIssuedReferralCode] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const [leadForm, setLeadForm] = useState({
     name: '',
     phone: '',
@@ -170,6 +171,20 @@ export default function HomePage() {
     () => process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000',
     []
   );
+
+  const copyReferralCode = useCallback(async () => {
+    if (!issuedReferralCode || typeof navigator === 'undefined' || !navigator.clipboard) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(issuedReferralCode);
+      setCopyStatus('Copied!');
+    } catch (error) {
+      setCopyStatus('Copy failed');
+    }
+
+    setTimeout(() => setCopyStatus(null), 2000);
+  }, [issuedReferralCode]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -758,10 +773,22 @@ export default function HomePage() {
                       preferred times shortly.
                     </p>
                     {issuedReferralCode ? (
-                      <p className="muted">
-                        Your referral code: <strong>{issuedReferralCode}</strong>. Share it with
-                        friends so both of you get credit when they book.
-                      </p>
+                      <div className="muted">
+                        <p>
+                          Your referral code: <strong>{issuedReferralCode}</strong>. Share it with
+                          friends so both of you get credit when they book.
+                        </p>
+                        <div className="referral-actions" style={{ display: 'flex', gap: '0.5rem' }}>
+                          <button
+                            type="button"
+                            className="secondary"
+                            onClick={() => void copyReferralCode()}
+                          >
+                            Copy code
+                          </button>
+                          {copyStatus ? <span className="muted">{copyStatus}</span> : null}
+                        </div>
+                      </div>
                     ) : null}
                   </div>
                 ) : (

@@ -176,7 +176,7 @@ make test
 
 - Each lead receives a unique `referral_code` on creation. The web form accepts a `referral_code` field (or `ref`/`referral` query param) so new clients can attribute their booking.
 - `/v1/leads` accepts `referral_code` to attribute the request. Invalid codes return `400` to avoid silent abuse.
-- Credits are tracked in `referral_credits` with a unique `referred_lead_id` to enforce one credit per new client; admin leads responses include `referral_code`, `referred_by_code`, and `referral_credits` counts for visibility.
+- Credits are granted when a referred lead&apos;s booking is **confirmed** (manual confirm or paid deposit), not on lead submission. They are tracked in `referral_credits` with a unique `referred_lead_id` to enforce one credit per new client; admin leads responses include `referral_code`, `referred_by_code`, and `referral_credits` counts for visibility.
 
 ## Web UI (chat tester)
 

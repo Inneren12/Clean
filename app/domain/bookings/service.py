@@ -18,6 +18,7 @@ from app.domain.bookings.db_models import Booking, Team
 from app.domain.notifications import email_service
 from app.domain.pricing.models import CleaningType
 from app.domain.leads.db_models import Lead
+from app.domain.leads.service import grant_referral_credit
 
 logger = logging.getLogger(__name__)
 
@@ -307,14 +308,41 @@ async def mark_deposit_paid(
         booking.stripe_payment_intent_id = payment_intent_id
     lead = await session.get(Lead, booking.lead_id) if booking.lead_id else None
     if not already_confirmed:
-        await log_event(
-            session,
-            event_type=EventType.booking_confirmed,
-            booking=booking,
-            lead=lead,
-            estimated_revenue_cents=estimated_revenue_from_lead(lead),
-            estimated_duration_minutes=estimated_duration_from_booking(booking),
-        )
+        try:
+            await log_event(
+                session,
+                event_type=EventType.booking_confirmed,
+                booking=booking,
+                lead=lead,
+                estimated_revenue_cents=estimated_revenue_from_lead(lead),
+                estimated_duration_minutes=estimated_duration_from_booking(booking),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "analytics_log_failed",
+                extra={
+                    "extra": {
+                        "event_type": "booking_confirmed",
+                        "booking_id": booking.booking_id,
+                        "lead_id": booking.lead_id,
+                        "reason": type(exc).__name__,
+                    }
+                },
+            )
+    if lead:
+        try:
+            await grant_referral_credit(session, lead)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "referral_credit_failed",
+                extra={
+                    "extra": {
+                        "booking_id": booking.booking_id,
+                        "lead_id": lead.lead_id,
+                        "reason": type(exc).__name__,
+                    }
+                },
+            )
     await session.commit()
     await session.refresh(booking)
 
