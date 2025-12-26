@@ -29,6 +29,14 @@ Notes:
 
 Supported image sources: build from the repository Dockerfile and push to a registry Cloudflare Containers can reach. The canonical flow is to build/push to Amazon ECR via CI (see `.github/workflows/deploy_cloudflare.yml`), then point the Container app at that tag. Cloudflare’s own registry via Wrangler is also supported, but not wired here.
 
+GitHub Actions secrets for the ECR push workflow:
+- `AWS_REGION`
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_ECR_REPOSITORY`
+
+The registry URI is discovered from the ECR login step (`aws-actions/amazon-ecr-login@v2`); no explicit `AWS_ECR_REGISTRY` secret is required.
+
 Requests reach the container through a minimal Worker proxy (Cloudflare’s default): a Worker receives the request and forwards it to the running container instance with `container.fetch(request)`.
 
 Steps:
