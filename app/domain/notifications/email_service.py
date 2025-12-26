@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Callable
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,7 @@ from app.domain.bookings.db_models import Booking, EmailEvent
 from app.domain.leads.db_models import Lead
 from app.infra.email import EmailAdapter
 
+LOCAL_TZ = ZoneInfo("America/Edmonton")
 logger = logging.getLogger(__name__)
 
 EMAIL_TYPE_BOOKING_PENDING = "booking_pending"
@@ -22,7 +24,7 @@ def _format_start_time(booking: Booking) -> str:
     starts_at = booking.starts_at
     if starts_at.tzinfo is None:
         starts_at = starts_at.replace(tzinfo=timezone.utc)
-    return starts_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M %Z")
+    return starts_at.astimezone(LOCAL_TZ).strftime("%Y-%m-%d %H:%M %Z")
 
 
 def _render_booking_pending(booking: Booking, lead: Lead) -> tuple[str, str]:
@@ -69,9 +71,16 @@ def _render_booking_completed(booking: Booking, lead: Lead) -> tuple[str, str]:
     return subject, body
 
 
-async def _try_send_email(adapter: EmailAdapter | None, recipient: str, subject: str, body: str) -> bool:
+async def _try_send_email(
+    adapter: EmailAdapter | None,
+    recipient: str,
+    subject: str,
+    body: str,
+    *,
+    context: dict | None = None,
+) -> bool:
     if adapter is None:
-        logger.warning("email_adapter_missing", extra={"extra": {"recipient": recipient}})
+        logger.warning("email_adapter_missing", extra={"extra": context or {}})
         return False
     try:
         await adapter.send_email(recipient=recipient, subject=subject, body=body)
@@ -79,7 +88,7 @@ async def _try_send_email(adapter: EmailAdapter | None, recipient: str, subject:
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "email_send_failed",
-            extra={"extra": {"recipient": recipient, "reason": type(exc).__name__}},
+            extra={"extra": {**(context or {}), "reason": type(exc).__name__}},
         )
         return False
 
@@ -107,7 +116,13 @@ async def _send_with_record(
         return False
 
     subject, body = render(booking, lead)
-    delivered = await _try_send_email(adapter, lead.email, subject, body)
+    delivered = await _try_send_email(
+        adapter,
+        lead.email,
+        subject,
+        body,
+        context={"booking_id": booking.booking_id, "email_type": email_type},
+    )
     if not delivered:
         return False
 
@@ -216,7 +231,13 @@ async def resend_last_email(
     if event is None:
         raise LookupError("no_email_event")
 
-    delivered = await _try_send_email(adapter, event.recipient, event.subject, event.body)
+    delivered = await _try_send_email(
+        adapter,
+        event.recipient,
+        event.subject,
+        event.body,
+        context={"booking_id": booking_id, "email_type": event.email_type},
+    )
     if not delivered:
         raise RuntimeError("email_send_failed")
 

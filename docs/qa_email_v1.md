@@ -1,23 +1,30 @@
-# QA - Email workflow v1
+# QA — Email Workflow v1
 
 ## Preconditions
-- Set `ADMIN_BASIC_USERNAME` / `ADMIN_BASIC_PASSWORD` for admin endpoints.
-- Configure `EMAIL_MODE`/provider credentials when validating real deliveries; stub adapters are fine for local testing.
+- Admin basic auth configured: `ADMIN_BASIC_USERNAME`, `ADMIN_BASIC_PASSWORD`.
+- Email sending mode configured: `EMAIL_MODE` or equivalent adapter wiring available.
+- Application running via `make up` or `docker-compose up`.
 
 ## Scenarios
-1. **Booking pending notification**
-   - Create a lead with an email, then book a slot via `POST /v1/bookings`.
-   - Expect one `email_events` row with `booking_pending` and the pending copy.
+1. **Booking pending email**
+   - Create a lead then POST `/v1/bookings` with the lead ID.
+   - Verify a pending email is attempted; booking creation succeeds even if email fails.
 2. **Reminder scan idempotency**
-   - Seed a CONFIRMED booking starting within 24h.
-   - Call `POST /v1/admin/email-scan` twice; first call sends a reminder, second returns `sent: 0` with no new `email_events` rows.
-3. **Resend latest email**
-   - Ensure a booking has at least one `email_events` row.
-   - Call `POST /v1/admin/bookings/{booking_id}/resend-last-email` and verify another row is recorded plus one more outbound attempt.
+   - Seed a confirmed booking within the next 24 hours.
+   - Call `POST /v1/admin/email-scan` twice with basic auth.
+   - First call reports `sent > 0`; second call reports `sent == 0` and no duplicate `email_events` rows.
+3. **Resend last email**
+   - Ensure at least one `email_events` row for a booking.
+   - Call `POST /v1/admin/bookings/{booking_id}/resend-last-email` with basic auth.
+   - Receive 202 response and a new `email_events` entry.
 4. **Failure resilience**
-   - Swap in a failing `email_adapter` (or misconfigure provider) and create a lead/booking.
-   - API responses should stay 201/202 even if email sending raises.
+   - Configure the email adapter to raise errors.
+   - Booking creation and admin resend still return success status codes (201/202) and do not crash the API.
 
 ## Commands
-- Run the suite: `make test`
-- Targeted: `pytest tests/test_email_workflow.py`
+- Run full backend tests:
+  - `pytest -q`
+- Targeted email workflow tests:
+  - `pytest -q tests/test_email_workflow.py`
+- Targeted migration tests:
+  - `pytest -q tests/test_migrations.py`
