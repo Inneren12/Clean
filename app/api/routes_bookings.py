@@ -13,6 +13,7 @@ from app.domain.analytics.service import (
     estimated_revenue_from_lead,
     log_event,
 )
+from app.domain.bookings.db_models import Booking
 from app.dependencies import get_db_session
 from app.domain.bookings import schemas as booking_schemas
 from app.domain.bookings import service as booking_service
@@ -65,6 +66,7 @@ async def create_booking(
 
     checkout_url: str | None = None
     email_adapter = getattr(http_request.app.state, "email_adapter", None)
+    booking: Booking | None = None
 
     try:
         transaction_ctx = session.begin_nested() if session.in_transaction() else session.begin()
@@ -135,7 +137,7 @@ async def create_booking(
                         detail="Failed to create deposit session",
                     ) from exc
 
-        if booking:
+        if booking is not None:
             await session.refresh(booking)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
