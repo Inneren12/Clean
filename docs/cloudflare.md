@@ -1,20 +1,37 @@
 # Cloudflare deployment baseline
 
-Fast path: keep the existing Docker-based API and Next.js web, but deploy them to Cloudflare (Pages for the web UI, Containers for the API). The Postgres database remains external/managed.
+Fast path: keep the existing Docker-based API and the Next.js web, but deploy them to Cloudflare (Pages for the web UI, Containers for the API). The Postgres database remains external/managed.
 
-## Cloudflare Pages (web) steps
-1. Create a new Pages project and point the **root directory** to `web/`.
-2. Build command: `npm ci && npm run build` (Cloudflare auto-detects Next.js; do not override the output directory).
-3. Production branch targets your production Pages domain; previews use the auto-generated preview URL.
-4. Environment variables:
-   - `NEXT_PUBLIC_API_BASE_URL=https://<api-domain>`
-   - `NEXT_PUBLIC_TURNSTILE_SITE_KEY` (only when `CAPTCHA_MODE=turnstile` on the API)
-5. Post-deploy checks:
-   - Open the landing page ("/") on the preview/prod URL.
-   - Open `/admin` (expects API basic auth credentials for admin endpoints).
-   - Confirm network calls use `NEXT_PUBLIC_API_BASE_URL`.
+## Cloudflare Pages (web)
 
-## Cloudflare Containers (API) steps
+Pick the path that matches how you build Next.js locally:
+
+- **Option A: next-on-pages (recommended when you are not doing `next export`)**
+  - Build command: `npx @cloudflare/next-on-pages@1`
+  - Output directory: `.vercel/output/static`
+- **Option B: static export** (use only if the project is configured for `next export` or `output: "export"`)
+  - Build command: `npm ci && npm run build && npx next export`
+  - Output directory: `out`
+
+Notes:
+- SSR-only features require Cloudflare Workers (use `@cloudflare/next-on-pages` or a full Workers deployment); Pages alone is for static output.
+- Create the Pages project with the **root directory** set to `web/`.
+- Production branch targets your production Pages domain; previews use the auto-generated preview URL.
+- Environment variables:
+  - `NEXT_PUBLIC_API_BASE_URL=https://<api-domain>`
+  - `NEXT_PUBLIC_TURNSTILE_SITE_KEY` (only when `CAPTCHA_MODE=turnstile` on the API)
+- Post-deploy checks:
+  - Open the landing page ("/") on the preview/prod URL.
+  - Open `/admin` (expects API basic auth credentials for admin endpoints).
+  - Confirm network calls use `NEXT_PUBLIC_API_BASE_URL`.
+
+## Cloudflare Containers (API)
+
+Supported image sources: build from the repository Dockerfile and push to a registry Cloudflare Containers can reach. The canonical flow is to build/push to Amazon ECR via CI (see `.github/workflows/deploy_cloudflare.yml`), then point the Container app at that tag. Cloudflare’s own registry via Wrangler is also supported, but not wired here.
+
+Requests reach the container through a minimal Worker proxy (Cloudflare’s default): a Worker receives the request and forwards it to the running container instance with `container.fetch(request)`.
+
+Steps:
 1. Build and push the Docker image (replace registry/namespace):
    - `docker build -t <registry>/clean-api:<tag> .`
    - `docker push <registry>/clean-api:<tag>`
@@ -68,4 +85,6 @@ Fast path: keep the existing Docker-based API and Next.js web, but deploy them t
 ## Appendix: runtime assumptions
 - The API container starts with `uvicorn app.main:app --host 0.0.0.0 --port 8000` (see `Dockerfile`).
 - Health endpoint: `GET /healthz`.
-- Web build command validated: `npm ci && npm run build` from `web/`.
+- Web build commands:
+  - Option A: `npx @cloudflare/next-on-pages@1`
+  - Option B: `npm ci && npm run build && npx next export`

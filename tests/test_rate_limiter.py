@@ -1,11 +1,6 @@
 import asyncio
 import time
 
-import pytest
-import anyio
-import asyncio
-import time
-
 import anyio
 import pytest
 from redis.exceptions import ResponseError
