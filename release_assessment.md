@@ -1,50 +1,72 @@
 # Release Readiness Review v1
 
 ## 1) Executive summary
-- **Recommendation:** NO-GO for v1; classify as **MVP** due to missing automated tests, unproven CI, and incomplete operational playbooks (backup/monitoring/Cloudflare deploy steps not runnable).
-- **Rationale:** Core flows exist (estimate → chat → lead → booking/deposit → admin ops/analytics) but lack automated verification and documented runbooks for day-2 ops and Cloudflare deployments. Admin/dispatcher auth is config-only without explicit CORS/secret checklists, and email/export modes default to "off".
+- **Recommendation:** Conditional **GO for v1** once the documented release gates (Section 4) are green and secrets/CORS origins are populated for the target environment. Automated coverage exists for estimator, chat→lead, deposits, referrals, retention, and admin auth, and CI runs both migrations and the web build on PRs. Remaining risks are operational (scheduler setup, backups/rollback drills, email/export providers) rather than code gaps.
+- **MVP vs v1 decision:** The codebase meets v1 bar with tests and CI in place; the remaining work is procedural: configure production env vars (Stripe/email/export/CORS), stand up schedulers for cleanup/email/retention, and finalize backups/monitoring per Section 5.
 
-## 2) Release Gates (reference commands; not run)
-- Backend install & migrate: `make up` → `make migrate` (expects Docker, Postgres, .env).【F:README.md†L6-L36】
-- Backend tests: `make test` / `pytest -q` (no documented coverage).【F:Makefile†L1-L35】
-- Backend server smoke: `curl http://localhost:8000/healthz` and sample POSTs to `/v1/estimate`, `/v1/chat/turn`, `/v1/leads`.【F:README.md†L34-L89】
-- Frontend: `cd web && npm install && npm run dev` (no lint/build gate noted).【F:README.md†L142-L152】
-- DB migrations: `alembic upgrade head` (Dockerized via make).【F:README.md†L18-L29】【F:Makefile†L13-L23】
-- CI: No workflow outcomes documented; manual verification needed.
-- Smoke admin endpoints: `/v1/admin/leads`, `/v1/admin/metrics`, `/v1/admin/export-dead-letter`, `/v1/admin/email-scan`, `/v1/admin/cleanup` (basic auth required).【F:app/api/routes_admin.py†L37-L93】【F:app/api/routes_admin.py†L124-L197】
+## 2) Inventory (what is shipped)
+- **Public APIs**
+  - `GET /healthz` (unauth) – health probe.
+  - `POST /v1/estimate` (unauth) – pricing estimator.
+  - `POST /v1/chat/turn` (unauth) – chat state + estimator assistant.
+  - `POST /v1/leads` (unauth; Turnstile enforced when configured) – lead capture, referral validation, async export/email.
+  - `GET /v1/slots` (unauth) – slot search by date/duration.
+  - `POST /v1/bookings` (unauth) – create pending booking, apply deposit policy, Stripe checkout when required, pending-email dispatch.
+  - `POST /v1/stripe/webhook` (unauth) – verifies signature, marks deposit paid/expired/failed.
+- **Admin/dispatcher APIs (HTTP Basic)**
+  - Leads: list (`GET /v1/admin/leads`), status transition (`POST /v1/admin/leads/{lead_id}/status`).
+  - Email workflow: scan for reminders (`POST /v1/admin/email-scan`), resend last email (`POST /v1/admin/bookings/{booking_id}/resend-last-email`).
+  - Export dead-letter: list failed exports (`GET /v1/admin/export-dead-letter`).
+  - Retention: cleanup chat/leads when enabled (`POST /v1/admin/retention/cleanup`).
+  - Pricing: reload config from path (`POST /v1/admin/pricing/reload`).
+  - Bookings ops: list (`GET /v1/admin/bookings`), confirm (`POST /v1/admin/bookings/{booking_id}/confirm`), cancel, reschedule, complete.
+  - Cleanup: delete stale pending bookings (`POST /v1/admin/cleanup`).
+  - Metrics: conversions/revenue/duration accuracy with CSV option (`GET /v1/admin/metrics`).
+- **Background/cron targets**
+  - Pending booking cleanup (`/v1/admin/cleanup`).
+  - Email reminders scan (`/v1/admin/email-scan`).
+  - Retention cleanup (`/v1/admin/retention/cleanup`).
+  - Export dead-letter review (`/v1/admin/export-dead-letter`).
+- **Critical flows**
+  - Estimate → Lead: estimator endpoint feeds chat; `/v1/leads` stores structured inputs/estimate, validates captcha/referral, logs analytics, and triggers export/email.
+  - Lead → Booking/Slots: `/v1/slots` supplies availability; `/v1/bookings` creates pending bookings tied to leads.
+  - Booking → Deposit → Webhook → Confirm: deposit policy evaluated on create; Stripe checkout session stored; webhook confirms or cancels and dispatches emails; admin confirm also logs analytics and referral credit.
+  - Email workflow: pending booking email on create; reminder scan and resend endpoints.
+  - Admin/dispatcher ops: guarded by Basic auth with dispatcher vs admin separation.
+  - Analytics: event logging on leads/bookings/confirm, metrics endpoint with CSV.
+  - Referrals: lead creation issues codes, validates referred_by, and grants credits on confirmation.
+  - Hardening: rate limiting (in-memory/Redis), strict/allowlisted CORS, captcha option, export allowlist/private-IP blocking, retention controls.
 
-## 3) Feature matrix
-| Feature | Status | Evidence | Test/Doc coverage | Notes |
-| --- | --- | --- | --- | --- |
-| Chat parsing → state machine → responder | ⚠️ Partial | Routers include `/v1/chat/turn`; chat state machine in `app/domain/chat/*` (not exercised in docs). | No tests referenced; README only mentions sample call.【F:README.md†L60-L73】 | Needs automated conversation tests and edge cases (PII redaction?). |
-| Estimator (pricing config) | ✅ Complete | Estimator load and reload via `/v1/admin/pricing/reload`; settings load config file path default `pricing/economy_v1.json`.【F:app/settings.py†L26-L72】【F:app/api/routes_admin.py†L175-L188】 | No automated tests listed; manual curl example in README.【F:README.md†L34-L73】 | Ensure pricing hash stability and protected from edits in prod. |
-| Lead intake & referral attribution | ✅ Complete | `/v1/leads` with referral code flow per README; admin status transitions and listing in `routes_admin`.【F:README.md†L74-L115】【F:app/api/routes_admin.py†L94-L170】 | No tests; docs in README. | Need validation/PII handling checks in logging middleware.【F:app/main.py†L46-L86】 |
-| Booking slots & creation | ✅ Complete | Slot search/booking described in README; bookings routes include admin list/confirm/cancel/reschedule/complete endpoints.【F:README.md†L96-L141】【F:app/api/routes_admin.py†L188-L278】 | No automated tests noted. | Depends on timezone logic and pending cleanup job (cron via admin cleanup). |
-| Deposit policy & checkout/webhook | ⚠️ Partial | Policy described in README; Stripe keys configured via settings; bookings admin confirm handles referral credit on confirmation.【F:README.md†L114-L141】【F:app/settings.py†L63-L77】【F:app/api/routes_admin.py†L222-L266】 | No webhook tests; no CI validation. | Need live Stripe client wiring and webhook signature verification review. |
-| Email workflow (reminders/resend/dedupe) | ⚠️ Partial | Admin `email-scan` and `resend-last-email` endpoints exist using `email_service`.【F:app/api/routes_admin.py†L124-L159】 | No test coverage; docs absent beyond README. | Email adapter default off; requires SendGrid/SMTP config. |
-| Analytics & metrics CSV | ✅ Complete | `/v1/admin/metrics` with CSV option plus event logging helper usage during confirmations.【F:app/api/routes_admin.py†L200-L248】 | No tests; relies on analytics service. | Need data validation for missing events. |
-| Export & dead-letter handling | ⚠️ Partial | `export_mode` settings with webhook allowlist/private IP flags; admin dead-letter list endpoint.【F:app/settings.py†L42-L58】【F:app/api/routes_admin.py†L160-L173】 | No tests; operations unclear. | Need retry scheduler/runbook. |
-| Retention cleanup | ⚠️ Partial | Admin endpoint `/v1/admin/retention/cleanup`; settings for chat/lead retention toggles.【F:app/api/routes_admin.py†L174-L187】【F:app/settings.py†L55-L62】 | No scheduling docs/tests. | Requires cron/Cloudflare Scheduler guidance. |
-| Admin/dispatcher auth & role restrictions | ✅ Complete | Basic auth verification shared; admin-only guard for sensitive routes.【F:app/api/routes_admin.py†L37-L93】【F:app/api/routes_admin.py†L200-L217】 | No automated auth tests. | Needs secret rotation guidance. |
-| Frontend chat tester | ⚠️ Partial | Next.js app setup documented, but no build/lint scripts in release gates. Environment variable required.【F:README.md†L142-L152】 | No tests; minimal UI. | Upgrade Next.js version and add prod build pipeline.
+## 3) Evidence-based completeness matrix
+| Area | Status | Evidence | Gaps/Risks |
+| --- | --- | --- | --- |
+| Chat → estimate → lead persistence | ✅ Complete | Chat turn persists state and returns estimates; integration test covers chat→lead→DB flow.【F:app/api/routes_chat.py†L18-L48】【F:tests/test_e2e_lead_flow.py†L8-L46】 | None blocking; monitor chat DB growth (retention job optional). |
+| Estimator & pricing reload | ✅ Complete | `/v1/estimate` uses pricing config; admin reload endpoint exists.【F:app/api/routes_estimate.py†L11-L16】【F:app/api/routes_admin.py†L271-L274】 | Ensure pricing file immutability in prod storage. |
+| Lead intake & referral attribution | ✅ Complete | `/v1/leads` validates captcha/referrals, logs analytics, schedules export/email; referral codes unique.【F:app/api/routes_leads.py†L78-L204】 | Export/email depend on provider configuration; add monitoring for failures. |
+| Slots & booking creation | ✅ Complete | Public slot search; booking creation reserves slot, logs analytics, emits pending email.【F:app/api/routes_bookings.py†L29-L177】 | Scheduler for stale cleanup required in prod. |
+| Deposit policy & Stripe webhook | ✅ Complete | Booking evaluates deposit policy, creates checkout session, webhook marks paid/expired; tested for required deposits and missing Stripe keys.【F:app/api/routes_bookings.py†L48-L235】【F:tests/test_deposits.py†L151-L199】 | Stripe secrets must be set; webhook retries not present (manual). |
+| Email workflow (pending + reminders + resend) | ✅ Complete | Email adapter used on booking create; admin scan/resend endpoints; reminder scan wired in service layer.【F:app/api/routes_bookings.py†L158-L176】【F:app/api/routes_admin.py†L129-L161】 | Requires configured adapter; scheduler not documented. |
+| Admin/dispatcher auth & ops | ✅ Complete | Basic auth guard with admin-only vs dispatcher; booking status ops/metrics protected.【F:app/api/routes_admin.py†L42-L382】 | Rotate credentials; consider audit logging. |
+| Analytics & metrics | ✅ Complete | Event logging on lead/booking/confirm; metrics endpoint with CSV output.【F:app/api/routes_leads.py†L138-L156】【F:app/api/routes_admin.py†L219-L268】 | None blocking; validate dashboard consumer. |
+| Export + dead-letter | ⚠️ Partial | Async export scheduled on lead create; admin dead-letter listing.【F:app/api/routes_leads.py†L164-L199】【F:app/api/routes_admin.py†L164-L186】 | No retry processor/runbook; operator must inspect dead letters. |
+| Retention & cleanup jobs | ⚠️ Partial | Admin retention cleanup endpoint and pending booking cleanup exist; retention toggles in settings.【F:app/api/routes_admin.py†L188-L194】【F:app/api/routes_bookings.py†L180-L186】【F:app/settings.py†L59-L67】 | No scheduler wiring; cron/Cloudflare Scheduler needs setup. |
+| Rate limiting & CORS hardening | ✅ Complete | Middleware enforces rate limits (Redis-aware, fail-open on Redis errors) and strict CORS when configured.【F:app/main.py†L83-L143】【F:app/infra/security.py†L1-L118】 | Ensure trusted proxy ranges set in prod. |
+| Frontend build readiness | ⚠️ Partial | Next.js app builds via `npm run build`; CI runs build on PRs.【F:web/package.json†L4-L17】【F:.github/workflows/ci.yml†L62-L76】 | No lint/static checks; minimal UI and no e2e tests. |
 
-## 4) Risk register
-- **P0: Missing automated test coverage/CI** – No pytest or frontend build steps in release gates; regressions likely. Mitigation: add pytest suites for endpoints and configure GitHub Actions to run tests on PRs.【F:Makefile†L27-L32】
-- **P0: Deployment/Cloudflare steps unspecified** – Cloudflare Pages/Containers docs exist but not validated; CORS/secret handling undefined leading to broken prod deploys. Mitigation: expand docs with env var matrix and deploy checklist.
-- **P1: Rate limiting/PII logging** – Logging middleware records path/status but may include request IDs only; need assurance of no body logging and rate limiter fail-open behavior with Redis defaults (`redis_url` optional). Mitigation: document limiter dependency and add tests for denial path.【F:app/main.py†L46-L86】【F:app/settings.py†L11-L20】
-- **P1: Stripe webhook and deposit flow not exercised** – Risk of incomplete signature validation or state transitions. Mitigation: add integration tests and dry-run doc for webhook secrets.【F:app/settings.py†L63-L77】
-- **P2: Ops runbook gaps (retention/export/email)** – No scheduling/monitoring guidance; dead-letter processing manual. Mitigation: add runbook steps and sample cron/Cloudflare Scheduler configs.【F:app/api/routes_admin.py†L160-L187】
+## 4) Release gates (must be green)
+See `docs/release_gates.md` for exact commands. Summary:
+- **Backend:** install deps (`pip install -r requirements.txt`), run Alembic migrations (`alembic upgrade head`), execute pytest suite (`pytest`). CI backend job already runs these against Postgres service on PRs.【F:.github/workflows/ci.yml†L8-L58】
+- **Frontend:** `npm ci && npm run build` (CI web job enforces).【F:.github/workflows/ci.yml†L60-L76】
+- **Docker compose smoke:** `make up` → `curl http://localhost:8000/healthz` (health probe) before releasing.【F:README.md†L6-L36】
+- **Admin auth smoke:** `curl -u $ADMIN_BASIC_USERNAME:$ADMIN_BASIC_PASSWORD /v1/admin/leads` against staging to confirm credentials and CORS.
+- **Manual Stripe webhook check:** send signed test webhook using Stripe CLI when deposits enabled.
 
-## 5) Deployment readiness
-- **Cloudflare Pages/Containers:** Docs exist but need validation; ensure API base URL and env secrets align (not covered by Makefile).【F:README.md†L142-L152】
-- **Env vars (critical):** DATABASE_URL, REDIS_URL (for rate limit), ADMIN/dispatcher creds, CORS_ORIGINS/STRICT_CORS, EMAIL_MODE & provider keys, EXPORT_* allowlist, STRIPE_* keys/URLs, RETENTION_* toggles, PRICING_CONFIG_PATH.【F:app/settings.py†L9-L77】
-- **CORS checklist:** Strict mode defaults to blocking unless dev; `_resolve_cors_origins` allows localhost in dev but empty list otherwise—ensure production origins set or API will reject browsers.【F:app/main.py†L63-L82】
-- **Rollback:** Docker Compose allows `make down` and DB persistence via volume; no migration rollback guidance—add backup/restore steps.
+## 5) Deploy readiness (Cloudflare baseline)
+- **Pages vs repo reality:** Cloudflare Pages doc prescribes `@cloudflare/next-on-pages@1` or `next export` and root `web/`, matching the repo’s Next.js app and CI build (no export).【F:docs/cloudflare.md†L6-L34】【F:.github/workflows/ci.yml†L60-L76】
+- **Container workflow:** Deploy doc aligns with `deploy_cloudflare.yml` (ECR push inputs/secrets).【F:docs/cloudflare.md†L36-L83】【F:.github/workflows/deploy_cloudflare.yml†L1-L32】
+- **Env var matrix:** Cloudflare doc lists API env vars including CORS/STRICT, admin/dispatcher creds, Stripe/email/export, retention, proxy trust, pricing path, matching `app/settings.py` fields.【F:docs/cloudflare.md†L84-L137】【F:app/settings.py†L10-L68】
+- **CORS lock:** Strict CORS defaults to empty origins unless dev; Cloudflare checklist calls out preview/prod origins only.【F:app/main.py†L107-L143】【F:docs/cloudflare.md†L139-L158】
+- **Ops gaps:** Backups/restore and monitoring not defined for Cloudflare stack; retention/email/cleanup/export schedulers need Cloudflare Scheduler or cron wiring; rollback noted but not rehearsed.【F:docs/cloudflare.md†L160-L188】【F:docs/deploy.md†L47-L61】
 
-## 6) Recommended next PR sequence
-1. **Add CI workflows for backend tests** – Create GitHub Actions running `pip install -r requirements.txt`, `pytest`, and Alembic lint; touch `.github/workflows/ci.yml`, `requirements*.txt`. Acceptance: green run on PR with failing tests blocking merges.
-2. **Backend test suite coverage** – Add pytest cases for `/healthz`, `/v1/estimate`, `/v1/leads`, admin auth guards, and rate-limit rejection; touch `tests/` with factory fixtures. Acceptance: deterministic pass locally and in CI.
-3. **Stripe deposit/webhook validation** – Add tests and docs ensuring signature verification and booking state transitions; touch `app/api/routes_bookings.py`, `app/infra/stripe.py`, `docs/runbook_pilot.md`. Acceptance: webhook test proving paid/expired paths handled.
-4. **Operational runbook & scheduling** – Extend `docs/runbook_pilot.md` and Cloudflare docs with scheduler examples for retention cleanup/email scan/export retries; include env var matrix and backup expectations. Acceptance: step-by-step operator playbook.
-5. **Frontend build/lint pipeline** – Add `npm run lint`/`npm run build` scripts to CI and fix blocking issues; touch `web/package.json`, `.github/workflows/ci.yml`. Acceptance: CI enforces lint/build and README updated.
-6. **Export dead-letter handling** – Implement retry job or manual script; document in docs/export_dead_letter; touch `app/infra/export.py`, `docs/export_dead_letter.md`. Acceptance: admin endpoint shows cleared retries after job.
+## 6) MVP vs v1 decision
+**V1 criteria met:** (a) automated tests for core flows (estimates, chat→lead, deposits, referrals, retention, admin auth, migrations) and CI running them; (b) documented deploy steps for Render + Cloudflare; (c) CORS/ratelimit/auth hardening in code. Outstanding items (scheduler wiring, backups/monitoring, Stripe/email secret provisioning) are operational tasks tracked in runbooks rather than code changes, so do not block v1 once release gates pass. If operators cannot staff schedulers/monitoring yet, ship as MVP-only with manual playbooks.
