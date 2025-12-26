@@ -143,8 +143,9 @@ class RecordingAdapter:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str, str]] = []
 
-    async def send_email(self, recipient: str, subject: str, body: str) -> None:
+    async def send_email(self, recipient: str, subject: str, body: str) -> bool:
         self.sent.append((recipient, subject, body))
+        return True
 
 
 def test_booking_response_includes_deposit_policy(client, async_session_maker, monkeypatch):
