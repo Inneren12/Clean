@@ -7,6 +7,7 @@ Create Date: 2025-03-08 00:00:00
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import bindparam
 
 
 revision = "0008_default_team_unique"
@@ -18,17 +19,32 @@ depends_on = None
 def upgrade() -> None:
     bind = op.get_bind()
 
-    duplicates = bind.execute(
-        sa.text(
-            "SELECT name, MIN(team_id) AS keep_id FROM teams "
-            "GROUP BY name HAVING COUNT(*) > 1"
-        )
+    duplicate_names = bind.execute(
+        sa.text("SELECT name FROM teams GROUP BY name HAVING COUNT(*) > 1")
     ).fetchall()
-    for row in duplicates:
-        bind.execute(
-            sa.text("DELETE FROM teams WHERE name = :name AND team_id != :keep_id"),
-            {"name": row.name, "keep_id": row.keep_id},
-        )
+    for row in duplicate_names:
+        teams = bind.execute(
+            sa.text("SELECT team_id FROM teams WHERE name = :name ORDER BY team_id"),
+            {"name": row.name},
+        ).fetchall()
+        if not teams:
+            continue
+
+        keep_id = teams[0].team_id
+        duplicate_ids = [team.team_id for team in teams[1:]]
+        if duplicate_ids:
+            bind.execute(
+                sa.text(
+                    "UPDATE bookings SET team_id = :keep_id WHERE team_id IN :dupes"
+                ).bindparams(bindparam("dupes", expanding=True)),
+                {"keep_id": keep_id, "dupes": duplicate_ids},
+            )
+            bind.execute(
+                sa.text("DELETE FROM teams WHERE team_id IN :dupes").bindparams(
+                    bindparam("dupes", expanding=True)
+                ),
+                {"dupes": duplicate_ids},
+            )
 
     existing_default = bind.execute(
         sa.text("SELECT team_id FROM teams WHERE name = :name"), {"name": "Default Team"}
