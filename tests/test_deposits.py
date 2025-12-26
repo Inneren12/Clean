@@ -60,6 +60,45 @@ def _seed_lead(async_session_maker) -> str:
     return asyncio.run(_create())
 
 
+def _seed_returning_lead(async_session_maker) -> str:
+    async def _create() -> str:
+        async with async_session_maker() as session:
+            lead = Lead(
+                name="Returning Lead",
+                phone="780-555-1111",
+                email="returning@example.com",
+                postal_code="T5B",
+                preferred_dates=["Fri"],
+                structured_inputs={"beds": 1, "baths": 1, "cleaning_type": "standard"},
+                estimate_snapshot={
+                    "pricing_config_version": "v1",
+                    "config_hash": "hash",
+                    "total_before_tax": 120.0,
+                },
+                pricing_config_version="v1",
+                config_hash="hash",
+                status="NEW",
+            )
+            session.add(lead)
+            await session.flush()
+
+            booking = Booking(
+                team_id=1,
+                lead_id=lead.lead_id,
+                starts_at=datetime.now(tz=timezone.utc),
+                duration_minutes=60,
+                status="CONFIRMED",
+            )
+            session.add(booking)
+            await session.commit()
+            await session.refresh(lead)
+            return lead.lead_id
+
+    import asyncio
+
+    return asyncio.run(_create())
+
+
 def _booking_start_on_weekend() -> str:
     now_local = datetime.now(tz=LOCAL_TZ)
     days_until_saturday = (5 - now_local.weekday()) % 7 or 7
@@ -128,6 +167,7 @@ def test_booking_response_includes_deposit_policy(client, async_session_maker, m
         assert data["deposit_cents"] == 5000
         assert set(data["deposit_policy"]) >= {"heavy_cleaning", "weekend", "new_client"}
         assert data["checkout_url"] == "https://example.com/checkout"
+        assert data["deposit_status"] == "pending"
     finally:
         app.state.stripe_client = original_client
 
@@ -201,6 +241,26 @@ def test_non_deposit_booking_persists(client, async_session_maker):
         settings.stripe_secret_key = original_secret
 
 
+def test_weekend_policy_uses_edmonton_day(client, async_session_maker):
+    settings.stripe_secret_key = None
+    lead_id = _seed_returning_lead(async_session_maker)
+    today_local = datetime.now(tz=LOCAL_TZ)
+    days_until_friday = (4 - today_local.weekday()) % 7 or 7
+    friday_evening = (today_local + timedelta(days=days_until_friday)).replace(
+        hour=17, minute=0, second=0, microsecond=0
+    )
+    starts_at = friday_evening.astimezone(timezone.utc).isoformat()
+
+    response = client.post(
+        "/v1/bookings",
+        json={"starts_at": starts_at, "time_on_site_hours": 1.0, "lead_id": lead_id},
+    )
+    assert response.status_code == 201, response.text
+    data = response.json()
+    assert data["deposit_required"] is False
+    assert data["deposit_policy"] == []
+
+
 def test_webhook_confirms_booking(client, async_session_maker):
     settings.stripe_secret_key = "sk_test"
     settings.stripe_webhook_secret = "whsec_test"
@@ -242,5 +302,89 @@ def test_webhook_confirms_booking(client, async_session_maker):
         assert booking.status == "CONFIRMED"
         assert booking.deposit_status == "paid"
         assert booking.stripe_payment_intent_id == "pi_live"
+    finally:
+        app.state.stripe_client = original_client
+
+
+def test_webhook_requires_paid_status(client, async_session_maker):
+    settings.stripe_secret_key = "sk_test"
+    settings.stripe_webhook_secret = "whsec_test"
+    original_client = getattr(app.state, "stripe_client", None)
+    try:
+        app.state.stripe_client = _stub_stripe("cs_unpaid")
+        lead_id = _seed_lead(async_session_maker)
+
+        creation = client.post(
+            "/v1/bookings",
+            json={"starts_at": _booking_start_on_weekend(), "time_on_site_hours": 2, "lead_id": lead_id},
+        )
+        assert creation.status_code == 201
+
+        event = {
+            "id": "evt_unpaid",
+            "type": "checkout.session.completed",
+            "data": {"object": {"id": "cs_unpaid", "payment_intent": "pi_unpaid", "payment_status": "unpaid"}},
+        }
+        body = json.dumps(event)
+        timestamp = int(time.time())
+        signed_payload = f"{timestamp}.{body}"
+        signature = stripe.WebhookSignature._compute_signature(signed_payload, settings.stripe_webhook_secret)
+        headers = {"Stripe-Signature": f"t={timestamp},v1={signature}"}
+
+        webhook_response = client.post("/v1/stripe/webhook", data=body, headers=headers)
+        assert webhook_response.status_code == 200
+
+        async def _fetch() -> Booking:
+            async with async_session_maker() as session:
+                result = await session.execute(sa.select(Booking).limit(1))
+                return result.scalar_one()
+
+        import asyncio
+
+        booking = asyncio.run(_fetch())
+        assert booking.status == "PENDING"
+        assert booking.deposit_status == "pending"
+    finally:
+        app.state.stripe_client = original_client
+
+
+def test_webhook_expired_cancels_pending(client, async_session_maker):
+    settings.stripe_secret_key = "sk_test"
+    settings.stripe_webhook_secret = "whsec_test"
+    original_client = getattr(app.state, "stripe_client", None)
+    try:
+        app.state.stripe_client = _stub_stripe("cs_expired")
+        lead_id = _seed_lead(async_session_maker)
+
+        creation = client.post(
+            "/v1/bookings",
+            json={"starts_at": _booking_start_on_weekend(), "time_on_site_hours": 2, "lead_id": lead_id},
+        )
+        assert creation.status_code == 201
+
+        event = {
+            "id": "evt_expired",
+            "type": "checkout.session.expired",
+            "data": {"object": {"id": "cs_expired", "payment_intent": "pi_expired"}},
+        }
+        body = json.dumps(event)
+        timestamp = int(time.time())
+        signed_payload = f"{timestamp}.{body}"
+        signature = stripe.WebhookSignature._compute_signature(signed_payload, settings.stripe_webhook_secret)
+        headers = {"Stripe-Signature": f"t={timestamp},v1={signature}"}
+
+        webhook_response = client.post("/v1/stripe/webhook", data=body, headers=headers)
+        assert webhook_response.status_code == 200
+
+        async def _fetch() -> Booking:
+            async with async_session_maker() as session:
+                result = await session.execute(sa.select(Booking).limit(1))
+                return result.scalar_one()
+
+        import asyncio
+
+        booking = asyncio.run(_fetch())
+        assert booking.status == "CANCELLED"
+        assert booking.deposit_status == "expired"
     finally:
         app.state.stripe_client = original_client
