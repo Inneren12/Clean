@@ -152,16 +152,21 @@ class RedisRateLimiter:
         except ResponseError as exc:
             if "NOSCRIPT" not in str(exc):
                 raise
+
+        result = await self.redis.eval(
+            RATE_LIMIT_LUA,
+            2,
+            set_key,
+            seq_key,
+            self.requests_per_minute,
+            self.window_ms,
+            self.ttl_seconds,
+        )
+        try:
             self._script_sha = await self.redis.script_load(RATE_LIMIT_LUA)
-            return await self.redis.evalsha(
-                self._script_sha,
-                2,
-                set_key,
-                seq_key,
-                self.requests_per_minute,
-                self.window_ms,
-                self.ttl_seconds,
-            )
+        except RedisError:
+            logger.debug("rate_limit_script_reload_failed")
+        return result
 
 
 def create_rate_limiter(app_settings) -> RateLimiter:

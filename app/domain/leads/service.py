@@ -17,8 +17,11 @@ async def ensure_unique_referral_code(
         savepoint = await session.begin_nested()
         try:
             await session.flush()
-        except IntegrityError:
+        except IntegrityError as exc:
             await savepoint.rollback()
+            message = str(getattr(exc.orig, "diag", None) or exc.orig or exc).lower()
+            if "referral" not in message and "code" not in message:
+                raise
             lead.referral_code = generate_referral_code()
             attempts += 1
             continue

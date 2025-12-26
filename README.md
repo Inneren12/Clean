@@ -277,6 +277,21 @@ TRUSTED_PROXY_CIDRS=203.0.113.0/24
   Reset only removes `rate-limit:*` keys (no `FLUSHDB`) and the limiter fails open with
   a warning if Redis is unavailable.
 
+## Captcha (optional)
+
+- Enable Cloudflare Turnstile with `CAPTCHA_MODE=turnstile`, `TURNSTILE_SECRET_KEY`, and
+  `NEXT_PUBLIC_TURNSTILE_SITE_KEY` in the web app. When `CAPTCHA_MODE=off` (default),
+  tokens are ignored.
+
+## Data retention cleanup
+
+- Defaults: delete `chat_sessions` where `updated_at` is older than
+  `RETENTION_CHAT_DAYS` (30). Lead cleanup is disabled by default; enable with
+  `RETENTION_ENABLE_LEADS=true` to delete leads older than `RETENTION_LEAD_DAYS` (365)
+  that are not `BOOKED`/`DONE`.
+- Admin-only endpoint: `POST /v1/admin/retention/cleanup` returns counts of deleted chat
+  sessions and leads. Trigger via cron or Cloudflare Scheduler with basic auth.
+
 ## Assumptions
 
 - If `EXPORT_MODE=sheets`, the API logs a warning and skips export until configured.

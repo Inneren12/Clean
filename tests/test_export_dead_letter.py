@@ -1,0 +1,55 @@
+import anyio
+from httpx import MockTransport, Request, Response
+from sqlalchemy import select
+
+from app.domain.export_events.db_models import ExportEvent
+from app.infra.export import export_lead_async
+from app.settings import settings
+
+
+def test_export_dead_letter_recorded_on_failure(async_session_maker):
+    original_mode = settings.export_mode
+    original_url = settings.export_webhook_url
+    original_retries = settings.export_webhook_max_retries
+    original_allow_http = settings.export_webhook_allow_http
+    original_block_private = settings.export_webhook_block_private_ips
+    original_env = settings.app_env
+
+    settings.export_mode = "webhook"
+    settings.export_webhook_url = "http://example.com/webhook"
+    settings.export_webhook_max_retries = 2
+    settings.export_webhook_allow_http = True
+    settings.export_webhook_block_private_ips = False
+    settings.app_env = "dev"
+
+    transport = MockTransport(lambda request: Response(500, request=Request("POST", request.url)))
+    payload = {"lead_id": "lead-dead-letter"}
+
+    try:
+        anyio.run(
+            export_lead_async,
+            payload,
+            transport,
+            None,
+            async_session_maker,
+        )
+
+        async def fetch_events():
+            async with async_session_maker() as session:
+                result = await session.execute(select(ExportEvent))
+                return result.scalars().all()
+
+        events = anyio.run(fetch_events)
+        assert len(events) == 1
+        event = events[0]
+        assert event.lead_id == "lead-dead-letter"
+        assert event.attempts == settings.export_webhook_max_retries
+        assert event.last_error_code == "status_500"
+        assert event.target_url_host == "example.com"
+    finally:
+        settings.export_mode = original_mode
+        settings.export_webhook_url = original_url
+        settings.export_webhook_max_retries = original_retries
+        settings.export_webhook_allow_http = original_allow_http
+        settings.export_webhook_block_private_ips = original_block_private
+        settings.app_env = original_env
