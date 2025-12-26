@@ -1,5 +1,4 @@
-"""
-event logs and actual duration
+"""event logs and actual duration
 
 Revision ID: 0006_event_logs
 Revises: 0005_deposits
@@ -18,9 +17,6 @@ depends_on = None
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
-    dialect_name = bind.dialect.name if bind else ""
-
     op.add_column("bookings", sa.Column("actual_duration_minutes", sa.Integer(), nullable=True))
 
     op.create_table(
@@ -44,12 +40,11 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("event_id"),
     )
     op.create_index(op.f("ix_event_logs_type_time"), "event_logs", ["event_type", "occurred_at"], unique=False)
-
-    if dialect_name != "sqlite":
-        op.alter_column("event_logs", "occurred_at", server_default=None)
+    op.create_index("ix_event_logs_booking_type", "event_logs", ["booking_id", "event_type"], unique=False)
 
 
 def downgrade() -> None:
+    op.drop_index("ix_event_logs_booking_type", table_name="event_logs")
     op.drop_index(op.f("ix_event_logs_type_time"), table_name="event_logs")
     op.drop_table("event_logs")
     op.drop_column("bookings", "actual_duration_minutes")

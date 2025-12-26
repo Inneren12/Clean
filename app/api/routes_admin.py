@@ -1,3 +1,4 @@
+import logging
 import secrets
 from datetime import date, datetime, time, timezone
 from typing import List, Optional
@@ -30,6 +31,7 @@ from app.domain.pricing.config_loader import load_pricing_config
 from app.settings import settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 security = HTTPBasic(auto_error=False)
 
 
@@ -292,14 +294,27 @@ async def confirm_booking(
     lead = await session.get(Lead, booking.lead_id) if booking.lead_id else None
     if booking.status != "CONFIRMED":
         booking.status = "CONFIRMED"
-        await log_event(
-            session,
-            event_type=EventType.booking_confirmed,
-            booking=booking,
-            lead=lead,
-            estimated_revenue_cents=estimated_revenue_from_lead(lead),
-            estimated_duration_minutes=estimated_duration_from_booking(booking),
-        )
+        try:
+            await log_event(
+                session,
+                event_type=EventType.booking_confirmed,
+                booking=booking,
+                lead=lead,
+                estimated_revenue_cents=estimated_revenue_from_lead(lead),
+                estimated_duration_minutes=estimated_duration_from_booking(booking),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "analytics_log_failed",
+                extra={
+                    "extra": {
+                        "event_type": "booking_confirmed",
+                        "booking_id": booking.booking_id,
+                        "lead_id": booking.lead_id,
+                        "reason": type(exc).__name__,
+                    }
+                },
+            )
     await session.commit()
     await session.refresh(booking)
 

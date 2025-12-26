@@ -141,13 +141,25 @@ async def create_lead(
                 )
             )
 
-        await log_event(
-            session,
-            event_type=EventType.lead_created,
-            lead=lead,
-            estimated_revenue_cents=estimated_revenue_from_lead(lead),
-            estimated_duration_minutes=estimated_duration_from_lead(lead),
-        )
+        try:
+            await log_event(
+                session,
+                event_type=EventType.lead_created,
+                lead=lead,
+                estimated_revenue_cents=estimated_revenue_from_lead(lead),
+                estimated_duration_minutes=estimated_duration_from_lead(lead),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "analytics_log_failed",
+                extra={
+                    "extra": {
+                        "event_type": "lead_created",
+                        "lead_id": lead.lead_id,
+                        "reason": type(exc).__name__,
+                    }
+                },
+            )
     await session.refresh(lead)
 
     logger.info("lead_created", extra={"extra": {"lead_id": lead.lead_id}})

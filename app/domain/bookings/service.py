@@ -1,6 +1,7 @@
 import math
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+import logging
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import Select, and_, delete, or_, select
@@ -17,6 +18,8 @@ from app.domain.bookings.db_models import Booking, Team
 from app.domain.notifications import email_service
 from app.domain.pricing.models import CleaningType
 from app.domain.leads.db_models import Lead
+
+logger = logging.getLogger(__name__)
 
 WORK_START_HOUR = 9
 WORK_END_HOUR = 18
@@ -381,15 +384,28 @@ async def mark_booking_completed(
     booking.actual_duration_minutes = actual_duration_minutes
     booking.status = "DONE"
     lead = await session.get(Lead, booking.lead_id) if booking.lead_id else None
-    await log_event(
-        session,
-        event_type=EventType.job_completed,
-        booking=booking,
-        lead=lead,
-        estimated_revenue_cents=estimated_revenue_from_lead(lead),
-        estimated_duration_minutes=estimated_duration_from_booking(booking),
-        actual_duration_minutes=actual_duration_minutes,
-    )
+    try:
+        await log_event(
+            session,
+            event_type=EventType.job_completed,
+            booking=booking,
+            lead=lead,
+            estimated_revenue_cents=estimated_revenue_from_lead(lead),
+            estimated_duration_minutes=estimated_duration_from_booking(booking),
+            actual_duration_minutes=actual_duration_minutes,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "analytics_log_failed",
+            extra={
+                "extra": {
+                    "event_type": "job_completed",
+                    "booking_id": booking.booking_id,
+                    "lead_id": booking.lead_id,
+                    "reason": type(exc).__name__,
+                }
+            },
+        )
     await session.commit()
     await session.refresh(booking)
     return booking

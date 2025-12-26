@@ -80,21 +80,34 @@ async def create_booking(
                 manage_transaction=False,
             )
 
-            if booking.lead_id and lead:
-                await log_event(
-                    session,
-                    event_type=EventType.booking_created,
-                    booking=booking,
-                    lead=lead,
-                    estimated_revenue_cents=estimated_revenue_from_lead(lead),
-                    estimated_duration_minutes=estimated_duration_from_booking(booking),
-                )
-            else:
-                await log_event(
-                    session,
-                    event_type=EventType.booking_created,
-                    booking=booking,
-                    estimated_duration_minutes=estimated_duration_from_booking(booking),
+            try:
+                if booking.lead_id and lead:
+                    await log_event(
+                        session,
+                        event_type=EventType.booking_created,
+                        booking=booking,
+                        lead=lead,
+                        estimated_revenue_cents=estimated_revenue_from_lead(lead),
+                        estimated_duration_minutes=estimated_duration_from_booking(booking),
+                    )
+                else:
+                    await log_event(
+                        session,
+                        event_type=EventType.booking_created,
+                        booking=booking,
+                        estimated_duration_minutes=estimated_duration_from_booking(booking),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "analytics_log_failed",
+                    extra={
+                        "extra": {
+                            "event_type": "booking_created",
+                            "booking_id": booking.booking_id,
+                            "lead_id": booking.lead_id,
+                            "reason": type(exc).__name__,
+                        }
+                    },
                 )
 
             if deposit_decision.required and deposit_decision.deposit_cents:
