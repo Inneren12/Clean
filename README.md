@@ -279,9 +279,9 @@ TRUSTED_PROXY_CIDRS=203.0.113.0/24
 
 ## Captcha (optional)
 
-- Enable Cloudflare Turnstile with `CAPTCHA_MODE=turnstile`, `TURNSTILE_SECRET_KEY`, and
-  `NEXT_PUBLIC_TURNSTILE_SITE_KEY` in the web app. When `CAPTCHA_MODE=off` (default),
-  tokens are ignored.
+- Enable Cloudflare Turnstile with `CAPTCHA_MODE=turnstile` and `TURNSTILE_SECRET_KEY` on
+  the API, plus `NEXT_PUBLIC_TURNSTILE_SITE_KEY` in the web app. When `CAPTCHA_MODE=off`
+  (default), tokens are ignored.
 
 ## Data retention cleanup
 

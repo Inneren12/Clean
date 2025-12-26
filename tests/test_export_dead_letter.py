@@ -1,5 +1,6 @@
 import anyio
 from httpx import MockTransport, Request, Response
+from requests.auth import HTTPBasicAuth
 from sqlalchemy import select
 
 from app.domain.export_events.db_models import ExportEvent
@@ -53,3 +54,60 @@ def test_export_dead_letter_recorded_on_failure(async_session_maker):
         settings.export_webhook_allow_http = original_allow_http
         settings.export_webhook_block_private_ips = original_block_private
         settings.app_env = original_env
+
+
+def test_export_dead_letter_endpoint_allows_dispatcher(client, async_session_maker):
+    original_mode = settings.export_mode
+    original_url = settings.export_webhook_url
+    original_retries = settings.export_webhook_max_retries
+    original_allow_http = settings.export_webhook_allow_http
+    original_block_private = settings.export_webhook_block_private_ips
+    original_allowed_hosts = settings.export_webhook_allowed_hosts
+    original_dispatcher_username = settings.dispatcher_basic_username
+    original_dispatcher_password = settings.dispatcher_basic_password
+
+    settings.export_mode = "webhook"
+    settings.export_webhook_url = "https://example.com/webhook"
+    settings.export_webhook_max_retries = 2
+    settings.export_webhook_allow_http = False
+    settings.export_webhook_block_private_ips = False
+    settings.export_webhook_allowed_hosts = ["example.com"]
+    settings.dispatcher_basic_username = "dispatcher"
+    settings.dispatcher_basic_password = "password"
+
+    transport = MockTransport(lambda request: Response(500, request=Request("POST", request.url)))
+    payload = {"lead_id": "lead-dead-letter-api"}
+
+    try:
+        anyio.run(
+            export_lead_async,
+            payload,
+            transport,
+            None,
+            async_session_maker,
+        )
+
+        response = client.get(
+            "/v1/admin/export-dead-letter",
+            auth=HTTPBasicAuth("dispatcher", "password"),
+        )
+        assert response.status_code == 200
+        events = response.json()
+        assert len(events) == 1
+        event = events[0]
+        assert event["lead_id"] == "lead-dead-letter-api"
+        assert event["mode"] == "webhook"
+        assert event["target_url_host"] == "example.com"
+        assert event["attempts"] == settings.export_webhook_max_retries
+        assert event["last_error_code"]
+        assert event["event_id"]
+        assert event["created_at"]
+    finally:
+        settings.export_mode = original_mode
+        settings.export_webhook_url = original_url
+        settings.export_webhook_max_retries = original_retries
+        settings.export_webhook_allow_http = original_allow_http
+        settings.export_webhook_block_private_ips = original_block_private
+        settings.export_webhook_allowed_hosts = original_allowed_hosts
+        settings.dispatcher_basic_username = original_dispatcher_username
+        settings.dispatcher_basic_password = original_dispatcher_password
