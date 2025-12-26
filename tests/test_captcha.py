@@ -87,3 +87,26 @@ def test_leads_captcha_turnstile_accepts_valid_token(client):
         settings.captcha_mode = original_mode
         settings.turnstile_secret_key = original_secret
         app.state.turnstile_transport = original_transport
+
+
+def test_leads_captcha_turnstile_rejects_invalid_token(client):
+    original_mode = settings.captcha_mode
+    original_secret = settings.turnstile_secret_key
+    original_transport = getattr(app.state, "turnstile_transport", None)
+
+    settings.captcha_mode = "turnstile"
+    settings.turnstile_secret_key = "secret-key"
+    app.state.turnstile_transport = MockTransport(
+        lambda request: Response(200, request=request, json={"success": False})
+    )
+
+    lead_payload = _lead_payload(client)
+    lead_payload["captcha_token"] = "bad"
+
+    try:
+        response = client.post("/v1/leads", json=lead_payload)
+        assert response.status_code == 400
+    finally:
+        settings.captcha_mode = original_mode
+        settings.turnstile_secret_key = original_secret
+        app.state.turnstile_transport = original_transport
