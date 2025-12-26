@@ -1,8 +1,10 @@
 import asyncio
 import base64
 
-from app.settings import settings
+import pytest
+
 from app.domain.leads.db_models import Lead
+from app.settings import settings
 
 
 def _basic_auth_header(username: str, password: str) -> dict[str, str]:
@@ -16,6 +18,7 @@ def test_admin_leads_requires_auth(client):
 
     response = client.get("/v1/admin/leads")
     assert response.status_code == 401
+    assert response.headers.get("WWW-Authenticate") == "Basic"
 
     auth_headers = _basic_auth_header("admin", "secret")
     authorized = client.get("/v1/admin/leads", headers=auth_headers)
@@ -58,6 +61,14 @@ def test_admin_cleanup_removes_old_pending_bookings(client, async_session_maker)
     response = client.post("/v1/admin/cleanup", headers=headers)
     assert response.status_code == 202
     assert response.json()["deleted"] == 1
+
+
+def test_admin_auth_missing_config_returns_503(client):
+    settings.admin_basic_username = None
+    settings.admin_basic_password = None
+
+    response = client.get("/v1/admin/leads")
+    assert response.status_code == 503
 
 
 def _create_lead(client) -> str:
@@ -119,3 +130,10 @@ def test_admin_updates_lead_status_with_valid_transition(client, async_session_m
         json={"status": "DONE"},
     )
     assert invalid.status_code == 400
+@pytest.fixture(autouse=True)
+def restore_admin_settings():
+    original_username = settings.admin_basic_username
+    original_password = settings.admin_basic_password
+    yield
+    settings.admin_basic_username = original_username
+    settings.admin_basic_password = original_password

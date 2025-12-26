@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 
 from pydantic import BaseModel, Field
 
-from app.domain.bookings.service import round_duration_minutes
+from app.domain.bookings.service import LOCAL_TZ, round_duration_minutes
 
 
 class SlotAvailabilityResponse(BaseModel):
@@ -31,9 +31,12 @@ class BookingCreateRequest(BaseModel):
         return round_duration_minutes(self.time_on_site_hours)
 
     def normalized_start(self) -> datetime:
+        local_start = self.starts_at
         if self.starts_at.tzinfo is None:
-            return self.starts_at.replace(tzinfo=timezone.utc)
-        return self.starts_at.astimezone(timezone.utc)
+            local_start = self.starts_at.replace(tzinfo=LOCAL_TZ)
+        else:
+            local_start = self.starts_at.astimezone(LOCAL_TZ)
+        return local_start.astimezone(timezone.utc)
 
 
 class BookingResponse(BaseModel):

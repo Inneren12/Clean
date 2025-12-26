@@ -1,6 +1,7 @@
 import logging
 import smtplib
 from email.message import EmailMessage
+from email.utils import formataddr
 from typing import Any
 
 import anyio
@@ -101,8 +102,12 @@ class EmailAdapter:
         if not host or not from_email:
             raise RuntimeError("smtp_not_configured")
 
+        formatted_from = (
+            formataddr((settings.email_from_name, from_email)) if settings.email_from_name else from_email
+        )
+
         message = EmailMessage()
-        message["From"] = from_email
+        message["From"] = formatted_from
         message["To"] = to_email
         message["Subject"] = subject
         message.set_content(body)

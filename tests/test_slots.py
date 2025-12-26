@@ -1,5 +1,6 @@
 import asyncio
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from app.domain.bookings.db_models import Booking
 from app.domain.bookings.service import BUFFER_MINUTES, SLOT_STEP_MINUTES, generate_slots, round_duration_minutes
@@ -21,11 +22,12 @@ async def _insert_booking(session, starts_at: datetime, duration_minutes: int, s
 def test_slots_skip_booked_ranges(async_session_maker):
     async def _run() -> None:
         async with async_session_maker() as session:
-            start = datetime(2025, 1, 1, 9, 0, tzinfo=timezone.utc)
-            await _insert_booking(session, start, 60, status="CONFIRMED")
+            start_local = datetime(2025, 1, 1, 9, 0, tzinfo=ZoneInfo("America/Edmonton"))
+            start_utc = start_local.astimezone(timezone.utc)
+            await _insert_booking(session, start_utc, 60, status="CONFIRMED")
             slots = await generate_slots(date(2025, 1, 1), 60, session)
-            assert start not in slots
-            expected_first_open = start + timedelta(minutes=60 + BUFFER_MINUTES)
+            assert start_utc not in slots
+            expected_first_open = start_utc + timedelta(minutes=60 + BUFFER_MINUTES)
             assert expected_first_open in slots
 
     asyncio.run(_run())

@@ -36,6 +36,7 @@ def problem_details(
     detail: str,
     errors: list[dict[str, str]] | None = None,
     type_: str = "about:blank",
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     content = {
         "type": type_,
@@ -45,7 +46,7 @@ def problem_details(
         "request_id": getattr(request.state, "request_id", None),
         "errors": errors or [],
     }
-    return JSONResponse(status_code=status, content=content)
+    return JSONResponse(status_code=status, content=content, headers=headers)
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
@@ -176,6 +177,7 @@ def create_app(app_settings) -> FastAPI:
             title=exc.detail if isinstance(exc.detail, str) else "HTTP Error",
             detail=exc.detail if isinstance(exc.detail, str) else "Request failed",
             type_=PROBLEM_TYPE_DOMAIN if exc.status_code < 500 else PROBLEM_TYPE_SERVER,
+            headers=exc.headers,
         )
 
 

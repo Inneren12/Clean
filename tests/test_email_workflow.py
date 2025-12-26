@@ -1,5 +1,6 @@
 import base64
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
 
@@ -8,6 +9,8 @@ from app.domain.leads.db_models import Lead
 from app.infra.email import EmailAdapter
 from app.main import app
 from app.settings import settings
+
+LOCAL_TZ = ZoneInfo("America/Edmonton")
 
 
 def _auth_headers(username: str, password: str) -> dict[str, str]:
@@ -175,8 +178,10 @@ def test_create_booking_succeeds_when_email_fails(client, async_session_maker):
 
     lead_id = asyncio.run(_seed_lead())
 
-    starts_at = datetime.now(tz=timezone.utc).replace(hour=10, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    payload = {"starts_at": starts_at.isoformat(), "time_on_site_hours": 1, "lead_id": lead_id}
+    starts_at_local = datetime.now(tz=LOCAL_TZ).replace(hour=10, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    if starts_at_local.weekday() >= 5:
+        starts_at_local += timedelta(days=(7 - starts_at_local.weekday()))
+    payload = {"starts_at": starts_at_local.astimezone(timezone.utc).isoformat(), "time_on_site_hours": 1, "lead_id": lead_id}
 
     try:
         response = client.post("/v1/bookings", json=payload)

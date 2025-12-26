@@ -2,6 +2,7 @@ import json
 import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import stripe
 import sqlalchemy as sa
@@ -11,6 +12,8 @@ from app.domain.leads.db_models import Lead
 from app.infra import stripe as stripe_infra
 from app.main import app
 from app.settings import settings
+
+LOCAL_TZ = ZoneInfo("America/Edmonton")
 
 
 class StubCheckoutSession:
@@ -58,18 +61,21 @@ def _seed_lead(async_session_maker) -> str:
 
 
 def _booking_start_on_weekend() -> str:
-    saturday = datetime.now(tz=timezone.utc) + timedelta(days=(5 - datetime.now(tz=timezone.utc).weekday()) % 7)
-    start = saturday.replace(hour=10, minute=0, second=0, microsecond=0)
-    return start.isoformat()
+    now_local = datetime.now(tz=LOCAL_TZ)
+    days_until_saturday = (5 - now_local.weekday()) % 7 or 7
+    saturday_local = (now_local + timedelta(days=days_until_saturday)).replace(
+        hour=10, minute=0, second=0, microsecond=0
+    )
+    return saturday_local.astimezone(timezone.utc).isoformat()
 
 
 def _booking_start_on_weekday() -> str:
-    today = datetime.now(tz=timezone.utc)
+    today_local = datetime.now(tz=LOCAL_TZ)
     days_ahead = 1
-    while (today + timedelta(days=days_ahead)).weekday() >= 5:
+    while (today_local + timedelta(days=days_ahead)).weekday() >= 5:
         days_ahead += 1
-    start = (today + timedelta(days=days_ahead)).replace(hour=10, minute=0, second=0, microsecond=0)
-    return start.isoformat()
+    start_local = (today_local + timedelta(days=days_ahead)).replace(hour=10, minute=0, second=0, microsecond=0)
+    return start_local.astimezone(timezone.utc).isoformat()
 
 
 def _count_bookings(async_session_maker) -> int:

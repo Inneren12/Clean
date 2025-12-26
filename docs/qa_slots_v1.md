@@ -2,7 +2,7 @@
 
 ## Definition of Done
 - Alembic migration adds `teams` (default row) and `bookings` tables with indexes on `starts_at` and `status`.
-- GET `/v1/slots` returns 30-minute stepped availability between 09:00–18:00, using estimator `time_on_site_hours` rounded to slot steps and honoring a 30-minute buffer between jobs.
+- GET `/v1/slots` returns 30-minute stepped availability between 09:00–18:00 **America/Edmonton local time**, using estimator `time_on_site_hours` rounded to slot steps and honoring a 30-minute buffer between jobs. Responses include UTC timestamps.
 - POST `/v1/bookings` stores a `PENDING` booking for the selected slot using the rounded duration.
 - POST `/v1/admin/cleanup` removes `PENDING` bookings older than 30 minutes (admin basic auth required).
 - Web booking flow shows the next three days of slots after an estimate and can create a booking.
