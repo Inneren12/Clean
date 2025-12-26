@@ -1,45 +1,38 @@
 # Release Gates (v1)
 
-Run these commands before promoting a release. They mirror CI coverage and add manual checks for secrets and auth.
+Run these commands before promoting a release. They mirror CI coverage and add manual checks for secrets, auth, and CORS.
 
 ## Backend
-1. Install dependencies:
-   ```bash
-   python -m pip install --upgrade pip
-   pip install -r requirements.txt
-   ```
-2. Apply migrations (requires `DATABASE_URL`):
-   ```bash
-   alembic upgrade head
-   ```
-3. Run tests:
-   ```bash
-   pytest
-   ```
+```bash
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+alembic upgrade head
+pytest
+```
 
-## Frontend (web/)
-1. Install and build:
-   ```bash
-   npm ci
-   npm run build
-   ```
+## Frontend (web)
+```bash
+cd web
+npm ci
+npm run build
+```
 
-## Docker compose smoke (local/staging)
-1. Bring up stack and wait for health:
-   ```bash
-   make up
-   curl http://localhost:8000/healthz
-   ```
-
-## Admin auth smoke
-1. Verify admin/dispatcher credentials and CORS from the intended origin:
-   ```bash
-   curl -i -u "$ADMIN_BASIC_USERNAME:$ADMIN_BASIC_PASSWORD" "${API_BASE:-http://localhost:8000}/v1/admin/leads"
-   ```
-
-## Stripe webhook (if deposits enabled)
-1. Trigger a signed webhook from Stripe CLI to the staging URL and confirm booking state updates.
+## Smoke checks
+- Admin leads (auth + CORS):
+  ```bash
+  curl -i -u "$ADMIN_BASIC_USERNAME:$ADMIN_BASIC_PASSWORD" "${API_BASE:-http://localhost:8000}/v1/admin/leads"
+  ```
+- Dispatcher restriction (expect 403):
+  ```bash
+  curl -i -u "$DISPATCHER_BASIC_USERNAME:$DISPATCHER_BASIC_PASSWORD" "${API_BASE:-http://localhost:8000}/v1/admin/metrics"
+  ```
+- CORS preflight (staging/prod):
+  ```bash
+  curl -i -X OPTIONS "${API_BASE}/v1/estimate" \
+    -H "Origin: ${PAGES_ORIGIN}" \
+    -H "Access-Control-Request-Method: POST"
+  ```
 
 ## Release blocker criteria
 - Any failing command above.
-- Missing required secrets: `DATABASE_URL`, `ADMIN_BASIC_*`, `DISPATCHER_BASIC_*`, `PRICING_CONFIG_PATH`, `STRICT_CORS=true` with `CORS_ORIGINS` set, Stripe keys/URLs when deposits enabled, email/export provider keys when modes are on.
+- Missing required secrets: `DATABASE_URL`, `ADMIN_BASIC_*`, `DISPATCHER_BASIC_*`, `PRICING_CONFIG_PATH`, `STRICT_CORS=true` with matching `CORS_ORIGINS`, Stripe keys/URLs when deposits are enabled, email/export provider keys when those modes are on.
