@@ -30,15 +30,15 @@ from app.domain.notifications import email_service
 from app.settings import settings
 
 router = APIRouter()
-security = HTTPBasic()
+security = HTTPBasic(auto_error=False)
 
 
-async def verify_admin(credentials: HTTPBasicCredentials = Depends(security)) -> None:
+async def verify_admin(credentials: HTTPBasicCredentials | None = Depends(security)) -> None:
     username = settings.admin_basic_username
     password = settings.admin_basic_password
     if not username or not password:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Admin access not configured")
-    if not (
+    if not credentials or not (
         secrets.compare_digest(credentials.username, username)
         and secrets.compare_digest(credentials.password, password)
     ):
@@ -65,7 +65,7 @@ async def list_leads(
         .order_by(Lead.created_at.desc())
         .limit(limit)
     )
-    if status_filter:
+    if status_filter and hasattr(Lead, "status"):
         normalized = status_filter.upper()
         if not is_valid_status(normalized):
             raise HTTPException(

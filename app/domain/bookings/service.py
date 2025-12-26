@@ -1,8 +1,9 @@
 import math
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import Select, and_, or_, select
+from sqlalchemy import Select, and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.analytics.service import (
@@ -21,6 +22,7 @@ WORK_END_HOUR = 18
 SLOT_STEP_MINUTES = 30
 BUFFER_MINUTES = 30
 BLOCKING_STATUSES = {"PENDING", "CONFIRMED"}
+LOCAL_TZ = ZoneInfo("America/Edmonton")
 
 
 @dataclass
@@ -38,20 +40,21 @@ def round_duration_minutes(time_on_site_hours: float) -> int:
 
 def _normalize_datetime(dt: datetime) -> datetime:
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
 
 
 def _day_window(target_date: date) -> tuple[datetime, datetime]:
-    start = datetime.combine(target_date, time(hour=WORK_START_HOUR, tzinfo=timezone.utc))
-    end = datetime.combine(target_date, time(hour=WORK_END_HOUR, tzinfo=timezone.utc))
-    return start, end
+    local_start = datetime.combine(target_date, time(hour=WORK_START_HOUR, tzinfo=LOCAL_TZ))
+    local_end = datetime.combine(target_date, time(hour=WORK_END_HOUR, tzinfo=LOCAL_TZ))
+    return local_start.astimezone(timezone.utc), local_end.astimezone(timezone.utc)
 
 
-def _booking_window_filters(day_start: datetime, day_end: datetime) -> Select:
+def _booking_window_filters(day_start: datetime, day_end: datetime, team_id: int) -> Select:
     buffer_delta = timedelta(minutes=BUFFER_MINUTES)
     return select(Booking).where(
         and_(
+            Booking.team_id == team_id,
             Booking.starts_at < day_end + buffer_delta,
             Booking.starts_at > day_start - buffer_delta - timedelta(hours=12),
             Booking.status.in_(BLOCKING_STATUSES),
@@ -95,8 +98,11 @@ async def evaluate_deposit_policy(
     return DepositDecision(required=required, reasons=reasons, deposit_cents=deposit_cents)
 
 
-async def ensure_default_team(session: AsyncSession) -> Team:
-    result = await session.execute(select(Team).order_by(Team.team_id).limit(1))
+async def ensure_default_team(session: AsyncSession, lock: bool = False) -> Team:
+    stmt = select(Team).order_by(Team.team_id).limit(1)
+    if lock:
+        stmt = stmt.with_for_update()
+    result = await session.execute(stmt)
     team = result.scalar_one_or_none()
     if team:
         return team
@@ -111,12 +117,14 @@ async def generate_slots(
     target_date: date,
     duration_minutes: int,
     session: AsyncSession,
+    team_id: int | None = None,
 ) -> list[datetime]:
+    team = team_id or (await ensure_default_team(session)).team_id
     day_start, day_end = _day_window(target_date)
     duration_delta = timedelta(minutes=duration_minutes)
     buffer_delta = timedelta(minutes=BUFFER_MINUTES)
 
-    bookings_result = await session.execute(_booking_window_filters(day_start, day_end))
+    bookings_result = await session.execute(_booking_window_filters(day_start, day_end, team))
     bookings = bookings_result.scalars().all()
 
     blocked_windows: list[tuple[datetime, datetime]] = []
@@ -144,9 +152,11 @@ async def is_slot_available(
     starts_at: datetime,
     duration_minutes: int,
     session: AsyncSession,
+    team_id: int | None = None,
 ) -> bool:
     normalized = _normalize_datetime(starts_at)
-    slots = await generate_slots(normalized.date(), duration_minutes, session)
+    local_date = normalized.astimezone(LOCAL_TZ).date()
+    slots = await generate_slots(local_date, duration_minutes, session, team_id=team_id)
     return normalized in slots
 
 
@@ -156,31 +166,39 @@ async def create_booking(
     lead_id: str | None,
     session: AsyncSession,
     deposit_decision: DepositDecision | None = None,
-    commit: bool = True,
+    manage_transaction: bool = True,
 ) -> Booking:
     normalized = _normalize_datetime(starts_at)
-    if not await is_slot_available(normalized, duration_minutes, session):
-        raise ValueError("Requested slot is no longer available")
-
     decision = deposit_decision or DepositDecision(required=False, reasons=[], deposit_cents=None)
-    team = await ensure_default_team(session)
-    booking = Booking(
-        team_id=team.team_id,
-        lead_id=lead_id,
-        starts_at=normalized,
-        duration_minutes=duration_minutes,
-        status="PENDING",
-        deposit_required=decision.required,
-        deposit_cents=decision.deposit_cents,
-        deposit_policy=decision.reasons,
-        deposit_status="pending" if decision.required else None,
-    )
-    session.add(booking)
-    await session.flush()
-    await session.refresh(booking)
-    if commit:
-        await session.commit()
-    return booking
+
+    async def _create(team: Team) -> Booking:
+        if not await is_slot_available(normalized, duration_minutes, session, team_id=team.team_id):
+            raise ValueError("Requested slot is no longer available")
+
+        booking = Booking(
+            team_id=team.team_id,
+            lead_id=lead_id,
+            starts_at=normalized,
+            duration_minutes=duration_minutes,
+            status="PENDING",
+            deposit_required=decision.required,
+            deposit_cents=decision.deposit_cents,
+            deposit_policy=decision.reasons,
+            deposit_status="pending" if decision.required else None,
+        )
+        session.add(booking)
+        await session.flush()
+        await session.refresh(booking)
+        return booking
+
+    if manage_transaction:
+        transaction_ctx = session.begin_nested() if session.in_transaction() else session.begin()
+        async with transaction_ctx:
+            team = await ensure_default_team(session, lock=True)
+            return await _create(team)
+
+    team = await ensure_default_team(session, lock=True)
+    return await _create(team)
 
 
 async def attach_checkout_session(
@@ -276,13 +294,13 @@ async def mark_deposit_failed(
 
 async def cleanup_stale_bookings(session: AsyncSession, older_than: timedelta) -> int:
     threshold = datetime.now(tz=timezone.utc) - older_than
-    query = select(Booking).where(and_(Booking.status == "PENDING", Booking.created_at < threshold))
-    result = await session.execute(query)
-    bookings = result.scalars().all()
-    deleted = 0
-    for booking in bookings:
-        await session.delete(booking)
-        deleted += 1
+    deletion = (
+        delete(Booking)
+        .where(and_(Booking.status == "PENDING", Booking.created_at < threshold))
+        .returning(Booking.booking_id)
+    )
+    result = await session.execute(deletion)
+    deleted = len(result.scalars().all())
     if deleted:
         await session.commit()
     return deleted

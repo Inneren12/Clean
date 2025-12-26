@@ -23,15 +23,14 @@ Required secrets:
 - SendGrid: `SENDGRID_API_KEY`
 - SMTP: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS`
 
-To manually resend a confirmation email, either:
-
-- Re-POST the lead payload to `/v1/leads` (idempotent for email/export side-effects), **or**
-- Use a quick shell script with a known `lead_id`:
+To manually resend a confirmation email, run a one-off script inside the API environment with an optional `LEAD_ID` override:
 
 ```bash
 python - <<'PY'
 import asyncio
 from sqlalchemy import select
+import os
+
 from app.domain.leads.db_models import Lead
 from app.infra.db import _get_session_factory  # type: ignore
 from app.infra.email import EmailAdapter
@@ -39,9 +38,14 @@ from app.infra.email import EmailAdapter
 
 async def main():
     session_factory = _get_session_factory()
+    lead_id = os.getenv("LEAD_ID")
     async with session_factory() as session:
-        result = await session.execute(select(Lead).order_by(Lead.created_at.desc()).limit(1))
-        lead = result.scalar_one()
+        lead = None
+        if lead_id:
+            lead = await session.get(Lead, lead_id)
+        if lead is None:
+            result = await session.execute(select(Lead).order_by(Lead.created_at.desc()).limit(1))
+            lead = result.scalar_one()
         await EmailAdapter().send_request_received(lead)
 
 

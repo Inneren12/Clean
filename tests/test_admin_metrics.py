@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from app.settings import settings
 from app.domain.bookings.db_models import Booking
@@ -64,9 +65,13 @@ def test_admin_metrics_reports_conversions_and_accuracy(client, async_session_ma
 
     asyncio.run(_seed_history())
 
-    start_time = datetime.now(tz=timezone.utc).replace(hour=10, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    while start_time.weekday() >= 5:
-        start_time += timedelta(days=1)
+    local_tz = ZoneInfo("America/Edmonton")
+    start_time_local = (
+        datetime.now(tz=local_tz).replace(hour=10, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    )
+    while start_time_local.weekday() >= 5:
+        start_time_local += timedelta(days=1)
+    start_time = start_time_local.astimezone(timezone.utc)
     booking_response = client.post(
         "/v1/bookings",
         json={

@@ -698,7 +698,9 @@ export default function HomePage() {
                   <div className="slots-header">
                     <div>
                       <p className="label">Book a time</p>
-                      <p className="muted">Next 3 days · 30 minute steps · {estimate.time_on_site_hours} hours on site</p>
+                      <p className="muted">
+                        Next 3 days · 30 minute steps · {estimate.time_on_site_hours} hours on site · Times in America/Edmonton
+                      </p>
                     </div>
                     <button type="button" className="ghost" onClick={() => void loadSlots()} disabled={slotsLoading}>
                       {slotsLoading ? 'Refreshing...' : 'Refresh'}
@@ -927,12 +929,24 @@ function formatCurrency(amount: number) {
   }).format(amount);
 }
 
+function formatYMDInTz(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+
+  const lookup = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${lookup.year}-${lookup.month}-${lookup.day}`;
+}
+
 function getNextThreeDates(): string[] {
   const today = new Date();
   return Array.from({ length: 3 }).map((_, index) => {
     const next = new Date(today);
     next.setDate(today.getDate() + index);
-    return next.toISOString().slice(0, 10);
+    return formatYMDInTz(next, 'America/Edmonton');
   });
 }
 
@@ -941,6 +955,7 @@ function formatSlotTime(slot: string): string {
   return date.toLocaleTimeString('en-CA', {
     hour: 'numeric',
     minute: '2-digit',
+    timeZone: 'America/Edmonton',
     timeZoneName: 'short'
   });
 }
@@ -950,6 +965,7 @@ function formatSlotDateHeading(day: string): string {
   return date.toLocaleDateString('en-CA', {
     weekday: 'short',
     month: 'short',
-    day: 'numeric'
+    day: 'numeric',
+    timeZone: 'America/Edmonton'
   });
 }

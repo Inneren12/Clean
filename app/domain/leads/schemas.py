@@ -1,6 +1,4 @@
 from typing import List, Optional
-
-from typing import List, Optional
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
