@@ -2,10 +2,6 @@ import json
 from typing import Literal
 
 from pydantic import Field, field_validator
-import json
-from typing import Literal
-
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -58,6 +54,11 @@ class Settings(BaseSettings):
     )
     export_webhook_allow_http: bool = Field(False, env="EXPORT_WEBHOOK_ALLOW_HTTP")
     export_webhook_block_private_ips: bool = Field(True, env="EXPORT_WEBHOOK_BLOCK_PRIVATE_IPS")
+    captcha_mode: Literal["off", "turnstile"] = Field("off", env="CAPTCHA_MODE")
+    turnstile_secret_key: str | None = Field(None, env="TURNSTILE_SECRET_KEY")
+    retention_chat_days: int = Field(30, env="RETENTION_CHAT_DAYS")
+    retention_lead_days: int = Field(365, env="RETENTION_LEAD_DAYS")
+    retention_enable_leads: bool = Field(False, env="RETENTION_ENABLE_LEADS")
     stripe_secret_key: str | None = Field(None, env="STRIPE_SECRET_KEY")
     stripe_webhook_secret: str | None = Field(None, env="STRIPE_WEBHOOK_SECRET")
     stripe_success_url: str = Field("http://localhost:3000/deposit-success?session_id={CHECKOUT_SESSION_ID}", env="STRIPE_SUCCESS_URL")

@@ -7,7 +7,10 @@ from urllib.parse import urlparse
 
 import anyio
 import httpx
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.domain.export_events.db_models import ExportEvent
+from app.infra.db import get_session_factory
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -19,6 +22,7 @@ async def export_lead_async(
     payload: Dict[str, Any],
     transport: httpx.AsyncBaseTransport | None = None,
     resolver: Resolver | None = None,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
     """Export leads best-effort; never block lead creation."""
     if settings.export_mode == "off":
@@ -38,13 +42,21 @@ async def export_lead_async(
                 extra={"extra": {"lead_id": payload.get("lead_id"), "reason": reason}},
             )
             return
-        await _post_with_retry_async(url, payload, transport=transport)
+        await _post_with_retry_async(
+            url,
+            payload,
+            transport=transport,
+            session_factory=session_factory,
+            mode=settings.export_mode,
+        )
 
 
 async def _post_with_retry_async(
     url: str,
     payload: Dict[str, Any],
     transport: httpx.AsyncBaseTransport | None = None,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+    mode: str = "webhook",
 ) -> None:
     timeout = settings.export_webhook_timeout_seconds
     retries = settings.export_webhook_max_retries
@@ -89,6 +101,51 @@ async def _post_with_retry_async(
             }
         },
     )
+    await _record_export_dead_letter(
+        session_factory,
+        payload.get("lead_id"),
+        url,
+        retries,
+        last_error_code,
+        mode,
+    )
+
+
+async def _record_export_dead_letter(
+    session_factory: async_sessionmaker[AsyncSession] | None,
+    lead_id: str | None,
+    url: str,
+    attempts: int,
+    last_error_code: str,
+    mode: str,
+) -> None:
+    try:
+        factory = session_factory or get_session_factory()
+    except Exception:  # noqa: BLE001
+        logger.warning("export_dead_letter_session_unavailable")
+        return
+
+    try:
+        host = urlparse(url).hostname
+    except Exception:  # noqa: BLE001
+        host = None
+
+    try:
+        async with factory() as session:
+            event = ExportEvent(
+                lead_id=lead_id,
+                mode=mode,
+                target_url_host=host,
+                attempts=attempts,
+                last_error_code=last_error_code,
+            )
+            session.add(event)
+            await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "export_dead_letter_record_failed",
+            extra={"extra": {"lead_id": lead_id, "error": str(exc)}},
+        )
 
 
 async def validate_webhook_url(url: str, resolver: Resolver | None = None) -> tuple[bool, str]:

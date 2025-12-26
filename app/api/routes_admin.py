@@ -23,12 +23,15 @@ from app.dependencies import get_db_session
 from app.domain.bookings.db_models import Booking
 from app.domain.bookings import schemas as booking_schemas
 from app.domain.bookings import service as booking_service
+from app.domain.export_events.db_models import ExportEvent
+from app.domain.export_events.schemas import ExportEventResponse
 from app.domain.leads.db_models import Lead, ReferralCredit
 from app.domain.leads.service import grant_referral_credit
 from app.domain.leads.schemas import AdminLeadResponse, AdminLeadStatusUpdateRequest, admin_lead_from_model
 from app.domain.leads.statuses import assert_valid_transition, is_valid_status
 from app.domain.notifications import email_service
 from app.domain.pricing.config_loader import load_pricing_config
+from app.domain.retention import cleanup_retention
 from app.settings import settings
 
 router = APIRouter()
@@ -156,6 +159,38 @@ async def resend_last_email(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No prior email for booking") from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Email send failed") from exc
+
+
+@router.get("/v1/admin/export-dead-letter", response_model=List[ExportEventResponse])
+async def list_export_dead_letter(
+    limit: int = Query(default=100, ge=1, le=500),
+    session: AsyncSession = Depends(get_db_session),
+    role: str = Depends(verify_admin_or_dispatcher),
+) -> List[ExportEventResponse]:
+    result = await session.execute(
+        select(ExportEvent).order_by(ExportEvent.created_at.desc()).limit(limit)
+    )
+    events = result.scalars().all()
+    return [
+        ExportEventResponse(
+            event_id=event.event_id,
+            lead_id=event.lead_id,
+            mode=event.mode,
+            target_url_host=event.target_url_host,
+            attempts=event.attempts,
+            last_error_code=event.last_error_code,
+            created_at=event.created_at,
+        )
+        for event in events
+    ]
+
+
+@router.post("/v1/admin/retention/cleanup")
+async def run_retention_cleanup(
+    session: AsyncSession = Depends(get_db_session),
+    role: str = Depends(require_admin),
+) -> dict[str, int]:
+    return await cleanup_retention(session)
 
 
 def _normalize_range(

@@ -79,6 +79,11 @@ class LeadCreateRequest(BaseModel):
     referral_code: Optional[str] = Field(
         default=None, min_length=4, max_length=16, description="Referral code applied"
     )
+    captcha_token: Optional[str] = Field(
+        default=None,
+        description="Captcha token when CAPTCHA_MODE is enabled",
+        min_length=1,
+    )
 
 
 class LeadResponse(BaseModel):

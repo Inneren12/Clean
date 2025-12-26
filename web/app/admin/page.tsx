@@ -24,6 +24,16 @@ type Booking = {
   lead_email?: string | null;
 };
 
+type ExportEvent = {
+  event_id: string;
+  lead_id?: string | null;
+  mode: string;
+  target_url_host?: string | null;
+  attempts: number;
+  last_error_code?: string | null;
+  created_at: string;
+};
+
 function formatDateTime(value: string) {
   const dt = new Date(value);
   return new Intl.DateTimeFormat("en-CA", {
@@ -65,6 +75,7 @@ export default function AdminPage() {
   const [password, setPassword] = useState("");
   const [leads, setLeads] = useState<Lead[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [exportEvents, setExportEvents] = useState<ExportEvent[]>([]);
   const [leadStatusFilter, setLeadStatusFilter] = useState<string>("");
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     const today = new Date();
@@ -110,8 +121,20 @@ export default function AdminPage() {
     setBookings(data);
   };
 
+  const loadExportDeadLetter = async () => {
+    if (!username || !password) return;
+    const response = await fetch(`${API_BASE}/v1/admin/export-dead-letter?limit=50`, {
+      headers: authHeaders,
+      cache: "no-store",
+    });
+    if (!response.ok) return;
+    const data = (await response.json()) as ExportEvent[];
+    setExportEvents(data);
+  };
+
   useEffect(() => {
     void loadLeads();
+    void loadExportDeadLetter();
   }, [authHeaders, leadStatusFilter]);
 
   useEffect(() => {
@@ -258,6 +281,27 @@ export default function AdminPage() {
                     {status}
                   </button>
                 ))}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section style={{ marginBottom: "1.5rem" }}>
+        <h2>Export dead-letter</h2>
+        <button type="button" onClick={() => void loadExportDeadLetter()} style={{ marginBottom: "0.5rem" }}>
+          Refresh
+        </button>
+        {exportEvents.length === 0 ? <div>No failed exports recorded.</div> : null}
+        <ul>
+          {exportEvents.map((event) => (
+            <li key={event.event_id} style={{ marginBottom: "0.5rem" }}>
+              <div>
+                <strong>{event.mode}</strong> → {event.target_url_host ?? "unknown host"} ({event.last_error_code || "unknown"}
+                )
+              </div>
+              <div>
+                Attempts: {event.attempts} · Lead: {event.lead_id ?? "unknown"} · Created: {formatDateTime(event.created_at)}
               </div>
             </li>
           ))}

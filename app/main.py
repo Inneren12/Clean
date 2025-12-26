@@ -16,6 +16,7 @@ from app.api.routes_estimate import router as estimate_router
 from app.api.routes_health import router as health_router
 from app.api.routes_leads import router as leads_router
 from app.domain.errors import DomainError
+from app.infra.db import get_session_factory
 from app.infra.email import EmailAdapter
 from app.infra.logging import configure_logging
 from app.infra.security import RateLimiter, create_rate_limiter, resolve_client_key
@@ -119,6 +120,7 @@ def create_app(app_settings) -> FastAPI:
 
     rate_limiter = create_rate_limiter(app_settings)
     app.state.rate_limiter = rate_limiter
+    app.state.db_session_factory = get_session_factory()
     app.state.export_transport = None
     app.state.export_resolver = None
     app.state.email_adapter = EmailAdapter()

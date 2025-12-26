@@ -17,6 +17,7 @@ from app.domain.leads.db_models import Lead
 from app.domain.leads.service import ensure_unique_referral_code
 from app.domain.leads.schemas import LeadCreateRequest, LeadResponse
 from app.domain.leads.statuses import LEAD_STATUS_NEW
+from app.infra.captcha import verify_turnstile
 from app.infra.export import export_lead_async
 from app.infra.email import EmailAdapter
 
@@ -29,16 +30,31 @@ def schedule_export(
     payload: dict,
     transport: object | None = None,
     resolver: object | None = None,
+    session_factory: object | None = None,
 ) -> None:
     async def _spawn() -> None:
-        asyncio.create_task(export_lead_async(payload, transport=transport, resolver=resolver))
+        asyncio.create_task(
+            export_lead_async(
+                payload,
+                transport=transport,
+                resolver=resolver,
+                session_factory=session_factory,
+            )
+        )
 
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         anyio.from_thread.run(_spawn)
     else:
-        loop.create_task(export_lead_async(payload, transport=transport, resolver=resolver))
+        loop.create_task(
+            export_lead_async(
+                payload,
+                transport=transport,
+                resolver=resolver,
+                session_factory=session_factory,
+            )
+        )
 
 
 def schedule_email_request_received(adapter: EmailAdapter | None, lead: Lead) -> None:
@@ -66,6 +82,12 @@ async def create_lead(
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
 ) -> LeadResponse:
+    turnstile_transport = getattr(http_request.app.state, "turnstile_transport", None)
+    remote_ip = http_request.client.host if http_request.client else None
+    captcha_ok = await verify_turnstile(request.captcha_token, remote_ip, transport=turnstile_transport)
+    if not captcha_ok:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Captcha verification failed")
+
     estimate_payload = request.estimate_snapshot.model_dump(mode="json")
     structured_inputs = request.structured_inputs.model_dump(mode="json")
     utm = request.utm
@@ -137,6 +159,7 @@ async def create_lead(
     logger.info("lead_created", extra={"extra": {"lead_id": lead.lead_id}})
     export_transport = getattr(http_request.app.state, "export_transport", None)
     export_resolver = getattr(http_request.app.state, "export_resolver", None)
+    export_session_factory = getattr(http_request.app.state, "db_session_factory", None)
     email_adapter: EmailAdapter | None = getattr(http_request.app.state, "email_adapter", None)
     background_tasks.add_task(
         schedule_export,
@@ -170,6 +193,7 @@ async def create_lead(
         },
         export_transport,
         export_resolver,
+        export_session_factory,
     )
     background_tasks.add_task(schedule_email_request_received, email_adapter, lead)
 
