@@ -114,9 +114,15 @@ class RedisRateLimiter:
 
     async def reset(self) -> None:
         try:
-            await self.redis.flushdb()
+            cursor = 0
+            while True:
+                cursor, keys = await self.redis.scan(cursor=cursor, match="rate-limit:*", count=100)
+                if keys:
+                    await self.redis.delete(*keys)
+                if cursor == 0:
+                    break
         except RedisError:
-            logger.warning("redis rate limiter flush failed")
+            logger.warning("redis rate limiter reset failed")
 
     async def close(self) -> None:
         try:

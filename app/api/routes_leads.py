@@ -1,12 +1,9 @@
 import asyncio
 import logging
-import secrets
-import string
 
 import anyio
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db_session
@@ -17,6 +14,7 @@ from app.domain.analytics.service import (
     log_event,
 )
 from app.domain.leads.db_models import Lead
+from app.domain.leads.service import ensure_unique_referral_code
 from app.domain.leads.schemas import LeadCreateRequest, LeadResponse
 from app.domain.leads.statuses import LEAD_STATUS_NEW
 from app.infra.export import export_lead_async
@@ -25,10 +23,6 @@ from app.infra.email import EmailAdapter
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-CHARSET = string.ascii_uppercase + string.digits
-REFERRAL_CODE_LENGTH = 8
 
 
 def schedule_export(
@@ -63,22 +57,6 @@ def schedule_email_request_received(adapter: EmailAdapter | None, lead: Lead) ->
         anyio.from_thread.run(_spawn)
     else:
         loop.create_task(_spawn())
-
-
-async def _generate_referral_code(session: AsyncSession, lead: Lead) -> str:
-    for _ in range(10):
-        candidate = "".join(secrets.choice(CHARSET) for _ in range(REFERRAL_CODE_LENGTH))
-        lead.referral_code = candidate
-        savepoint = await session.begin_nested()
-        try:
-            await session.flush()
-        except IntegrityError:
-            await savepoint.rollback()
-            continue
-        else:
-            await savepoint.commit()
-            return candidate
-    raise RuntimeError("Unable to allocate referral code")
 
 
 @router.post("/v1/leads", response_model=LeadResponse, status_code=status.HTTP_201_CREATED)
@@ -130,11 +108,10 @@ async def create_lead(
             utm_term=utm_term,
             utm_content=utm_content,
             referrer=request.referrer,
-            referral_code="",
             referred_by_code=request.referral_code if referrer else None,
         )
         session.add(lead)
-        await _generate_referral_code(session, lead)
+        await ensure_unique_referral_code(session, lead)
 
         try:
             await log_event(

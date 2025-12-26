@@ -4,9 +4,29 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.leads.db_models import Lead, ReferralCredit
+from app.domain.leads.db_models import Lead, ReferralCredit, generate_referral_code
 
 logger = logging.getLogger(__name__)
+
+
+async def ensure_unique_referral_code(
+    session: AsyncSession, lead: Lead, max_attempts: int = 10
+) -> None:
+    attempts = 0
+    while attempts < max_attempts:
+        savepoint = await session.begin_nested()
+        try:
+            await session.flush()
+        except IntegrityError:
+            await savepoint.rollback()
+            lead.referral_code = generate_referral_code()
+            attempts += 1
+            continue
+        else:
+            await savepoint.commit()
+            return
+
+    raise RuntimeError("Unable to allocate referral code")
 
 
 async def grant_referral_credit(session: AsyncSession, referred_lead: Lead | None) -> None:
@@ -49,8 +69,9 @@ async def grant_referral_credit(session: AsyncSession, referred_lead: Lead | Non
         return
     else:
         await savepoint.commit()
-    logger.info(
-        "referral_credit_granted",
+    logger.info("referral_credit_granted", extra={"extra": {"credit_id": credit.credit_id}})
+    logger.debug(
+        "referral_credit_details",
         extra={
             "extra": {
                 "referrer_lead_id": referrer.lead_id,
