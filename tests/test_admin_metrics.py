@@ -66,9 +66,9 @@ def test_admin_metrics_reports_conversions_and_accuracy(client, async_session_ma
     asyncio.run(_seed_history())
 
     local_tz = ZoneInfo("America/Edmonton")
-    start_time_local = (
-        datetime.now(tz=local_tz).replace(hour=10, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    )
+    start_time_local = datetime.now(tz=local_tz).replace(
+        hour=10, minute=0, second=0, microsecond=0
+    ) + timedelta(days=1)
     while start_time_local.weekday() >= 5:
         start_time_local += timedelta(days=1)
     start_time = start_time_local.astimezone(timezone.utc)
@@ -88,6 +88,12 @@ def test_admin_metrics_reports_conversions_and_accuracy(client, async_session_ma
         auth=auth,
     )
     assert confirm_response.status_code == 200
+
+    confirm_response_repeat = client.post(
+        f"/v1/admin/bookings/{booking['booking_id']}/confirm",
+        auth=auth,
+    )
+    assert confirm_response_repeat.status_code == 200
 
     complete_response = client.post(
         f"/v1/admin/bookings/{booking['booking_id']}/complete",
