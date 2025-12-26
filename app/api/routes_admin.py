@@ -1,7 +1,6 @@
 import secrets
+from datetime import date, datetime, time, timezone
 from typing import List, Optional
-
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -27,26 +26,48 @@ from app.domain.leads.db_models import Lead, ReferralCredit
 from app.domain.leads.schemas import AdminLeadResponse, AdminLeadStatusUpdateRequest, admin_lead_from_model
 from app.domain.leads.statuses import assert_valid_transition, is_valid_status
 from app.domain.notifications import email_service
+from app.domain.pricing.config_loader import load_pricing_config
 from app.settings import settings
 
 router = APIRouter()
 security = HTTPBasic(auto_error=False)
 
 
-async def verify_admin(credentials: HTTPBasicCredentials | None = Depends(security)) -> None:
-    username = settings.admin_basic_username
-    password = settings.admin_basic_password
-    if not username or not password:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Admin access not configured")
-    if not credentials or not (
-        secrets.compare_digest(credentials.username, username)
-        and secrets.compare_digest(credentials.password, password)
-    ):
+async def verify_admin_or_dispatcher(credentials: HTTPBasicCredentials | None = Depends(security)) -> str:
+    admin_username = settings.admin_basic_username
+    admin_password = settings.admin_basic_password
+    dispatcher_username = settings.dispatcher_basic_username
+    dispatcher_password = settings.dispatcher_basic_password
+
+    if (not admin_username or not admin_password) and (not dispatcher_username or not dispatcher_password):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Admin access not configured",
+        )
+
+    if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication",
             headers={"WWW-Authenticate": "Basic"},
         )
+
+    if admin_username and admin_password and secrets.compare_digest(credentials.username, admin_username) and secrets.compare_digest(credentials.password, admin_password):
+        return "admin"
+    if dispatcher_username and dispatcher_password and secrets.compare_digest(credentials.username, dispatcher_username) and secrets.compare_digest(credentials.password, dispatcher_password):
+        return "dispatcher"
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid authentication",
+        headers={"WWW-Authenticate": "Basic"},
+    )
+
+
+async def require_admin(role: str = Depends(verify_admin_or_dispatcher)) -> str:
+    if role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
+    return role
 
 
 @router.get("/v1/admin/leads", response_model=List[AdminLeadResponse])
@@ -54,7 +75,7 @@ async def list_leads(
     status_filter: Optional[str] = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     session: AsyncSession = Depends(get_db_session),
-    _: None = Depends(verify_admin),
+    role: str = Depends(verify_admin_or_dispatcher),
 ) -> List[AdminLeadResponse]:
     stmt = (
         select(Lead)
@@ -83,7 +104,7 @@ async def update_lead_status(
     lead_id: str,
     request: AdminLeadStatusUpdateRequest,
     session: AsyncSession = Depends(get_db_session),
-    _: None = Depends(verify_admin),
+    role: str = Depends(verify_admin_or_dispatcher),
 ) -> AdminLeadResponse:
     lead = await session.get(Lead, lead_id)
     if lead is None:
@@ -107,7 +128,7 @@ async def update_lead_status(
 async def email_scan(
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
-    _: None = Depends(verify_admin),
+    role: str = Depends(verify_admin_or_dispatcher),
 ) -> dict[str, int]:
     adapter = getattr(http_request.app.state, "email_adapter", None)
     result = await email_service.scan_and_send_reminders(session, adapter)
@@ -119,7 +140,7 @@ async def resend_last_email(
     booking_id: str,
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
-    _: None = Depends(verify_admin),
+    role: str = Depends(verify_admin_or_dispatcher),
 ) -> dict[str, str]:
     booking = await session.get(Booking, booking_id)
     if booking is None:
@@ -163,7 +184,7 @@ async def get_admin_metrics(
     to_ts: datetime | None = Query(default=None, alias="to"),
     format: str | None = Query(default=None, pattern="^(json|csv)$"),
     session: AsyncSession = Depends(get_db_session),
-    _: None = Depends(verify_admin),
+    role: str = Depends(require_admin),
 ):
     start, end = _normalize_range(from_ts, to_ts)
     conversions = await conversion_counts(session, start, end)
@@ -209,15 +230,64 @@ async def get_admin_metrics(
     return response_body
 
 
+@router.post("/v1/admin/pricing/reload", status_code=status.HTTP_202_ACCEPTED)
+async def reload_pricing(role: str = Depends(require_admin)) -> dict[str, str]:
+    load_pricing_config(settings.pricing_config_path)
+    return {"status": "reloaded"}
+
+
+@router.get("/v1/admin/bookings", response_model=list[booking_schemas.AdminBookingListItem])
+async def list_bookings(
+    from_date: date | None = Query(default=None, alias="from"),
+    to_date: date | None = Query(default=None, alias="to"),
+    status_filter: str | None = Query(default=None, alias="status"),
+    session: AsyncSession = Depends(get_db_session),
+    role: str = Depends(verify_admin_or_dispatcher),
+):
+    today = datetime.now(tz=booking_service.LOCAL_TZ).date()
+    start_date = from_date or today
+    end_date = to_date or start_date
+    start_dt = datetime.combine(start_date, time.min, tzinfo=booking_service.LOCAL_TZ).astimezone(timezone.utc)
+    end_dt = datetime.combine(end_date, time.max, tzinfo=booking_service.LOCAL_TZ).astimezone(timezone.utc)
+    if end_dt < start_dt:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid date range")
+
+    stmt = select(Booking, Lead).outerjoin(Lead, Lead.lead_id == Booking.lead_id).where(
+        Booking.starts_at >= start_dt,
+        Booking.starts_at <= end_dt,
+    )
+    if status_filter:
+        stmt = stmt.where(Booking.status == status_filter.upper())
+    stmt = stmt.order_by(Booking.starts_at.asc())
+    result = await session.execute(stmt)
+    return [
+        booking_schemas.AdminBookingListItem(
+            booking_id=booking.booking_id,
+            lead_id=booking.lead_id,
+            starts_at=booking.starts_at,
+            duration_minutes=booking.duration_minutes,
+            status=booking.status,
+            lead_name=lead.name if lead else None,
+            lead_email=lead.email if lead else None,
+        )
+        for booking, lead in result.all()
+    ]
+
+
 @router.post("/v1/admin/bookings/{booking_id}/confirm", response_model=booking_schemas.BookingResponse)
 async def confirm_booking(
     booking_id: str,
     session: AsyncSession = Depends(get_db_session),
-    _: None = Depends(verify_admin),
+    role: str = Depends(verify_admin_or_dispatcher),
 ):
     booking = await session.get(Booking, booking_id)
     if booking is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+
+    try:
+        booking_service.assert_valid_booking_transition(booking.status, "CONFIRMED")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     lead = await session.get(Lead, booking.lead_id) if booking.lead_id else None
     if booking.status != "CONFIRMED":
@@ -247,6 +317,75 @@ async def confirm_booking(
     )
 
 
+@router.post("/v1/admin/bookings/{booking_id}/cancel", response_model=booking_schemas.BookingResponse)
+async def cancel_booking(
+    booking_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    role: str = Depends(verify_admin_or_dispatcher),
+):
+    booking = await session.get(Booking, booking_id)
+    if booking is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+
+    try:
+        booking_service.assert_valid_booking_transition(booking.status, "CANCELLED")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    booking.status = "CANCELLED"
+    await session.commit()
+    await session.refresh(booking)
+    return booking_schemas.BookingResponse(
+        booking_id=booking.booking_id,
+        status=booking.status,
+        starts_at=booking.starts_at,
+        duration_minutes=booking.duration_minutes,
+        actual_duration_minutes=booking.actual_duration_minutes,
+        deposit_required=booking.deposit_required,
+        deposit_cents=booking.deposit_cents,
+        deposit_policy=booking.deposit_policy,
+        deposit_status=booking.deposit_status,
+        checkout_url=None,
+    )
+
+
+@router.post("/v1/admin/bookings/{booking_id}/reschedule", response_model=booking_schemas.BookingResponse)
+async def reschedule_booking(
+    booking_id: str,
+    request: booking_schemas.BookingRescheduleRequest,
+    session: AsyncSession = Depends(get_db_session),
+    role: str = Depends(verify_admin_or_dispatcher),
+):
+    booking = await session.get(Booking, booking_id)
+    if booking is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+    if booking.status in {"DONE", "CANCELLED"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Booking is no longer active")
+
+    try:
+        booking = await booking_service.reschedule_booking(
+            session,
+            booking,
+            request.starts_at,
+            request.duration_minutes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return booking_schemas.BookingResponse(
+        booking_id=booking.booking_id,
+        status=booking.status,
+        starts_at=booking.starts_at,
+        duration_minutes=booking.duration_minutes,
+        actual_duration_minutes=booking.actual_duration_minutes,
+        deposit_required=booking.deposit_required,
+        deposit_cents=booking.deposit_cents,
+        deposit_policy=booking.deposit_policy,
+        deposit_status=booking.deposit_status,
+        checkout_url=None,
+    )
+
+
 @router.post(
     "/v1/admin/bookings/{booking_id}/complete",
     response_model=booking_schemas.BookingResponse,
@@ -255,7 +394,7 @@ async def complete_booking(
     booking_id: str,
     request: booking_schemas.BookingCompletionRequest,
     session: AsyncSession = Depends(get_db_session),
-    _: None = Depends(verify_admin),
+    role: str = Depends(verify_admin_or_dispatcher),
 ):
     try:
         booking = await booking_service.mark_booking_completed(

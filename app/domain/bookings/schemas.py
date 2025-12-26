@@ -54,3 +54,22 @@ class BookingResponse(BaseModel):
 
 class BookingCompletionRequest(BaseModel):
     actual_duration_minutes: int = Field(gt=0)
+
+
+class BookingRescheduleRequest(BaseModel):
+    starts_at: datetime
+    time_on_site_hours: float = Field(gt=0)
+
+    @property
+    def duration_minutes(self) -> int:
+        return round_duration_minutes(self.time_on_site_hours)
+
+
+class AdminBookingListItem(BaseModel):
+    booking_id: str
+    lead_id: str | None
+    starts_at: datetime
+    duration_minutes: int
+    status: str
+    lead_name: str | None = None
+    lead_email: str | None = None

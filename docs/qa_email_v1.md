@@ -5,6 +5,8 @@
 - Email sending mode configured: `EMAIL_MODE` or equivalent adapter wiring available.
 - Application running via `make up` or `docker-compose up`.
 
+> Note: When `EMAIL_MODE=off`, adapters should not emit outbound traffic and must skip creating `email_events` records.
+
 ## Scenarios
 1. **Booking pending email**
    - Create a lead then POST `/v1/bookings` with the lead ID.

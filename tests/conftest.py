@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import sys
 from pathlib import Path
 
@@ -47,9 +48,13 @@ def async_session_maker(test_engine):
 def restore_admin_settings():
     original_username = settings.admin_basic_username
     original_password = settings.admin_basic_password
+    original_dispatcher_username = settings.dispatcher_basic_username
+    original_dispatcher_password = settings.dispatcher_basic_password
     yield
     settings.admin_basic_username = original_username
     settings.admin_basic_password = original_password
+    settings.dispatcher_basic_username = original_dispatcher_username
+    settings.dispatcher_basic_password = original_dispatcher_password
 
 
 @pytest.fixture(autouse=True)
@@ -62,8 +67,12 @@ def clean_database(test_engine):
 
     asyncio.run(truncate_tables())
     rate_limiter = getattr(app.state, "rate_limiter", None)
-    if rate_limiter:
-        asyncio.run(rate_limiter.reset())
+    reset = getattr(rate_limiter, "reset", None) if rate_limiter else None
+    if reset:
+        if inspect.iscoroutinefunction(reset):
+            asyncio.run(reset())
+        else:
+            reset()
     yield
 
 

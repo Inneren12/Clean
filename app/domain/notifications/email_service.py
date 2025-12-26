@@ -83,8 +83,8 @@ async def _try_send_email(
         logger.warning("email_adapter_missing", extra={"extra": context or {}})
         return False
     try:
-        await adapter.send_email(recipient=recipient, subject=subject, body=body)
-        return True
+        delivered = await adapter.send_email(recipient=recipient, subject=subject, body=body)
+        return bool(delivered)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "email_send_failed",

@@ -16,12 +16,13 @@ class EmailAdapter:
     def __init__(self, http_client: httpx.AsyncClient | None = None) -> None:
         self.http_client = http_client
 
-    async def send_email(self, recipient: str, subject: str, body: str) -> None:
+    async def send_email(self, recipient: str, subject: str, body: str) -> bool:
         if settings.email_mode == "off":
-            return
+            return False
         if not recipient:
-            return
+            return False
         await self._send_email(to_email=recipient, subject=subject, body=body)
+        return True
 
     async def send_request_received(self, lead: Any) -> None:
         if settings.email_mode == "off":
@@ -36,8 +37,12 @@ class EmailAdapter:
             "If you have any updates, just reply to this email."
         )
         try:
-            await self.send_email(recipient=lead.email, subject=subject, body=body)
-            logger.info("email_request_received_sent", extra={"extra": {"lead_id": getattr(lead, "lead_id", None)}})
+            delivered = await self.send_email(recipient=lead.email, subject=subject, body=body)
+            if delivered:
+                logger.info(
+                    "email_request_received_sent",
+                    extra={"extra": {"lead_id": getattr(lead, "lead_id", None)}},
+                )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "email_request_received_failed",
