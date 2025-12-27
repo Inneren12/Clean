@@ -31,6 +31,7 @@ class UTMParams(BaseModel):
 
 class LeadStructuredInputs(EstimateRequest):
     model_config = ConfigDict(extra="forbid")
+    awaiting_field: Optional[str] = None
 
     @field_validator("cleaning_type", mode="before")
     @classmethod

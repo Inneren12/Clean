@@ -41,6 +41,22 @@ async def chat_turn(
         )
     await session.commit()
 
+    logger.debug(
+        "chat_turn_state",
+        extra={
+            "extra": {
+                "session_id": request.session_id,
+                "awaiting_field": merged.awaiting_field,
+                "extracted_fields": {
+                    "beds": merged.beds,
+                    "baths": merged.baths,
+                    "cleaning_type": merged.cleaning_type.value
+                    if merged.cleaning_type
+                    else None,
+                },
+            }
+        },
+    )
     logger.info(
         "chat_turn",
         extra={"extra": {"session_id": request.session_id, "intent": response.intent.value}},

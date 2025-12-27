@@ -172,6 +172,8 @@ export default function HomePage() {
     []
   );
 
+  const sessionReady = sessionId.length > 0;
+
   const copyReferralCode = useCallback(async () => {
     if (!issuedReferralCode || typeof navigator === 'undefined' || !navigator.clipboard) {
       return;
@@ -287,7 +289,7 @@ export default function HomePage() {
   const submitMessage = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed || !sessionId) {
+      if (!trimmed || !sessionReady) {
         return;
       }
       setMessages((prev) => [...prev, { role: 'user', text: trimmed }]);
@@ -334,7 +336,7 @@ export default function HomePage() {
         setLoading(false);
       }
     },
-    [apiBaseUrl, sessionId]
+    [apiBaseUrl, sessionId, sessionReady]
   );
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
@@ -640,9 +642,9 @@ export default function HomePage() {
                   placeholder="Type your message..."
                   value={messageInput}
                   onChange={(event) => setMessageInput(event.target.value)}
-                  disabled={loading}
+                  disabled={loading || !sessionReady}
                 />
-                <button type="submit" disabled={loading || !messageInput.trim()}>
+                <button type="submit" disabled={loading || !sessionReady || !messageInput.trim()}>
                   {loading ? 'Sending...' : 'Send'}
                 </button>
               </form>

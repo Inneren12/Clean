@@ -18,6 +18,7 @@ class Intent(str, Enum):
 class ParsedFields(BaseModel):
     beds: Optional[conint(ge=0, le=10)] = None
     baths: Optional[float] = None
+    awaiting_field: Optional[str] = None
     cleaning_type: Optional[CleaningType] = None
     heavy_grease: Optional[bool] = None
     multi_floor: Optional[bool] = None

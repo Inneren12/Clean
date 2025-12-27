@@ -77,3 +77,19 @@ def test_dialogue_eight():
         "2 bed 1 bath standard, oven and fridge",
     ])
     assert response.estimate is not None
+
+
+def test_bathroom_follow_up_from_context():
+    state = None
+    request = ChatTurnRequest(session_id="context-test", message="Need a deep clean 4 bed")
+    first_response, state = handle_turn(request, state, CONFIG)
+
+    assert state.awaiting_field == "baths"
+    assert "bath" in (first_response.proposed_questions[0].lower())
+
+    next_request = ChatTurnRequest(session_id="context-test", message="2")
+    second_response, state = handle_turn(next_request, state, CONFIG)
+
+    assert state.baths == 2
+    assert state.awaiting_field is None
+    assert "baths" not in second_response.missing_fields
