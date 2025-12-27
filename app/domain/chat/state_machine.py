@@ -1,3 +1,4 @@
+import re
 from typing import Dict, List, Optional, Tuple
 
 from app.domain.chat.models import ChatTurnResponse, ChatTurnRequest, ParsedFields, Intent
@@ -42,6 +43,8 @@ def _merge_fields(existing: ParsedFields, incoming: ParsedFields) -> ParsedField
                     if add_on_value:
                         setattr(add_ons, add_on_field, add_on_value)
             data["add_ons"] = add_ons
+        elif field == "awaiting_field":
+            data["awaiting_field"] = value
         else:
             if value is not None:
                 data[field] = value
@@ -68,6 +71,30 @@ def _to_estimate_request(fields: ParsedFields) -> EstimateRequest:
     )
 
 
+_NUMERIC_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*$")
+
+
+def _capture_awaiting_field(
+    message: str, state: ParsedFields, parsed: ParsedFields
+) -> ParsedFields:
+    awaiting = state.awaiting_field
+    if not awaiting:
+        return parsed
+
+    match = _NUMERIC_RE.match(message)
+    if not match:
+        return parsed
+
+    numeric_value = match.group(1)
+    if awaiting == "baths" and parsed.baths is None:
+        return parsed.model_copy(update={"baths": float(numeric_value), "awaiting_field": None})
+
+    if awaiting == "beds" and parsed.beds is None:
+        return parsed.model_copy(update={"beds": int(float(numeric_value)), "awaiting_field": None})
+
+    return parsed
+
+
 def handle_turn(
     request: ChatTurnRequest,
     session_state: Optional[ParsedFields],
@@ -76,6 +103,7 @@ def handle_turn(
     intent = detect_intent(request.message)
     parsed, confidence, _ = parse_message(request.message)
     state = session_state or ParsedFields()
+    parsed = _capture_awaiting_field(request.message, state, parsed)
     merged = _merge_fields(state, parsed)
     if merged.cleaning_type is None:
         merged = merged.model_copy(update={"cleaning_type": CleaningType.standard})
@@ -103,6 +131,9 @@ def handle_turn(
     estimate_response = None
     if not missing:
         estimate_response = estimate(_to_estimate_request(merged), pricing_config)
+
+    awaiting_field = missing[0] if missing else None
+    merged = merged.model_copy(update={"awaiting_field": awaiting_field})
 
     reply_text, proposed_questions = build_reply(merged, missing, estimate_response)
 
