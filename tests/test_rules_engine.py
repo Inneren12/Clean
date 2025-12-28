@@ -11,6 +11,20 @@ def test_upsell_rules_apply_keywords_and_reasons():
     assert any("windows" in reason.lower() for reason in result.reasons)
 
 
+def test_upsell_reasons_only_for_new_extras():
+    engine = RulesEngine()
+
+    first = engine.apply_upsells("Windows windows", {"extras": []})
+    assert first.reasons == [
+        "Added windows for glass and sill detailing",
+    ]
+
+    follow_up = engine.apply_upsells("Windows again please", first.filled_fields)
+
+    assert follow_up.added == []
+    assert follow_up.reasons == []
+
+
 def test_checklist_fast_path_limits_steps():
     engine = RulesEngine()
     filled = {"service_type": "deep_clean", "beds": 2, "baths": 2}
