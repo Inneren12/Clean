@@ -1042,6 +1042,7 @@ async def admin_invoice_list_ui(
     total_pages = max(math.ceil(invoice_list.total / invoice_list.page_size), 1)
     prev_page = invoice_list.page - 1 if invoice_list.page > 1 else None
     next_page = invoice_list.page + 1 if invoice_list.page < total_pages else None
+    status_ui = status_filter.upper() if status_filter else None
     base_params = {
         "status": status_filter,
         "customer_id": customer_id,
@@ -1064,7 +1065,7 @@ async def admin_invoice_list_ui(
     pagination = "".join(pagination_parts)
 
     status_options = "".join(
-        f'<option value="{html.escape(status)}" {"selected" if status_filter == status else ""}>{html.escape(status.title())}</option>'
+        f'<option value="{html.escape(status)}" {"selected" if status_ui == status else ""}>{html.escape(status.title())}</option>'
         for status in sorted(invoice_statuses.INVOICE_STATUSES)
     )
 
@@ -1370,16 +1371,26 @@ async def admin_invoice_detail_ui(
           slot.appendChild(copy);
         }}
 
+
         async function sendInvoice() {{
           const button = document.getElementById('send-invoice-btn');
           const message = document.getElementById('action-message');
           button.disabled = true;
           message.textContent = 'Sending…';
           try {{
-            const response = await fetch(`/v1/admin/invoices/${{invoiceId}}/send`, {{ method: 'POST' }});
-            const data = await response.json();
+            const response = await fetch(`/v1/admin/invoices/${{invoiceId}}/send`, {{ method: 'POST', credentials: 'same-origin' }});
+            let data;
+            let errorDetail;
+            try {{
+              data = await response.json();
+            }} catch (_) {{
+              errorDetail = await response.text();
+            }}
             if (!response.ok) {{
-              throw new Error(data.detail || response.statusText || 'Send failed');
+              throw new Error((data && data.detail) || errorDetail || response.statusText || 'Send failed');
+            }}
+            if (!data) {{
+              throw new Error(errorDetail || 'Send failed');
             }}
             applyInvoiceUpdate(data.invoice);
             showPublicLink(data.public_link);
@@ -1413,6 +1424,7 @@ async def admin_invoice_detail_ui(
           tbody.appendChild(row);
         }}
 
+
         async function recordPayment(event) {{
           event.preventDefault();
           const form = event.target;
@@ -1431,12 +1443,22 @@ async def admin_invoice_detail_ui(
           try {{
             const response = await fetch(`/v1/admin/invoices/${{invoiceId}}/record-payment`, {{
               method: 'POST',
+              credentials: 'same-origin',
               headers: {{ 'Content-Type': 'application/json' }},
               body: JSON.stringify(payload),
             }});
-            const data = await response.json();
+            let data;
+            let errorDetail;
+            try {{
+              data = await response.json();
+            }} catch (_) {{
+              errorDetail = await response.text();
+            }}
             if (!response.ok) {{
-              throw new Error(data.detail || response.statusText || 'Payment failed');
+              throw new Error((data && data.detail) || errorDetail || response.statusText || 'Payment failed');
+            }}
+            if (!data) {{
+              throw new Error(errorDetail || 'Payment failed');
             }}
             applyInvoiceUpdate(data.invoice);
             appendPaymentRow(data.payment);
@@ -1446,6 +1468,7 @@ async def admin_invoice_detail_ui(
             message.textContent = `Payment failed: ${{err.message}}`;
           }}
         }}
+
       </script>
     """
 
@@ -1484,7 +1507,7 @@ def _copy_button(label: str, value: str, *, small: bool = True) -> str:
     size_class = " small" if small else ""
     return (
         """
-        <button class="btn secondary{size}" data-copy="{value}" onclick="navigator.clipboard.writeText(this.dataset.copy)">{label}</button>
+        <button type="button" class="btn secondary{size}" data-copy="{value}" onclick="navigator.clipboard.writeText(this.dataset.copy)">{label}</button>
         """
         .replace("{size}", size_class)
         .format(label=html.escape(label), value=html.escape(value, quote=True))
