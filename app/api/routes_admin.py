@@ -18,6 +18,9 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_bot_store
+from app.domain.addons import schemas as addon_schemas
+from app.domain.addons import service as addon_service
+from app.domain.addons.db_models import AddonDefinition
 from app.domain.analytics import schemas as analytics_schemas
 from app.domain.analytics.service import (
     EventType,
@@ -1553,6 +1556,69 @@ def _status_badge(value: str) -> str:
     return f'<span class="badge badge-status status-{normalized}">{html.escape(value)}</span>'
 
 
+def _addon_response(model: addon_schemas.AddonDefinitionResponse | AddonDefinition) -> addon_schemas.AddonDefinitionResponse:
+    if isinstance(model, addon_schemas.AddonDefinitionResponse):
+        return model
+    return addon_schemas.AddonDefinitionResponse(
+        addon_id=model.addon_id,
+        code=model.code,
+        name=model.name,
+        price_cents=model.price_cents,
+        default_minutes=model.default_minutes,
+        is_active=model.is_active,
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+    )
+
+
+@router.get(
+    "/v1/admin/addons",
+    response_model=list[addon_schemas.AddonDefinitionResponse],
+)
+async def list_addons(
+    include_inactive: bool = True,
+    session: AsyncSession = Depends(get_db_session),
+    _admin: AdminIdentity = Depends(require_admin),
+) -> list[addon_schemas.AddonDefinitionResponse]:
+    addons = await addon_service.list_definitions(session, include_inactive=include_inactive)
+    return [_addon_response(addon) for addon in addons]
+
+
+@router.post(
+    "/v1/admin/addons",
+    response_model=addon_schemas.AddonDefinitionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_addon(
+    payload: addon_schemas.AddonDefinitionCreate,
+    session: AsyncSession = Depends(get_db_session),
+    _admin: AdminIdentity = Depends(require_admin),
+) -> addon_schemas.AddonDefinitionResponse:
+    addon = await addon_service.create_definition(session, payload)
+    await session.commit()
+    await session.refresh(addon)
+    return _addon_response(addon)
+
+
+@router.patch(
+    "/v1/admin/addons/{addon_id}",
+    response_model=addon_schemas.AddonDefinitionResponse,
+)
+async def update_addon(
+    addon_id: int,
+    payload: addon_schemas.AddonDefinitionUpdate,
+    session: AsyncSession = Depends(get_db_session),
+    _admin: AdminIdentity = Depends(require_admin),
+) -> addon_schemas.AddonDefinitionResponse:
+    try:
+        addon = await addon_service.update_definition(session, addon_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    await session.commit()
+    await session.refresh(addon)
+    return _addon_response(addon)
+
+
 @router.get(
     "/v1/admin/reasons",
     response_model=reason_schemas.ReasonListResponse,
@@ -1607,6 +1673,20 @@ async def admin_reason_report(
     return reason_schemas.ReasonListResponse(
         reasons=[reason_schemas.ReasonResponse.from_model(reason) for reason in reasons]
     )
+
+
+@router.get(
+    "/v1/admin/reports/addons",
+    response_model=addon_schemas.AddonReportResponse,
+)
+async def admin_addon_report(
+    start: datetime | None = Query(None, alias="from"),
+    end: datetime | None = Query(None, alias="to"),
+    session: AsyncSession = Depends(get_db_session),
+    _admin: AdminIdentity = Depends(require_admin),
+) -> addon_schemas.AddonReportResponse:
+    report = await addon_service.addon_report(session, start=start, end=end)
+    return addon_schemas.AddonReportResponse(addons=report)
 
 
 def _copy_button(label: str, value: str, *, small: bool = True) -> str:
@@ -1719,10 +1799,11 @@ async def create_invoice_from_order(
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
 
+    addon_items = await addon_service.addon_invoice_items_for_order(session, order_id)
+    all_items = [*request.items, *addon_items]
+
     expected_subtotal = reason_service.estimate_subtotal_from_lead(order.lead)
-    requested_subtotal = sum(
-        item.qty * item.unit_price_cents for item in request.items
-    )
+    requested_subtotal = sum(item.qty * item.unit_price_cents for item in all_items)
     if (
         expected_subtotal is not None
         and requested_subtotal != expected_subtotal
@@ -1739,7 +1820,7 @@ async def create_invoice_from_order(
         invoice = await invoice_service.create_invoice_from_order(
             session=session,
             order=order,
-            items=request.items,
+            items=all_items,
             issue_date=request.issue_date,
             due_date=request.due_date,
             currency=request.currency,

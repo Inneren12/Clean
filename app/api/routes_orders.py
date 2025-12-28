@@ -5,6 +5,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.routes_admin import AdminIdentity, require_admin, verify_admin_or_dispatcher
+from app.domain.addons import schemas as addon_schemas
+from app.domain.addons import service as addon_service
 from app.dependencies import get_db_session
 from app.domain.bookings import photos_service
 from app.domain.bookings import schemas as booking_schemas
@@ -13,6 +15,59 @@ from app.domain.reason_logs import service as reason_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _order_addon_response(model) -> addon_schemas.OrderAddonResponse:
+    definition = getattr(model, "definition", None)
+    return addon_schemas.OrderAddonResponse(
+        order_addon_id=model.order_addon_id,
+        order_id=model.order_id,
+        addon_id=model.addon_id,
+        code=getattr(definition, "code", str(model.addon_id)),
+        name=getattr(definition, "name", f"Addon {model.addon_id}"),
+        qty=model.qty,
+        unit_price_cents=model.unit_price_cents_snapshot,
+        minutes=model.minutes_snapshot,
+        created_at=model.created_at,
+    )
+
+
+@router.patch(
+    "/v1/orders/{order_id}/addons",
+    response_model=list[addon_schemas.OrderAddonResponse],
+)
+async def update_order_addons(
+    order_id: str,
+    payload: addon_schemas.OrderAddonUpdateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+) -> list[addon_schemas.OrderAddonResponse]:
+    try:
+        await addon_service.set_order_addons(session, order_id, payload.addons)
+    except ValueError as exc:
+        status_code = status.HTTP_404_NOT_FOUND if "not found" in str(exc).lower() else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+    await session.commit()
+    addons = await addon_service.list_order_addons(session, order_id)
+    return [_order_addon_response(addon) for addon in addons]
+
+
+@router.get(
+    "/v1/orders/{order_id}/addons",
+    response_model=list[addon_schemas.OrderAddonResponse],
+)
+async def list_order_addons(
+    order_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+) -> list[addon_schemas.OrderAddonResponse]:
+    addons = await addon_service.list_order_addons(session, order_id)
+    if not addons:
+        order = await photos_service.fetch_order(session, order_id)
+        if order is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+    return [_order_addon_response(addon) for addon in addons]
 
 
 @router.post(

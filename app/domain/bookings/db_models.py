@@ -80,6 +80,11 @@ class Booking(Base):
         back_populates="order",
         cascade="all, delete-orphan",
     )
+    order_addons: Mapped[list["OrderAddon"]] = relationship(
+        "OrderAddon",
+        back_populates="order",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         Index("ix_bookings_starts_status", "starts_at", "status"),

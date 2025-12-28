@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.bookings import service as booking_service
 from app.domain.bookings.db_models import Booking
 from app.domain.clients.db_models import ClientUser
+from app.domain.addons import service as addon_service
 from app.domain.invoices.schemas import InvoiceItemCreate
 from app.domain.invoices.service import create_invoice_from_order
 from app.domain.subscriptions import statuses
@@ -164,7 +165,10 @@ async def generate_due_orders(
             qty=1,
             unit_price_cents=subscription.base_price,
         )
-        await create_invoice_from_order(session, booking, [invoice_item])
+        addon_items = await addon_service.addon_invoice_items_for_order(
+            session, booking.booking_id
+        )
+        await create_invoice_from_order(session, booking, [invoice_item, *addon_items])
 
         await _notify_client(session, email_adapter, subscription, booking)
         subscription.next_run_at = _start_of_day_utc(_next_date(subscription, scheduled_date))
