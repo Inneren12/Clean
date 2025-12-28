@@ -65,9 +65,30 @@ def test_intents_use_enums_and_messages_list(client):
     session_state = session_response.json()["state"]
     assert session_state["currentIntent"] == "faq"
 
-    messages_response = client.get("/api/bot/messages", params={"conversation_id": conversation_id})
+    messages_response = client.get("/api/bot/messages", params={"conversationId": conversation_id})
     assert messages_response.status_code == 200
     messages = messages_response.json()
     assert len(messages) == 2
     assert messages[0]["role"] == "user"
     assert messages[1]["role"] == "bot"
+
+
+def test_list_messages_accepts_legacy_conversation_id(client):
+    conversation_id = client.post("/api/bot/session", json={"channel": "web"}).json()["conversationId"]
+    response = client.get("/api/bot/messages", params={"conversation_id": conversation_id})
+    assert response.status_code == 200
+
+
+def test_rejects_unknown_request_fields(client):
+    bad_session = client.post("/api/bot/session", json={"channel": "web", "unknown": "x"})
+    assert bad_session.status_code == 422
+
+    conversation_id = client.post("/api/bot/session", json={"channel": "web"}).json()["conversationId"]
+    bad_message = client.post(
+        "/api/bot/message",
+        json={"conversationId": conversation_id, "text": "hi", "extra": "nope"},
+    )
+    assert bad_message.status_code == 422
+
+    bad_lead = client.post("/api/leads", json={"serviceType": "deep_clean", "unknown": "x"})
+    assert bad_lead.status_code == 422
