@@ -84,7 +84,7 @@ def _build_choices_for_collection(
             items=[
                 Choice(id="standard", label="Standard clean", value="standard"),
                 Choice(id="deep", label="Deep clean", value="deep"),
-                Choice(id="moveout", label="Move-out clean", value="moveout"),
+                Choice(id="move_out", label="Move-out clean", value="move_out_empty"),
             ],
             multi_select=False,
             selection_type="chip",
@@ -137,7 +137,8 @@ def _build_summary_patch(
         cleaning_type_labels = {
             CleaningType.standard: "Standard",
             CleaningType.deep: "Deep",
-            CleaningType.moveout: "Move-out",
+            CleaningType.move_out_empty: "Move-out",
+            CleaningType.move_in_empty: "Move-in",
         }
         summary_fields.append(
             SummaryField(
@@ -149,16 +150,16 @@ def _build_summary_patch(
                 options=[
                     Choice(id="standard", label="Standard", value="standard"),
                     Choice(id="deep", label="Deep", value="deep"),
-                    Choice(id="moveout", label="Move-out", value="moveout"),
+                    Choice(id="move_out", label="Move-out", value="move_out_empty"),
                 ],
             )
         )
 
     # Add-ons
-    if fields.add_ons.windows:
+    if fields.add_ons.windows_up_to_5:
         summary_fields.append(
             SummaryField(
-                key="windows",
+                key="windows_up_to_5",
                 label="Windows",
                 value=True,
                 editable=True,
@@ -227,14 +228,14 @@ def _build_step_info(stage: FlowStage, missing_fields: List[str]) -> StepInfo:
     )
 
 
-def _build_price_explanation(estimate: EstimateResponse) -> str:
+def _build_price_explanation(estimate: EstimateResponse, fields: ParsedFields) -> str:
     """Build 'Why this price?' explanation with 2-3 bullet reasons."""
     breakdown = estimate.breakdown
     reasons = []
 
     # Reason 1: Size/Type
-    size_msg = f"{breakdown.beds}BR/{breakdown.baths}BA"
-    type_msg = breakdown.cleaning_type.value.replace("_", "-")
+    size_msg = f"{fields.beds}BR/{fields.baths}BA"
+    type_msg = fields.cleaning_type.value.replace("_", "-") if fields.cleaning_type else "standard"
     reasons.append(f"• {size_msg} {type_msg} clean")
 
     # Reason 2: Depth/Complexity
@@ -307,7 +308,7 @@ def orchestrate_flow(
     # Check for user requesting price explanation
     if "why" in user_message.lower() and "price" in user_message.lower():
         if estimate:
-            explanation = _build_price_explanation(estimate)
+            explanation = _build_price_explanation(estimate, fields)
             reply_text = f"Here's why:\n{explanation}"
             choices = _build_choices_for_price()
             stage = FlowStage.PRICE
@@ -354,7 +355,9 @@ def orchestrate_flow(
             show_progress=True,
             minimize_text=True,
         )
-        return reply_text, [], choices, step_info, summary_patch, ui_hint
+        # Maintain backward compatibility: include the question in proposed_questions
+        proposed_questions = [reply_text] if reply_text else []
+        return reply_text, proposed_questions, choices, step_info, summary_patch, ui_hint
 
     # PRICE stage
     if stage == FlowStage.PRICE and estimate:
