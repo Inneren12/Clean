@@ -96,16 +96,18 @@ async def post_message(
     await store.append_message(request.conversation_id, bot_payload)
 
     request_id = getattr(http_request.state, "request_id", None) if http_request else None
+    estimate = fsm_reply.estimate
     logger.info(
         "intent_detected",
-            extra={
-                "conversation_id": request.conversation_id,
-                "intent": nlu_result.intent.value,
-                "confidence": nlu_result.confidence,
-                "fsm_step": fsm_step_value,
-                "reasons": nlu_result.reasons,
-                "entities": nlu_result.entities.model_dump(exclude_none=True, by_alias=True),
-                "request_id": request_id,
+        extra={
+            "request_id": request_id,
+            "conversation_id": request.conversation_id,
+            "intent": nlu_result.intent.value,
+            "confidence": nlu_result.confidence,
+            "fsm_step": fsm_step_value,
+            "estimate_min": estimate.price_range_min if estimate else None,
+            "estimate_max": estimate.price_range_max if estimate else None,
+            "estimate_duration": estimate.duration_minutes if estimate else None,
         },
     )
 
