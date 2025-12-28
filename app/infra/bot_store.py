@@ -24,6 +24,8 @@ class BotStore(Protocol):
 
     async def get_conversation(self, conversation_id: str) -> Optional[ConversationRecord]: ...
 
+    async def list_conversations(self) -> List[ConversationRecord]: ...
+
     async def update_state(
         self,
         conversation_id: str,
@@ -72,6 +74,10 @@ class InMemoryBotStore(BotStore):
     async def get_conversation(self, conversation_id: str) -> Optional[ConversationRecord]:
         async with self._lock:
             return self._conversations.get(conversation_id)
+
+    async def list_conversations(self) -> List[ConversationRecord]:
+        async with self._lock:
+            return list(self._conversations.values())
 
     async def update_state(
         self,
