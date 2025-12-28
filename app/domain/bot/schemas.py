@@ -1,9 +1,19 @@
 from __future__ import annotations
-
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+def to_camel(string: str) -> str:
+    parts = string.split("_")
+    return parts[0] + "".join(word.capitalize() for word in parts[1:])
+
+
+class BotBaseModel(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True, alias_generator=to_camel, extra="ignore", use_enum_values=True
+    )
 
 
 class ConversationStatus(str, Enum):
@@ -18,14 +28,28 @@ class MessageRole(str, Enum):
     system = "system"
 
 
-class ConversationState(BaseModel):
-    current_intent: Optional[str] = None
-    fsm_step: Optional[str] = None
+class Intent(str, Enum):
+    quote = "quote"
+    book = "book"
+    complaint = "complaint"
+    faq = "faq"
+
+
+class FsmStep(str, Enum):
+    collecting_requirements = "collecting_requirements"
+    handoff_check = "handoff_check"
+    scheduling = "scheduling"
+    routing = "routing"
+
+
+class ConversationState(BotBaseModel):
+    current_intent: Optional[Intent] = None
+    fsm_step: Optional[FsmStep] = None
     filled_fields: Dict[str, Any] = Field(default_factory=dict)
     confidence: Optional[float] = None
 
 
-class ConversationCreate(BaseModel):
+class ConversationCreate(BotBaseModel):
     channel: str
     user_id: Optional[str] = None
     anon_id: Optional[str] = None
@@ -39,10 +63,10 @@ class ConversationRecord(ConversationCreate):
     updated_at: float
 
 
-class MessagePayload(BaseModel):
+class MessagePayload(BotBaseModel):
     role: MessageRole
     text: str
-    intent: Optional[str] = None
+    intent: Optional[Intent] = None
     confidence: Optional[float] = None
     extracted_entities: Dict[str, Any] = Field(default_factory=dict)
 
@@ -53,38 +77,38 @@ class MessageRecord(MessagePayload):
     created_at: float
 
 
-class SessionCreateRequest(BaseModel):
+class SessionCreateRequest(BotBaseModel):
     channel: str = "web"
     user_id: Optional[str] = None
     anon_id: Optional[str] = None
 
 
-class SessionCreateResponse(BaseModel):
+class SessionCreateResponse(BotBaseModel):
     conversation_id: str
     status: ConversationStatus
     state: ConversationState
 
 
-class MessageRequest(BaseModel):
+class MessageRequest(BotBaseModel):
     conversation_id: str
     text: str
     user_id: Optional[str] = None
     anon_id: Optional[str] = None
 
 
-class BotReply(BaseModel):
+class BotReply(BotBaseModel):
     text: str
-    intent: str
+    intent: Intent
     confidence: float
     state: ConversationState
 
 
-class MessageResponse(BaseModel):
+class MessageResponse(BotBaseModel):
     conversation_id: str
     reply: BotReply
 
 
-class LeadPayload(BaseModel):
+class LeadPayload(BotBaseModel):
     service_type: Optional[str] = None
     property_type: Optional[str] = None
     size: Optional[str] = None
@@ -104,7 +128,7 @@ class LeadRecord(LeadPayload):
     created_at: float
 
 
-class CasePayload(BaseModel):
+class CasePayload(BotBaseModel):
     reason: str
     summary: str
     payload: Dict[str, Any] = Field(default_factory=dict)

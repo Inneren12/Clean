@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.dependencies import get_bot_store
 from app.domain.bot.schemas import (
@@ -8,9 +8,13 @@ from app.domain.bot.schemas import (
     CasePayload,
     CaseRecord,
     ConversationCreate,
+    ConversationRecord,
     ConversationState,
+    FsmStep,
+    Intent,
     LeadPayload,
     LeadRecord,
+    MessageRecord,
     MessagePayload,
     MessageRequest,
     MessageResponse,
@@ -25,15 +29,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 
-def _detect_intent(text: str) -> tuple[str, float, str]:
+def _detect_intent(text: str) -> tuple[Intent, float, FsmStep]:
     normalized = text.lower()
     if "price" in normalized or "quote" in normalized:
-        return "quote", 0.82, "collecting_requirements"
+        return Intent.quote, 0.82, FsmStep.collecting_requirements
     if "complaint" in normalized or "issue" in normalized:
-        return "complaint", 0.72, "handoff_check"
+        return Intent.complaint, 0.72, FsmStep.handoff_check
     if "book" in normalized:
-        return "book", 0.78, "scheduling"
-    return "faq", 0.55, "routing"
+        return Intent.book, 0.78, FsmStep.scheduling
+    return Intent.faq, 0.55, FsmStep.routing
 
 
 @router.post("/bot/session", response_model=SessionCreateResponse, status_code=201)
@@ -55,7 +59,7 @@ async def create_session(request: SessionCreateRequest, store: BotStore = Depend
 
 @router.post("/bot/message", response_model=MessageResponse)
 async def post_message(
-    request: MessageRequest, store: BotStore = Depends(get_bot_store)
+    request: MessageRequest, http_request: Request, store: BotStore = Depends(get_bot_store)
 ) -> MessageResponse:
     conversation = await store.get_conversation(request.conversation_id)
     if conversation is None:
@@ -89,12 +93,11 @@ async def post_message(
     logger.info(
         "intent_detected",
         extra={
-            "extra": {
-                "conversation_id": request.conversation_id,
-                "intent": intent,
-                "confidence": confidence,
-                "fsm_step": fsm_step,
-            }
+            "conversation_id": request.conversation_id,
+            "intent": intent.value,
+            "confidence": confidence,
+            "fsm_step": fsm_step.value,
+            "request_id": getattr(http_request.state, "request_id", None) if http_request else None,
         },
     )
 
@@ -104,28 +107,53 @@ async def post_message(
     )
 
 
+@router.get("/bot/messages", response_model=list[MessageRecord])
+async def list_messages(conversation_id: str, store: BotStore = Depends(get_bot_store)) -> list[MessageRecord]:
+    conversation = await store.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return await store.list_messages(conversation_id)
+
+
+@router.get("/bot/session/{conversation_id}", response_model=ConversationRecord)
+async def get_session(conversation_id: str, store: BotStore = Depends(get_bot_store)) -> ConversationRecord:
+    conversation = await store.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conversation
+
+
 @router.post("/leads", response_model=LeadRecord, status_code=201)
 async def create_lead_from_conversation(
-    payload: LeadPayload, store: BotStore = Depends(get_bot_store)
+    payload: LeadPayload, http_request: Request, store: BotStore = Depends(get_bot_store)
 ) -> LeadRecord:
     if payload.source_conversation_id:
         conversation = await store.get_conversation(payload.source_conversation_id)
         if conversation is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
-        payload = LeadPayload(**{**conversation.state.filled_fields, **payload.model_dump(exclude_none=True)})
-        payload.source_conversation_id = conversation.conversation_id
+        allowed_fields = set(LeadPayload.model_fields.keys())
+        conversation_fields = {
+            key: value for key, value in conversation.state.filled_fields.items() if key in allowed_fields
+        }
+        merged_payload = {**conversation_fields, **payload.model_dump(exclude_none=True)}
+        merged_payload["source_conversation_id"] = conversation.conversation_id
+        payload = LeadPayload(**merged_payload)
 
     lead = await store.create_lead(payload)
     logger.info(
         "lead_created",
-        extra={"extra": {"lead_id": lead.lead_id, "conversation_id": lead.source_conversation_id}},
+        extra={
+            "lead_id": lead.lead_id,
+            "conversation_id": lead.source_conversation_id,
+            "request_id": getattr(http_request.state, "request_id", None) if http_request else None,
+        },
     )
     return lead
 
 
 @router.post("/cases", response_model=CaseRecord, status_code=201)
 async def create_case(
-    payload: CasePayload, store: BotStore = Depends(get_bot_store)
+    payload: CasePayload, http_request: Request, store: BotStore = Depends(get_bot_store)
 ) -> CaseRecord:
     if payload.source_conversation_id:
         conversation = await store.get_conversation(payload.source_conversation_id)
@@ -135,11 +163,10 @@ async def create_case(
     logger.info(
         "handoff_case",
         extra={
-            "extra": {
-                "case_id": case.case_id,
-                "conversation_id": case.source_conversation_id,
-                "reason": case.reason,
-            }
+            "case_id": case.case_id,
+            "conversation_id": case.source_conversation_id,
+            "reason": case.reason,
+            "request_id": getattr(http_request.state, "request_id", None) if http_request else None,
         },
     )
     return case
