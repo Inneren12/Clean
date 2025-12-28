@@ -24,3 +24,17 @@ def test_prep_instructions_show_for_move_out(client):
 
     assert "prep" in reply["reply"]["text"].lower()
     assert reply["reply"]["progress"]["total"] <= 5
+
+
+def test_upsell_reasons_do_not_repeat_across_turns(client):
+    conversation_id = client.post("/api/bot/session", json={"channel": "web"}).json()["conversationId"]
+
+    first = _send_message(client, conversation_id, "Need cleaning with windows")
+    first_upsell_count = first["reply"]["text"].count("Upsell:")
+
+    follow_up = _send_message(client, conversation_id, "Also windows, please add windows")
+
+    follow_up_count = follow_up["reply"]["text"].count("Upsell:")
+    assert follow_up_count <= 1
+    assert follow_up_count <= first_upsell_count or follow_up_count == 0
+    assert "windows" in set(follow_up["reply"].get("summary", {}).get("extras", []))

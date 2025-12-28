@@ -39,13 +39,16 @@ class RulesEngine:
         extras = set(filled_fields.get("extras", []) or [])
         added: List[str] = []
         reasons: List[str] = []
+        seen_reasons = set()
 
         for rule in self.upsell_rules.values():
             if any(_has_keyword(normalized, keyword) for keyword in rule.keywords):
                 if rule.extra not in extras:
                     extras.add(rule.extra)
                     added.append(rule.extra)
-                reasons.append(rule.reason)
+                    if rule.reason not in seen_reasons:
+                        seen_reasons.add(rule.reason)
+                        reasons.append(rule.reason)
 
         updated_fields = dict(filled_fields)
         if added:

@@ -77,6 +77,11 @@ GOLDEN_MESSAGES = [
         "entities": {"service_type": "move_out", "time_window_label": "morning"},
     },
     {
+        "text": "Move-out cleaning next week",
+        "intent": Intent.booking,
+        "entities": {"service_type": "move_out"},
+    },
+    {
         "text": "Cost for 3 br 2 bath townhome",
         "intent": Intent.price,
         "entities": {"beds": 3, "baths": 2},
@@ -89,6 +94,11 @@ GOLDEN_MESSAGES = [
         "text": "Change the time to after 8pm",
         "intent": Intent.reschedule,
         "entities": {"time_window_start": "20:00"},
+    },
+    {
+        "text": "Need to reschedule my move-out cleaning",
+        "intent": Intent.reschedule,
+        "entities": {"service_type": "move_out"},
     },
     {
         "text": "What services include windows and carpet cleaning?",

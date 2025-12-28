@@ -88,6 +88,17 @@ INTENT_KEYWORDS: Dict[Intent, List[str]] = {
 }
 
 CANCEL_LEXEMES = ["cancel", "call off", "отменить"]
+RESCHEDULE_LEXEMES = [
+    "reschedule",
+    "change time",
+    "change the time",
+    "move my booking",
+    "move the booking",
+    "move my appointment",
+    "move the appointment",
+    "перенести",
+    "сменить время",
+]
 
 
 INTENT_PATTERNS: Dict[Intent, List[re.Pattern[str]]] = {
@@ -420,6 +431,8 @@ def analyze_message(text: str) -> IntentResult:
     intent, confidence, intent_reasons = _score_intent(normalized)
     entities, entity_reasons = extract_entities(text)
 
+    has_explicit_reschedule = any(lexeme in normalized for lexeme in RESCHEDULE_LEXEMES)
+
     if intent == Intent.faq and entities.service_type and (
         entities.beds
         or entities.baths
@@ -432,10 +445,10 @@ def analyze_message(text: str) -> IntentResult:
         confidence = max(confidence, 0.55)
         intent_reasons.append("fast-path booking: service and size detected")
 
-    if intent == Intent.reschedule and entities.service_type == "move_out":
+    if intent == Intent.reschedule and entities.service_type == "move_out" and not has_explicit_reschedule:
         intent = Intent.booking
         confidence = max(confidence, 0.5)
-        intent_reasons.append("booking: move-out request")
+        intent_reasons.append("booking: move-out request (no explicit reschedule lexeme)")
 
     if any(lexeme in normalized for lexeme in CANCEL_LEXEMES):
         if intent != Intent.cancel:

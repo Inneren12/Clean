@@ -207,7 +207,7 @@ async def post_message(
             intent_result=nlu_result,
         )
         await store.create_case(case_payload)
-        metrics.record(decision.reason or HandoffReason.no_handoff, updated_state.fsm_step)
+        metrics.record(decision.reason or HandoffReason.human_requested, updated_state.fsm_step)
 
     request_id = getattr(http_request.state, "request_id", None) if http_request else None
     estimate = fsm_reply.estimate

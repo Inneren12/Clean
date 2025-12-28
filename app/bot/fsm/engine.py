@@ -275,7 +275,7 @@ class BotFsm:
             active_intent = self.state.current_intent
             current_step = self.state.fsm_step or FsmStep.routing
             steps = self._steps_for_intent(active_intent, filled, fast_path)
-            question, quick_replies = _question_for_step(current_step) if current_step else ("", [])
+            quick_replies = _question_for_step(current_step)[1] if current_step else []
 
             self.state = ConversationState(
                 current_intent=active_intent,
@@ -315,9 +315,14 @@ class BotFsm:
             )
             if estimate.explanation:
                 explanation = list(estimate.explanation)
-                if upsell.reasons:
-                    explanation.extend([f"Upsell: {reason}" for reason in upsell.reasons])
-                text_parts.append("; ".join(explanation[:3]))
+                upsell_notes = [f"Upsell: {reason}" for reason in upsell.reasons]
+                seen_notes = set()
+                combined: List[str] = []
+                for note in [*explanation, *upsell_notes]:
+                    if note not in seen_notes:
+                        seen_notes.add(note)
+                        combined.append(note)
+                text_parts.append("; ".join(combined[:3]))
 
         if active_step == FsmStep.confirm_lead and active_intent not in {Intent.price, Intent.scope}:
             filled["confirmation_ready"] = True
