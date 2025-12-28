@@ -66,6 +66,14 @@ class Settings(BaseSettings):
     stripe_webhook_secret: str | None = Field(None, env="STRIPE_WEBHOOK_SECRET")
     stripe_success_url: str = Field("http://localhost:3000/deposit-success?session_id={CHECKOUT_SESSION_ID}", env="STRIPE_SUCCESS_URL")
     stripe_cancel_url: str = Field("http://localhost:3000/deposit-cancelled", env="STRIPE_CANCEL_URL")
+    stripe_invoice_success_url: str = Field(
+        "http://localhost:3000/invoice-success?session_id={CHECKOUT_SESSION_ID}",
+        env="STRIPE_INVOICE_SUCCESS_URL",
+    )
+    stripe_invoice_cancel_url: str = Field(
+        "http://localhost:3000/invoice-cancelled",
+        env="STRIPE_INVOICE_CANCEL_URL",
+    )
     deposit_percent: float = Field(0.25, env="DEPOSIT_PERCENT")
     deposit_currency: str = Field("cad", env="DEPOSIT_CURRENCY")
 
