@@ -113,10 +113,13 @@ async def update_template(
 
         if runs_count and runs_count > 0:
             # Template has runs - create a new version instead of mutating
-            new_version = await _next_version(session, template.service_type)
+            new_service_type = (
+                request.service_type if request.service_type is not None else template.service_type
+            )
+            new_version = await _next_version(session, new_service_type)
             new_template = ChecklistTemplate(
                 name=request.name if request.name is not None else template.name,
-                service_type=request.service_type if request.service_type is not None else template.service_type,
+                service_type=new_service_type,
                 version=new_version,
                 is_active=request.is_active if request.is_active is not None else template.is_active,
             )
