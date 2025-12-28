@@ -26,7 +26,7 @@ def _sync_database_url(raw_url: str) -> str:
     url = make_url(raw_url)
     if url.drivername.endswith("+aiosqlite"):
         url = url.set(drivername="sqlite")
-    return str(url)
+    return url.render_as_string(hide_password=False)
 
 
 config.set_main_option("sqlalchemy.url", _sync_database_url(settings.database_url))
