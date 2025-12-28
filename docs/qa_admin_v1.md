@@ -24,3 +24,10 @@
 5. Authenticate as dispatcher and call `/v1/admin/pricing/reload` → expect 403.
 6. Authenticate as admin and call `/v1/admin/pricing/reload` → expect 202.
 7. Visit `/admin` in the Next.js app, save credentials (username/password are stored separately in localStorage), and confirm leads/bookings render with day/week views and actions. Use the Clear button to wipe stored values during QA.
+
+## Visual capture (optional but recommended)
+- While validating the web UI, capture 2–3 screenshots:
+  - Landing/chat page after an estimate is shown (include estimate + slots state).
+  - Booking/lead form with validation or success message.
+  - `/admin` page showing leads + bookings table views.
+- Store these alongside your QA notes so changes in spacing, badges, and buttons are easy to diff between releases.
