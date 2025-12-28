@@ -1,5 +1,7 @@
 import html
 import json
+import csv
+import io
 import logging
 import math
 import secrets
@@ -43,6 +45,8 @@ from app.domain.leads.schemas import AdminLeadResponse, AdminLeadStatusUpdateReq
 from app.domain.leads.statuses import assert_valid_transition, is_valid_status
 from app.domain.notifications import email_service
 from app.domain.pricing.config_loader import load_pricing_config
+from app.domain.reason_logs import schemas as reason_schemas
+from app.domain.reason_logs import service as reason_service
 from app.domain.retention import cleanup_retention
 from app.infra.bot_store import BotStore
 from app.settings import settings
@@ -1503,6 +1507,62 @@ def _status_badge(value: str) -> str:
     return f'<span class="badge badge-status status-{normalized}">{html.escape(value)}</span>'
 
 
+@router.get(
+    "/v1/admin/reasons",
+    response_model=reason_schemas.ReasonListResponse,
+)
+async def admin_reason_report(
+    start: datetime | None = Query(None, alias="from"),
+    end: datetime | None = Query(None, alias="to"),
+    kind: reason_schemas.ReasonKind | None = Query(None),
+    format: str = Query("json"),
+    session: AsyncSession = Depends(get_db_session),
+    _admin: AdminIdentity = Depends(require_admin),
+) -> Response | reason_schemas.ReasonListResponse:
+    reasons = await reason_service.fetch_reasons(
+        session, start=start, end=end, kind=kind
+    )
+    if format.lower() == "csv":
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(
+            [
+                "reason_id",
+                "order_id",
+                "kind",
+                "code",
+                "note",
+                "created_at",
+                "created_by",
+                "time_entry_id",
+                "invoice_item_id",
+            ]
+        )
+        for reason in reasons:
+            writer.writerow(
+                [
+                    reason.reason_id,
+                    reason.order_id,
+                    reason.kind,
+                    reason.code,
+                    reason.note or "",
+                    reason.created_at.isoformat(),
+                    reason.created_by or "",
+                    reason.time_entry_id or "",
+                    reason.invoice_item_id or "",
+                ]
+            )
+        return Response(
+            content=buffer.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=reasons.csv"},
+        )
+
+    return reason_schemas.ReasonListResponse(
+        reasons=[reason_schemas.ReasonResponse.from_model(reason) for reason in reasons]
+    )
+
+
 def _copy_button(label: str, value: str, *, small: bool = True) -> str:
     size_class = " small" if small else ""
     return (
@@ -1607,9 +1667,27 @@ async def create_invoice_from_order(
     session: AsyncSession = Depends(get_db_session),
     admin: AdminIdentity = Depends(require_admin),
 ) -> invoice_schemas.InvoiceResponse:
-    order = await session.get(Booking, order_id)
+    order = await session.get(
+        Booking, order_id, options=(selectinload(Booking.lead),)
+    )
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+
+    expected_subtotal = reason_service.estimate_subtotal_from_lead(order.lead)
+    requested_subtotal = sum(
+        item.qty * item.unit_price_cents for item in request.items
+    )
+    if (
+        expected_subtotal is not None
+        and requested_subtotal != expected_subtotal
+        and not await reason_service.has_reason(
+            session, order_id, kind=reason_schemas.ReasonKind.PRICE_ADJUST
+        )
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="PRICE_ADJUST reason required for invoice change",
+        )
 
     try:
         invoice = await invoice_service.create_invoice_from_order(

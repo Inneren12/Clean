@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.bookings.db_models import Booking
 from app.domain.time_tracking.db_models import WorkTimeEntry
+from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,10 @@ async def _load_entry(session: AsyncSession, booking_id: str) -> WorkTimeEntry |
     stmt = select(WorkTimeEntry).where(WorkTimeEntry.booking_id == booking_id).limit(1)
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def fetch_time_entry(session: AsyncSession, booking_id: str) -> WorkTimeEntry | None:
+    return await _load_entry(session, booking_id)
 
 
 def _planned_seconds(booking: Booking) -> int | None:
@@ -217,7 +222,12 @@ async def resume_time_tracking(
 
 
 async def finish_time_tracking(
-    session: AsyncSession, booking_id: str, now: datetime | None = None
+    session: AsyncSession,
+    booking_id: str,
+    now: datetime | None = None,
+    *,
+    reason_provided: bool = False,
+    threshold: float | None = None,
 ) -> WorkTimeEntry | None:
     timestamp = now or _utcnow()
     entry = await _load_entry(session, booking_id)
@@ -226,13 +236,24 @@ async def finish_time_tracking(
     if entry.state not in {RUNNING, PAUSED}:
         raise ValueError("Time tracking already finished")
 
+    booking = await session.get(Booking, booking_id)
+    planned_seconds = _planned_seconds(booking) if booking else None
+    threshold_value = threshold or settings.time_overrun_reason_threshold
+    predicted_total = _effective_total_seconds(entry, timestamp)
+    if (
+        planned_seconds is not None
+        and threshold_value is not None
+        and predicted_total > planned_seconds * threshold_value
+        and not reason_provided
+    ):
+        raise ValueError("TIME_OVERRUN reason required")
+
     if entry.state == RUNNING:
         _close_active_segment(entry, timestamp)
     entry.finished_at = timestamp
     entry.state = FINISHED
     entry.paused_at = None
 
-    booking = await session.get(Booking, booking_id)
     if booking:
         booking.actual_seconds = entry.total_seconds
         if entry.total_seconds:
@@ -259,9 +280,10 @@ def summarize_order_time(
     actual_seconds = _derive_actual_seconds(booking, entry, now)
     delta_seconds = None
     leak_flag = False
+    threshold = settings.time_overrun_reason_threshold or 1.2
     if planned_seconds is not None:
         delta_seconds = actual_seconds - planned_seconds
-        leak_flag = actual_seconds > planned_seconds * 1.2
+        leak_flag = actual_seconds > planned_seconds * threshold
 
     return {
         "booking_id": booking.booking_id,
