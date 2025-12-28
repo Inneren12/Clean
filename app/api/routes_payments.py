@@ -137,6 +137,9 @@ async def stripe_invoice_webhook(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing event id")
     payload_hash = hashlib.sha256(payload or b"").hexdigest()
 
+    processed = False
+    processing_error: Exception | None = None
+
     async with session.begin():
         existing = await session.scalar(
             select(StripeEvent).where(StripeEvent.event_id == str(event_id)).with_for_update()
@@ -149,14 +152,25 @@ async def stripe_invoice_webhook(
                 )
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Event payload mismatch")
 
-            logger.info(
-                "stripe_webhook_duplicate",
-                extra={"extra": {"event_id": event_id, "status": existing.status}},
-            )
-            return {"received": True, "processed": False}
+            if existing.status in {"succeeded", "ignored"}:
+                logger.info(
+                    "stripe_webhook_duplicate",
+                    extra={"extra": {"event_id": event_id, "status": existing.status}},
+                )
+                return {"received": True, "processed": False}
 
-        record = StripeEvent(event_id=str(event_id), status="processing", payload_hash=payload_hash)
-        session.add(record)
+            if existing.status == "processing":
+                logger.info(
+                    "stripe_webhook_duplicate",
+                    extra={"extra": {"event_id": event_id, "status": existing.status}},
+                )
+                return {"received": True, "processed": False}
+
+            record = existing
+            record.status = "processing"
+        else:
+            record = StripeEvent(event_id=str(event_id), status="processing", payload_hash=payload_hash)
+            session.add(record)
 
         try:
             processed = await _handle_payment_event(session, event)
@@ -164,9 +178,16 @@ async def stripe_invoice_webhook(
         except Exception as exc:  # noqa: BLE001
             processed = False
             record.status = "error"
+            processing_error = exc
             logger.exception(
                 "stripe_webhook_error",
                 extra={"extra": {"event_id": event_id, "reason": type(exc).__name__}},
             )
+
+    if processing_error is not None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Stripe webhook processing error",
+        ) from processing_error
 
     return {"received": True, "processed": processed}

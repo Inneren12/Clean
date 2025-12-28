@@ -212,6 +212,10 @@ async def create_invoice_payment(
     invoice = await invoice_service.get_invoice_by_public_token(session, token)
     if invoice is None:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.status == invoice_statuses.INVOICE_STATUS_VOID:
+        raise HTTPException(status_code=409, detail="Invoice is void")
+    if invoice.status == invoice_statuses.INVOICE_STATUS_DRAFT:
+        raise HTTPException(status_code=409, detail="Invoice not sent yet")
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=503, detail="Stripe not configured")
 

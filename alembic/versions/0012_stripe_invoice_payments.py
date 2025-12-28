@@ -20,11 +20,21 @@ def upgrade() -> None:
     op.create_index(
         "ix_invoice_payments_provider_ref", "invoice_payments", ["provider_ref"], unique=False
     )
-    op.create_unique_constraint(
-        "uq_invoice_payments_provider_ref",
-        "invoice_payments",
-        ["provider", "provider_ref"],
-    )
+    bind = op.get_bind()
+    dialect = bind.dialect.name if bind else ""
+    if dialect == "sqlite":
+        op.create_index(
+            "uq_invoice_payments_provider_ref",
+            "invoice_payments",
+            ["provider", "provider_ref"],
+            unique=True,
+        )
+    else:
+        op.create_unique_constraint(
+            "uq_invoice_payments_provider_ref",
+            "invoice_payments",
+            ["provider", "provider_ref"],
+        )
 
     op.create_table(
         "stripe_events",
@@ -40,6 +50,11 @@ def downgrade() -> None:
     op.drop_index("ix_stripe_events_payload_hash", table_name="stripe_events")
     op.drop_table("stripe_events")
 
-    op.drop_constraint("uq_invoice_payments_provider_ref", "invoice_payments", type_="unique")
+    bind = op.get_bind()
+    dialect = bind.dialect.name if bind else ""
+    if dialect == "sqlite":
+        op.drop_index("uq_invoice_payments_provider_ref", table_name="invoice_payments")
+    else:
+        op.drop_constraint("uq_invoice_payments_provider_ref", "invoice_payments", type_="unique")
     op.drop_index("ix_invoice_payments_provider_ref", table_name="invoice_payments")
     op.drop_column("invoice_payments", "provider_ref")

@@ -289,7 +289,7 @@ def test_webhook_confirms_booking(client, async_session_maker):
         signature = stripe.WebhookSignature._compute_signature(signed_payload, settings.stripe_webhook_secret)
         headers = {"Stripe-Signature": f"t={timestamp},v1={signature}"}
 
-        webhook_response = client.post("/v1/stripe/webhook", data=body, headers=headers)
+        webhook_response = client.post("/v1/stripe/webhook", content=body, headers=headers)
         assert webhook_response.status_code == 200
 
         async def _fetch() -> Booking:
@@ -332,7 +332,7 @@ def test_webhook_requires_paid_status(client, async_session_maker):
         signature = stripe.WebhookSignature._compute_signature(signed_payload, settings.stripe_webhook_secret)
         headers = {"Stripe-Signature": f"t={timestamp},v1={signature}"}
 
-        webhook_response = client.post("/v1/stripe/webhook", data=body, headers=headers)
+        webhook_response = client.post("/v1/stripe/webhook", content=body, headers=headers)
         assert webhook_response.status_code == 200
 
         async def _fetch() -> Booking:
@@ -374,7 +374,7 @@ def test_webhook_expired_cancels_pending(client, async_session_maker):
         signature = stripe.WebhookSignature._compute_signature(signed_payload, settings.stripe_webhook_secret)
         headers = {"Stripe-Signature": f"t={timestamp},v1={signature}"}
 
-        webhook_response = client.post("/v1/stripe/webhook", data=body, headers=headers)
+        webhook_response = client.post("/v1/stripe/webhook", content=body, headers=headers)
         assert webhook_response.status_code == 200
 
         async def _fetch() -> Booking:
