@@ -18,6 +18,7 @@ from app.dependencies import get_db_session
 from app.domain.bookings import schemas as booking_schemas
 from app.domain.bookings import service as booking_service
 from app.domain.leads.db_models import Lead
+from app.domain.clients import service as client_service
 from app.domain.notifications import email_service
 from app.infra import stripe as stripe_infra
 from app.settings import settings
@@ -75,6 +76,13 @@ async def create_booking(
     email_adapter = getattr(http_request.app.state, "email_adapter", None)
     booking: Booking | None = None
 
+    client_id: str | None = None
+    if lead and lead.email:
+        client_user = await client_service.get_or_create_client(
+            session, lead.email, name=lead.name, commit=False
+        )
+        client_id = client_user.client_id
+
     try:
         transaction_ctx = session.begin_nested() if session.in_transaction() else session.begin()
         async with transaction_ctx:
@@ -85,6 +93,7 @@ async def create_booking(
                 session=session,
                 deposit_decision=deposit_decision,
                 manage_transaction=False,
+                client_id=client_id,
             )
 
             try:
