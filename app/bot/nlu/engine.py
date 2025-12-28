@@ -314,40 +314,51 @@ def _extract_time_window(normalized: str, entities: Entities, reasons: List[str]
     label_match = next((key for key in TIME_LABELS if key in normalized), None)
     time_match = TIME_PATTERN.search(normalized)
 
+    qualifier_window: TimeWindow | None = None
+    label_window: TimeWindow | None = None
+
     if time_match:
         qualifier, hour_str, minute_str, meridiem = time_match.groups()
         start_time = _normalize_time(int(hour_str), int(minute_str or 0), meridiem)
-        window = TimeWindow(start=start_time, label=qualifier)
+        qualifier_window = TimeWindow(start=start_time, label=qualifier)
         if qualifier == "before":
-            window.end = start_time
-            window.start = None
+            qualifier_window.end = start_time
+            qualifier_window.start = None
         elif qualifier == "by":
-            window.end = start_time
+            qualifier_window.end = start_time
         if day_match:
-            window.day = day_match
+            qualifier_window.day = day_match
             reasons.append(f"day detected: {day_match}")
-        entities.time_window = window
         reasons.append(f"time qualifier: {qualifier} {start_time}")
 
     if label_match:
-        label_window = TIME_LABELS[label_match]
-        window = TimeWindow(
-            start=label_window.start,
-            end=label_window.end,
-            label=label_window.label,
-            day=label_window.day or day_match,
+        label_window = TimeWindow(
+            start=TIME_LABELS[label_match].start,
+            end=TIME_LABELS[label_match].end,
+            label=TIME_LABELS[label_match].label,
+            day=TIME_LABELS[label_match].day or day_match,
         )
-        entities.time_window = window
         reasons.append(f"time window label: {label_match}")
-        if day_match and not window.day:
+        if day_match and not label_window.day:
             reasons.append(f"day detected: {day_match}")
 
-    if day_match and not entities.time_window:
+    if qualifier_window and label_window:
+        entities.time_window = TimeWindow(
+            start=qualifier_window.start or label_window.start,
+            end=qualifier_window.end or label_window.end,
+            label=label_window.label or qualifier_window.label,
+            day=qualifier_window.day or label_window.day or day_match,
+        )
+    elif qualifier_window:
+        entities.time_window = qualifier_window
+    elif label_window:
+        entities.time_window = label_window
+    elif day_match:
         entities.time_window = TimeWindow(label=day_match, day=day_match)
         reasons.append(f"day detected: {day_match}")
 
 
-AREA_PATTERN = re.compile(r"(?:in|around|near|location|area)\s+([a-zA-Z\s]{3,40})")
+AREA_PATTERN = re.compile(r"(?:in|around|near|location|area)\s+([a-zA-Z\s]{3,40})", re.IGNORECASE)
 AREA_STOPWORDS = {
     "book",
     "need",

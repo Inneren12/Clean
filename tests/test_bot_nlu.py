@@ -96,7 +96,7 @@ GOLDEN_MESSAGES = [
         "entities": {"extras": {"windows", "carpet"}},
     },
     {
-        "text": "Quote for cleaning in Brooklyn 1200 sq ft",
+        "text": "Quote for cleaning In Brooklyn 1200 sq ft",
         "intent": Intent.price,
         "entities": {"square_feet": 1200, "area": "Brooklyn"},
     },
@@ -104,6 +104,15 @@ GOLDEN_MESSAGES = [
         "text": "Book cleaning by tomorrow evening",
         "intent": Intent.booking,
         "entities": {"time_window_label": "evening", "time_window_day": "tomorrow"},
+    },
+    {
+        "text": "Need to reschedule to Friday after 6pm evening",
+        "intent": Intent.reschedule,
+        "entities": {
+            "time_window_label": "evening",
+            "time_window_start": "18:00",
+            "time_window_day": "friday",
+        },
     },
     {
         "text": "hello",
