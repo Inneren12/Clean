@@ -83,6 +83,12 @@ Structured summary with editable fields for review and correction.
 - Quick corrections without restarting
 - Confirmation before booking
 
+**Contract Notes:**
+- `value` field accepts only primitive types: `string`, `number`, `boolean`, or `null`
+- Frontend safely renders all primitive types and displays "—" for null values
+- Complex objects or arrays are NOT supported and will cause validation errors
+- For boolean values, frontend displays "Yes"/"No" in read-only mode
+
 ---
 
 ### 4. `ui_hint` (UIHint)
@@ -92,15 +98,21 @@ Hints for frontend rendering behavior.
 **Structure:**
 ```typescript
 {
-  show_summary?: boolean;      // Display summary panel (default: false)
-  show_confirm?: boolean;      // Show confirmation button (default: false)
-  show_choices?: boolean;      // Render choices if available (default: false)
-  show_progress?: boolean;     // Display step progress (default: false)
-  minimize_text?: boolean;     // De-emphasize text for structured UI (default: false)
+  show_summary?: boolean | null;      // Display summary panel
+  show_confirm?: boolean | null;      // Show confirmation button
+  show_choices?: boolean | null;      // Render choices if available
+  show_progress?: boolean | null;     // Display step progress
+  minimize_text?: boolean | null;     // De-emphasize text for structured UI
 }
 ```
 
-**Note:** Frontend uses sensible defaults (shows UI elements if data is present). Use `ui_hint` to override default behavior.
+**Important Defaults:**
+- All fields default to `null` (not `false`)
+- `null` means "use frontend defaults" (frontend will show UI if data is present)
+- Explicitly setting to `false` will hide the UI element even if data is available
+- Explicitly setting to `true` ensures the UI element is shown
+
+**Use `ui_hint` to override default behavior when needed.**
 
 ---
 
@@ -298,16 +310,30 @@ Hints for frontend rendering behavior.
 
 ### Backend
 
-1. All new fields are optional in `ChatTurnResponse` (app/domain/chat/models.py)
+1. All new fields are optional in `ChatTurnResponse` (`app/domain/chat/models.py`)
 2. Existing response builders continue to work (only `reply_text` required)
 3. New fields can be added incrementally to conversation flows
+4. **Field Validation:**
+   - `StepInfo.current_step` and `total_steps` must be >= 1
+   - `StepInfo.remaining_questions` must be >= 0 (when provided)
+   - `SummaryField.value` accepts only primitive types: `str`, `int`, `float`, `bool`, or `None`
 
 ### Frontend
 
-1. All new fields have null-safe rendering (web/app/page.tsx)
+1. All new fields have null-safe rendering (`web/app/page.tsx`)
 2. If field is null/undefined, UI element is not rendered
 3. Backward compatibility: plain text responses render exactly as before
 4. State management: new fields stored separately, cleared on new bot message
+5. **UI Precedence:**
+   - **Choices take precedence over proposed_questions**: If `choices` is present and rendered, `proposed_questions` will not be shown
+   - This prevents competing UI elements that could confuse users
+6. **Progress Calculation:**
+   - Progress percentage is clamped to [0, 100]
+   - Division by zero is prevented (minimum total_steps is 1)
+7. **Summary Value Rendering:**
+   - Non-primitive values are safely stringified
+   - `null`/`undefined` displays as "—"
+   - Booleans display as "Yes"/"No"
 
 ### Testing Backward Compatibility
 
@@ -339,6 +365,7 @@ Potential additions (not implemented):
 ## Questions?
 
 See implementation:
-- Backend models: `app/domain/chat/models.py:43-107`
-- Frontend types: `web/app/page.tsx:43-95`
-- Frontend rendering: `web/app/page.tsx:708-941`
+- Backend models: `app/domain/chat/models.py` (UI Contract Extension Models section)
+- Frontend types: `web/app/page.tsx` (UI Contract Extension Types section)
+- Frontend rendering: `web/app/page.tsx` (look for "UI Contract Extension" comments)
+- Tests: `tests/test_ui_contract_compatibility.py`
