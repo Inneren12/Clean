@@ -449,33 +449,63 @@ export default function HomePage() {
   }, [apiBaseUrl, estimate, loadSlots, selectedSlot]);
 
   return (
-    <div className="landing">
+    <div className="page">
       <header className="site-header">
         <div className="brand">
-          <span className="badge">Economy Cleaning</span>
-          <p className="eyebrow">Edmonton, Alberta</p>
+          <p className="eyebrow">Economy Cleaning</p>
+          <div className="brand-row">
+            <span className="logo">EC</span>
+            <div>
+              <h1>Edmonton cleaning, priced upfront.</h1>
+              <p className="muted">Deterministic quotes. Local team. Zero hidden fees.</p>
+            </div>
+          </div>
         </div>
-        <a className="primary" href="#chat">
+        <a className="btn btn-primary" href="#chat">
           Start chat
         </a>
       </header>
 
-      <main>
+      <main className="content">
         <section className="hero" aria-labelledby="hero-title">
           <div className="hero-copy">
-            <p className="eyebrow">Honest pricing. Real availability.</p>
-            <h1 id="hero-title">Honest cleaning in Edmonton. $35 per cleaner-hour.</h1>
+            <p className="eyebrow">Honest pricing · Real availability</p>
+            <h2 id="hero-title">Honest cleaning in Edmonton. $35 per cleaner-hour.</h2>
             <p className="subtitle">
-              Economy is the straightforward clean. Tell us your home details and we will
-              quote instantly with deterministic pricing and zero surprises.
+              Tell us about your home and we will quote instantly with deterministic pricing. Book a slot in minutes and get a
+              follow-up from a real dispatcher.
             </p>
             <div className="hero-actions">
-              <a className="primary" href="#chat">
+              <a className="btn btn-primary" href="#chat">
                 Start chat
               </a>
-              <a className="ghost" href="#packages">
+              <a className="btn btn-secondary" href="#packages">
                 See packages
               </a>
+            </div>
+            <div className="pill-row">
+              <span className="pill">Flat $35/hr labor</span>
+              <span className="pill">0.5 hr rounding</span>
+              <span className="pill">Edmonton-based team</span>
+            </div>
+            <ul className="trust-list">
+              <li>Invoice-style estimates with every assumption spelled out.</li>
+              <li>Next 3 days of availability shown instantly after you chat.</li>
+              <li>No surge pricing, upsells, or hidden add-on fees.</li>
+            </ul>
+          </div>
+          <div className="hero-card card">
+            <div className="card-header">
+              <div>
+                <p className="eyebrow">Estimator preview</p>
+                <h3>Ask the bot anything</h3>
+              </div>
+              <span className="pill pill-success">Live</span>
+            </div>
+            <div className="hero-card-body">
+              <p className="label">Example prompt</p>
+              <p className="example">“Deep clean for 2 bed 2 bath, oven + fridge.”</p>
+              <p className="muted">You will get a deterministic estimate below once you start chatting.</p>
             </div>
             <div className="hero-metrics">
               <div>
@@ -483,55 +513,37 @@ export default function HomePage() {
                 <p className="muted">minimum cleaner-hours</p>
               </div>
               <div>
-                <p className="metric">0.5 hr</p>
-                <p className="muted">rounding increment</p>
-              </div>
-              <div>
                 <p className="metric">1–3</p>
                 <p className="muted">cleaner team size</p>
               </div>
-            </div>
-          </div>
-          <div className="hero-card">
-            <h2>Instant estimate</h2>
-            <p className="muted">
-              Ask questions naturally. The bot turns your details into a fixed Economy
-              quote.
-            </p>
-            <div className="hero-card-body">
-              <p className="label">Example</p>
-              <p className="example">“Deep clean for 2 bed 2 bath, oven + fridge.”</p>
-              <p className="muted">Chat below to get your exact rate.</p>
+              <div>
+                <p className="metric">Weekly/biweekly discounts</p>
+                <p className="muted">applied automatically</p>
+              </div>
             </div>
           </div>
         </section>
 
         <section className="section" aria-labelledby="how-title">
-          <h2 id="how-title">How it works</h2>
+          <div className="section-heading">
+            <h2 id="how-title">How it works</h2>
+            <p className="muted">Transparent steps from quote to clean.</p>
+          </div>
           <div className="grid-3">
-            <div className="step-card">
+            <div className="step-card card">
               <span className="step-number">1</span>
               <h3>Tell us about your home</h3>
-              <p>
-                Share beds, baths, cleaning type, and any add-ons. The bot captures the
-                details.
-              </p>
+              <p>Share beds, baths, cleaning type, and add-ons. The bot captures the details.</p>
             </div>
-            <div className="step-card">
+            <div className="step-card card">
               <span className="step-number">2</span>
               <h3>Get an instant quote</h3>
-              <p>
-                Pricing is deterministic from our Economy config: $35 per cleaner-hour,
-                no exceptions.
-              </p>
+              <p>Pricing is deterministic from our Economy config: $35 per cleaner-hour, no exceptions.</p>
             </div>
-            <div className="step-card">
+            <div className="step-card card">
               <span className="step-number">3</span>
               <h3>Book in minutes</h3>
-              <p>
-                Pick your preferred dates and we will confirm with a cleaner match from
-                our Edmonton team.
-              </p>
+              <p>Pick your preferred dates and we will confirm with a cleaner match from our Edmonton team.</p>
             </div>
           </div>
         </section>
@@ -543,7 +555,7 @@ export default function HomePage() {
           </div>
           <div className="package-grid">
             {packages.map((pkg) => (
-              <article key={pkg.label} className="package-card">
+              <article key={pkg.label} className="package-card card">
                 <div className="package-top">
                   <span className="package-label">{pkg.label}</span>
                   <h3>{pkg.name}</h3>
@@ -557,10 +569,18 @@ export default function HomePage() {
         </section>
 
         <section className="section" aria-labelledby="included-title">
-          <h2 id="included-title">What’s included</h2>
+          <div className="section-heading">
+            <h2 id="included-title">What’s included</h2>
+            <p className="muted">Economy clean covers the essentials. Add extras as needed.</p>
+          </div>
           <ul className="included-list">
             {includedItems.map((item) => (
-              <li key={item}>{item}</li>
+              <li key={item} className="card">
+                <span className="checkmark" aria-hidden>
+                  ✓
+                </span>
+                <span>{item}</span>
+              </li>
             ))}
           </ul>
         </section>
@@ -572,7 +592,7 @@ export default function HomePage() {
           </div>
           <div className="addon-grid">
             {addonItems.map((addon) => (
-              <div key={addon.name} className="addon-row">
+              <div key={addon.name} className="addon-row card">
                 <span>{addon.name}</span>
                 <span className="addon-price">{addon.price}</span>
               </div>
@@ -580,151 +600,155 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section className="section" aria-labelledby="faq-title">
-          <h2 id="faq-title">FAQ</h2>
-          <div className="faq-list">
-            {faqs.map((faq) => (
-              <details key={faq.q}>
-                <summary>{faq.q}</summary>
-                <p>{faq.a}</p>
-              </details>
-            ))}
+        <section className="section chat-wrapper" id="chat" aria-labelledby="chat-title">
+          <div className="section-heading">
+            <h2 id="chat-title">Start your booking</h2>
+            <p className="muted">Chat with our bot to collect details, then confirm a slot.</p>
           </div>
-        </section>
-
-        <section className="cta" aria-labelledby="cta-title">
-          <div>
-            <h2 id="cta-title">Ready for a cleaner home?</h2>
-            <p className="subtitle">
-              Start the chat to get a deterministic quote and book your preferred time.
-            </p>
-          </div>
-          <a className="primary" href="#chat">
-            Start chat
-          </a>
-        </section>
-
-        <section className="chat-section" id="chat" aria-live="polite">
-          <div className="chat-card">
-            <div className="chat-header">
-              <div>
-                <p className="eyebrow">Economy chat</p>
-                <h2>Instant quote chat</h2>
+          <div className="panel-grid">
+            <div className="card chat-card">
+              <div className="card-header">
+                <div>
+                  <p className="eyebrow">Conversation</p>
+                  <h3>Chat with the estimator</h3>
+                </div>
+                <span className="pill">Session live</span>
               </div>
-              <span className="status">Live</span>
-            </div>
-
-            <div className="chat-window">
-              {messages.length === 0 ? (
-                <p className="empty-state">
-                  Send a message to begin. Example: “Need a deep clean for 2 bed 2 bath with
-                  oven and fridge.”
-                </p>
-              ) : (
-                <ul className="messages">
-                  {messages.map((msg, index) => (
-                    <li key={`${msg.role}-${index}`} className={`message ${msg.role}`}>
-                      <span className="message-role">
-                        {msg.role === 'user' ? 'You' : 'Bot'}
-                      </span>
-                      <p>{msg.text}</p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-
-            <div className="card-body">
-              {error ? <p className="error">{error}</p> : null}
-              <form onSubmit={handleSubmit} className="composer">
-                <input
-                  type="text"
-                  placeholder="Type your message..."
-                  value={messageInput}
-                  onChange={(event) => setMessageInput(event.target.value)}
-                  disabled={loading || !sessionReady}
-                />
-                <button type="submit" disabled={loading || !sessionReady || !messageInput.trim()}>
-                  {loading ? 'Sending...' : 'Send'}
-                </button>
-              </form>
-              {proposedQuestions.length > 0 ? (
-                <div className="quick-replies">
-                  <p className="label">Quick replies</p>
-                  <p className="muted">Tap to prefill</p>
-                  <div className="quick-reply-list">
-                    {proposedQuestions.map((question) => (
-                      <button
-                        key={question}
-                        type="button"
-                        className="quick-reply"
-                        onClick={() => setMessageInput(question)}
-                        disabled={loading}
-                      >
-                        {question}
-                      </button>
-                    ))}
-                  </div>
+              <div className="card-body">
+                {error ? <p className="alert alert-error">{error}</p> : null}
+                <div className="chat-window">
+                  {messages.length === 0 ? (
+                    <p className="empty-state">Ask anything about your home to get started.</p>
+                  ) : (
+                    <ul className="messages">
+                      {messages.map((message, index) => (
+                        <li key={index} className={`message ${message.role}`}>
+                          <span className="message-role">{message.role === 'user' ? 'You' : 'Bot'}</span>
+                          <p className="message-text">{message.text}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
-              ) : null}
-            </div>
+                <form className="composer" onSubmit={handleSubmit}>
+                  <input
+                    type="text"
+                    placeholder="Type your message..."
+                    value={messageInput}
+                    onChange={(event) => setMessageInput(event.target.value)}
+                    disabled={loading || !sessionReady}
+                  />
+                  <button className="btn btn-primary" type="submit" disabled={loading || !sessionReady || !messageInput.trim()}>
+                    {loading ? 'Sending...' : 'Send'}
+                  </button>
+                </form>
 
-            {estimate ? (
-              <section className="estimate">
-                <h3>Estimate Snapshot</h3>
-                <div className="estimate-grid">
-                  <div>
-                    <p className="label">Config</p>
-                    <p className="mono">
-                      {estimate.pricing_config_id} {estimate.pricing_config_version}
-                    </p>
-                    <p className="muted">{estimate.config_hash}</p>
-                  </div>
-                  <div>
-                    <p className="label">Team Size</p>
-                    <p className="value">{estimate.team_size}</p>
-                  </div>
-                  <div>
-                    <p className="label">Time on site (hours)</p>
-                    <p className="value">{estimate.time_on_site_hours}</p>
-                  </div>
-                  <div>
-                    <p className="label">Labor Cost</p>
-                    <p className="value">{formatCurrency(estimate.labor_cost)}</p>
-                  </div>
-                  <div>
-                    <p className="label">Add-ons Cost</p>
-                    <p className="value">{formatCurrency(estimate.add_ons_cost)}</p>
-                  </div>
-                  <div>
-                    <p className="label">Discount</p>
-                    <p className="value">-{formatCurrency(estimate.discount_amount)}</p>
-                  </div>
-                  <div>
-                    <p className="label">Total Before Tax</p>
-                    <p className="value total">{formatCurrency(estimate.total_before_tax)}</p>
-                  </div>
-                </div>
-                {estimate.breakdown ? (
-                  <div className="estimate-breakdown">
-                    <p className="label">Debug breakdown</p>
-                    <pre className="mono">{JSON.stringify(estimate.breakdown, null, 2)}</pre>
+                {proposedQuestions.length > 0 ? (
+                  <div className="quick-replies">
+                    <div className="quick-reply-heading">
+                      <p className="label">Quick replies</p>
+                      <p className="muted">Tap to prefill</p>
+                    </div>
+                    <div className="quick-reply-list">
+                      {proposedQuestions.map((question) => (
+                        <button
+                          key={question}
+                          type="button"
+                          className="btn btn-ghost quick-reply"
+                          onClick={() => setMessageInput(question)}
+                          disabled={loading}
+                        >
+                          {question}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 ) : null}
+              </div>
+              <div className="card-footer">
+                <span className="muted">Session ID: {sessionId || 'Generating...'}</span>
+                <span className="muted">API: {apiBaseUrl}</span>
+              </div>
+            </div>
 
-                <div className="slots-card">
-                  <div className="slots-header">
-                    <div>
-                      <p className="label">Book a time</p>
-                      <p className="muted">
-                        Next 3 days · 30 minute steps · {estimate.time_on_site_hours} hours on site · Times in America/Edmonton
-                      </p>
-                    </div>
-                    <button type="button" className="ghost" onClick={() => void loadSlots()} disabled={slotsLoading}>
-                      {slotsLoading ? 'Refreshing...' : 'Refresh'}
-                    </button>
+            <div className="stack">
+              <div className="card estimate-card">
+                <div className="card-header">
+                  <div>
+                    <p className="eyebrow">Estimate snapshot</p>
+                    <h3>Invoice-style quote</h3>
                   </div>
-                  {slotsError ? <p className="error">{slotsError}</p> : null}
+                  {estimate ? <span className="pill">Ready to book</span> : <span className="pill">Waiting for chat</span>}
+                </div>
+                {estimate ? (
+                  <div className="card-body">
+                    <div className="estimate-summary">
+                      <div>
+                        <p className="label">Team size</p>
+                        <p className="value">{estimate.team_size}</p>
+                      </div>
+                      <div>
+                        <p className="label">Time on site</p>
+                        <p className="value">{estimate.time_on_site_hours} hrs</p>
+                      </div>
+                      <div>
+                        <p className="label">Billed hours</p>
+                        <p className="value">{estimate.billed_cleaner_hours} hrs</p>
+                      </div>
+                    </div>
+
+                    <div className="estimate-lines">
+                      <div className="line">
+                        <span>Labor</span>
+                        <span>{formatCurrency(estimate.labor_cost)}</span>
+                      </div>
+                      <div className="line">
+                        <span>Add-ons</span>
+                        <span>{formatCurrency(estimate.add_ons_cost)}</span>
+                      </div>
+                      <div className="line">
+                        <span>Discounts</span>
+                        <span>-{formatCurrency(estimate.discount_amount)}</span>
+                      </div>
+                      <div className="line total">
+                        <div>
+                          <p>Total before tax</p>
+                          <p className="muted">Config: {estimate.pricing_config_id} {estimate.pricing_config_version}</p>
+                        </div>
+                        <p className="total-amount">{formatCurrency(estimate.total_before_tax)}</p>
+                      </div>
+                      <p className="muted mono">{estimate.config_hash}</p>
+                    </div>
+
+                    {estimate.breakdown ? (
+                      <details className="estimate-breakdown">
+                        <summary className="label">See calculation details</summary>
+                        <pre className="mono">{JSON.stringify(estimate.breakdown, null, 2)}</pre>
+                      </details>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="card-body">
+                    <p className="muted">Start the chat to generate your personalized estimate.</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="card slots-card">
+                <div className="slots-header">
+                  <div>
+                    <p className="label">Book a time</p>
+                    <p className="muted">
+                      Next 3 days · 30 minute steps · Times in America/Edmonton · {estimate?.time_on_site_hours ?? '—'} hours on
+                      site
+                    </p>
+                  </div>
+                  <button type="button" className="btn btn-ghost" onClick={() => void loadSlots()} disabled={slotsLoading}>
+                    {slotsLoading ? 'Refreshing...' : 'Refresh'}
+                  </button>
+                </div>
+                <div className="card-body">
+                  {slotsError ? <p className="alert alert-error">{slotsError}</p> : null}
                   {slotsLoading ? <p className="muted">Loading slots...</p> : null}
                   {!slotsLoading && slotsByDate.length === 0 ? (
                     <p className="muted">Slots will appear after your estimate.</p>
@@ -732,7 +756,7 @@ export default function HomePage() {
                   {!slotsLoading && slotsByDate.length > 0 ? (
                     <div className="slot-grid">
                       {slotsByDate.map((day) => (
-                        <div key={day.date} className="slot-column">
+                        <div key={day.date} className="slot-column card">
                           <p className="label">{formatSlotDateHeading(day.date)}</p>
                           <div className="slot-list">
                             {day.slots.length === 0 ? (
@@ -757,194 +781,207 @@ export default function HomePage() {
                   <div className="booking-actions">
                     <button
                       type="button"
-                      className="primary"
+                      className="btn btn-primary"
                       onClick={() => void bookSelectedSlot()}
                       disabled={bookingSubmitting || !selectedSlot || slotsLoading}
                     >
-                      {bookingSubmitting ? 'Booking…' : selectedSlot ? `Book ${formatSlotTime(selectedSlot)}` : 'Select a slot'}
+                      {bookingSubmitting ? 'Booking...' : 'Book selected time'}
                     </button>
-                    {bookingSuccess ? <p className="success">{bookingSuccess}</p> : null}
-                    {bookingError ? <p className="error">{bookingError}</p> : null}
+                    {bookingSuccess ? <p className="alert alert-success">{bookingSuccess}</p> : null}
+                    {bookingError ? <p className="alert alert-error">{bookingError}</p> : null}
                   </div>
                 </div>
+              </div>
 
-                {leadSuccess ? (
-                  <div className="lead-confirmation">
-                    <h4>Request received</h4>
-                    <p>
-                      Thanks! We&apos;ve saved your booking request. Our team will confirm your
-                      preferred times shortly.
-                    </p>
-                    {issuedReferralCode ? (
-                      <div className="muted">
-                        <p>
-                          Your referral code: <strong>{issuedReferralCode}</strong>. Share it with
-                          friends so both of you get credit when they book.
-                        </p>
-                        <div className="referral-actions" style={{ display: 'flex', gap: '0.5rem' }}>
-                          <button
-                            type="button"
-                            className="secondary"
-                            onClick={() => void copyReferralCode()}
-                          >
-                            Copy code
-                          </button>
-                          {copyStatus ? <span className="muted">{copyStatus}</span> : null}
-                        </div>
-                      </div>
+              {estimate ? (
+                <section className="card lead-cta">
+                  <div className="card-header">
+                    <div>
+                      <p className="eyebrow">Optional</p>
+                      <h3>Share details for dispatcher follow-up</h3>
+                    </div>
+                    {!showLeadForm ? (
+                      <button className="btn btn-secondary" type="button" onClick={() => setShowLeadForm(true)}>
+                        Add your info
+                      </button>
                     ) : null}
                   </div>
-                ) : (
-                  <div className="lead-cta">
-                    <button
-                      type="button"
-                      className="primary"
-                      onClick={() => setShowLeadForm((prev) => !prev)}
-                    >
-                      {showLeadForm ? 'Hide booking form' : 'Book / Leave contact'}
-                    </button>
-                    <p className="muted">
-                      Ready to book? Share your details and preferred dates.
-                    </p>
-                  </div>
-                )}
-
-                {showLeadForm ? (
-                  <form className="lead-form" onSubmit={submitLead}>
-                    <div className="form-grid">
-                      <label>
-                        <span>Name *</span>
-                        <input
-                          type="text"
-                          value={leadForm.name}
-                          onChange={(event) => handleLeadFieldChange('name', event.target.value)}
-                          required
-                        />
-                      </label>
-                      <label>
-                        <span>Phone *</span>
-                        <input
-                          type="tel"
-                          value={leadForm.phone}
-                          onChange={(event) => handleLeadFieldChange('phone', event.target.value)}
-                          required
-                        />
-                      </label>
-                      <label>
-                        <span>Email</span>
-                        <input
-                          type="email"
-                          value={leadForm.email}
-                          onChange={(event) => handleLeadFieldChange('email', event.target.value)}
-                        />
-                      </label>
-                      <label>
-                        <span>Postal code</span>
-                        <input
-                          type="text"
-                          value={leadForm.postal_code}
-                          onChange={(event) =>
-                            handleLeadFieldChange('postal_code', event.target.value)
-                          }
-                        />
-                      </label>
-                      <label className="full">
-                        <span>Address</span>
-                        <input
-                          type="text"
-                          value={leadForm.address}
-                          onChange={(event) => handleLeadFieldChange('address', event.target.value)}
-                        />
-                      </label>
+                  {!showLeadForm && !leadSuccess ? (
+                    <div className="card-body">
+                      <p className="muted">Drop your contact info so we can confirm or adjust based on your preferences.</p>
+                      <div className="lead-actions">
+                        <button className="btn btn-primary" type="button" onClick={() => setShowLeadForm(true)}>
+                          Submit booking request
+                        </button>
+                      </div>
                     </div>
+                  ) : null}
 
-                    <div className="form-grid">
-                      {leadForm.preferred_dates.map((value, index) => (
-                        <label key={`date-${index}`}>
-                          <span>Preferred date option {index + 1}</span>
+                  {leadSuccess ? (
+                    <div className="card-body lead-confirmation">
+                      <p className="eyebrow">Submitted</p>
+                      <p className="value">We received your request.</p>
+                      <p className="muted">A dispatcher will follow up by phone or email shortly.</p>
+                      {issuedReferralCode ? (
+                        <div className="referral-box">
+                          <div>
+                            <p className="label">Referral code</p>
+                            <p className="value">{issuedReferralCode}</p>
+                            <p className="muted">Share with friends for credits.</p>
+                          </div>
+                          <button className="btn btn-secondary" type="button" onClick={() => void copyReferralCode()}>
+                            Copy code
+                          </button>
+                          {copyStatus ? <p className="muted">{copyStatus}</p> : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {showLeadForm && !leadSuccess ? (
+                    <form className="card-body lead-form" onSubmit={submitLead}>
+                      <div className="form-grid">
+                        <label>
+                          <span>Full name *</span>
                           <input
                             type="text"
-                            placeholder="Sat afternoon"
-                            value={value}
-                            onChange={(event) =>
-                              handleLeadFieldChange('preferred_dates', event.target.value, index)
-                            }
+                            required
+                            value={leadForm.name}
+                            onChange={(event) => handleLeadFieldChange('name', event.target.value)}
                           />
                         </label>
-                      ))}
-                    </div>
+                        <label>
+                          <span>Phone *</span>
+                          <input
+                            type="tel"
+                            required
+                            value={leadForm.phone}
+                            onChange={(event) => handleLeadFieldChange('phone', event.target.value)}
+                          />
+                        </label>
+                        <label>
+                          <span>Email</span>
+                          <input
+                            type="email"
+                            value={leadForm.email}
+                            onChange={(event) => handleLeadFieldChange('email', event.target.value)}
+                          />
+                        </label>
+                        <label>
+                          <span>Postal code</span>
+                          <input
+                            type="text"
+                            value={leadForm.postal_code}
+                            onChange={(event) => handleLeadFieldChange('postal_code', event.target.value)}
+                          />
+                        </label>
+                        <label className="full">
+                          <span>Address</span>
+                          <input
+                            type="text"
+                            value={leadForm.address}
+                            onChange={(event) => handleLeadFieldChange('address', event.target.value)}
+                          />
+                        </label>
+                      </div>
 
-                    <div className="form-grid">
-                      <label className="full">
-                        <span>Access notes</span>
-                        <input
-                          type="text"
-                          value={leadForm.access_notes}
-                          onChange={(event) =>
-                            handleLeadFieldChange('access_notes', event.target.value)
-                          }
-                        />
-                      </label>
-                      <label className="full">
-                        <span>Parking</span>
-                        <input
-                          type="text"
-                          value={leadForm.parking}
-                          onChange={(event) => handleLeadFieldChange('parking', event.target.value)}
-                        />
-                      </label>
-                      <label>
-                        <span>Pets</span>
-                        <input
-                          type="text"
-                          value={leadForm.pets}
-                          onChange={(event) => handleLeadFieldChange('pets', event.target.value)}
-                        />
-                      </label>
-                      <label>
-                        <span>Allergies</span>
-                        <input
-                          type="text"
-                          value={leadForm.allergies}
-                          onChange={(event) =>
-                            handleLeadFieldChange('allergies', event.target.value)
-                          }
-                        />
-                      </label>
-                      <label>
-                        <span>Referral code</span>
-                        <input
-                          type="text"
-                          value={leadForm.referral_code}
-                          onChange={(event) =>
-                            handleLeadFieldChange('referral_code', event.target.value.toUpperCase())
-                          }
-                          placeholder="ABC12345"
-                        />
-                      </label>
-                      <label className="full">
-                        <span>Notes</span>
-                        <textarea
-                          value={leadForm.notes}
-                          onChange={(event) => handleLeadFieldChange('notes', event.target.value)}
-                        />
-                      </label>
-                    </div>
+                      <div className="form-grid">
+                        {leadForm.preferred_dates.map((value, index) => (
+                          <label key={`date-${index}`}>
+                            <span>Preferred date option {index + 1}</span>
+                            <input
+                              type="text"
+                              placeholder="Sat afternoon"
+                              value={value}
+                              onChange={(event) => handleLeadFieldChange('preferred_dates', event.target.value, index)}
+                            />
+                          </label>
+                        ))}
+                      </div>
 
-                    {leadError ? <p className="error">{leadError}</p> : null}
-                    <button className="primary" type="submit" disabled={leadSubmitting}>
-                      {leadSubmitting ? 'Submitting...' : 'Submit booking request'}
-                    </button>
-                  </form>
-                ) : null}
-              </section>
-            ) : null}
+                      <div className="form-grid">
+                        <label className="full">
+                          <span>Access notes</span>
+                          <input
+                            type="text"
+                            value={leadForm.access_notes}
+                            onChange={(event) => handleLeadFieldChange('access_notes', event.target.value)}
+                          />
+                        </label>
+                        <label className="full">
+                          <span>Parking</span>
+                          <input
+                            type="text"
+                            value={leadForm.parking}
+                            onChange={(event) => handleLeadFieldChange('parking', event.target.value)}
+                          />
+                        </label>
+                        <label>
+                          <span>Pets</span>
+                          <input
+                            type="text"
+                            value={leadForm.pets}
+                            onChange={(event) => handleLeadFieldChange('pets', event.target.value)}
+                          />
+                        </label>
+                        <label>
+                          <span>Allergies</span>
+                          <input
+                            type="text"
+                            value={leadForm.allergies}
+                            onChange={(event) => handleLeadFieldChange('allergies', event.target.value)}
+                          />
+                        </label>
+                        <label>
+                          <span>Referral code</span>
+                          <input
+                            type="text"
+                            value={leadForm.referral_code}
+                            onChange={(event) => handleLeadFieldChange('referral_code', event.target.value.toUpperCase())}
+                            placeholder="ABC12345"
+                          />
+                        </label>
+                        <label className="full">
+                          <span>Notes</span>
+                          <textarea
+                            value={leadForm.notes}
+                            onChange={(event) => handleLeadFieldChange('notes', event.target.value)}
+                          />
+                        </label>
+                      </div>
 
-            <div className="chat-footer">
-              <span className="muted">Session ID: {sessionId || 'Generating...'}</span>
-              <span className="muted">API: {apiBaseUrl}</span>
+                      {leadError ? <p className="alert alert-error">{leadError}</p> : null}
+                      <button className="btn btn-primary" type="submit" disabled={leadSubmitting}>
+                        {leadSubmitting ? 'Submitting...' : 'Submit booking request'}
+                      </button>
+                    </form>
+                  ) : null}
+                </section>
+              ) : null}
             </div>
           </div>
+        </section>
+
+        <section className="section" aria-labelledby="faq-title">
+          <h2 id="faq-title">FAQ</h2>
+          <div className="faq-list">
+            {faqs.map((faq) => (
+              <details key={faq.q} className="card">
+                <summary>{faq.q}</summary>
+                <p>{faq.a}</p>
+              </details>
+            ))}
+          </div>
+        </section>
+
+        <section className="cta card" aria-labelledby="cta-title">
+          <div>
+            <h2 id="cta-title">Ready for a cleaner home?</h2>
+            <p className="subtitle">Start the chat to get a deterministic quote and book your preferred time.</p>
+          </div>
+          <a className="btn btn-primary" href="#chat">
+            Start chat
+          </a>
         </section>
       </main>
     </div>

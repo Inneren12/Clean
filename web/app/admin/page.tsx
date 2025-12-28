@@ -70,6 +70,12 @@ function bookingLocalYMD(startsAt: string) {
   return formatYMDInTz(new Date(startsAt), EDMONTON_TZ);
 }
 
+function statusBadge(status?: string) {
+  const normalized = (status ?? "").toLowerCase();
+  const className = `status-badge ${normalized}`;
+  return <span className={className}>{status || "UNKNOWN"}</span>;
+}
+
 export default function AdminPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -231,123 +237,180 @@ export default function AdminPage() {
   }, [bookings, selectedDate]);
 
   return (
-    <div style={{ padding: "1.5rem", fontFamily: "sans-serif" }}>
-      <h1>Admin / Dispatcher</h1>
-      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
-        <input
-          placeholder="Username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-        />
-        <input
-          placeholder="Password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
-        <button type="button" onClick={saveCredentials}>
-          Save
-        </button>
-        <button type="button" onClick={clearCredentials}>
-          Clear
-        </button>
+    <div className="admin-page">
+      <div className="admin-section">
+        <h1>Admin / Dispatcher</h1>
+        <p className="muted">Save credentials locally, then load leads, bookings, and exports.</p>
       </div>
-      {message ? <p>{message}</p> : null}
 
-      <section style={{ marginBottom: "1.5rem" }}>
-        <h2>Leads</h2>
-        <label>
-          Status filter:
-          <input
-            value={leadStatusFilter}
-            onChange={(e) => setLeadStatusFilter(e.target.value.toUpperCase())}
-            placeholder="e.g. CONTACTED"
-          />
-        </label>
-        <ul>
-          {leads.map((lead) => (
-            <li key={lead.lead_id} style={{ marginBottom: "0.5rem" }}>
-              <div>
-                <strong>{lead.name}</strong> ({lead.email || "no email"}) – {lead.status}
-              </div>
-              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                {[
-                  "CONTACTED",
-                  "BOOKED",
-                  "DONE",
-                  "CANCELLED",
-                ].map((status) => (
-                  <button key={status} type="button" onClick={() => updateLeadStatus(lead.lead_id, status)}>
-                    {status}
-                  </button>
-                ))}
-              </div>
-            </li>
-          ))}
-        </ul>
-      </section>
+      <div className="admin-card">
+        <div className="admin-section">
+          <h2>Credentials</h2>
+          <div className="admin-actions">
+            <input placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
+            <input
+              placeholder="Password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            <button className="btn btn-primary" type="button" onClick={saveCredentials}>
+              Save
+            </button>
+            <button className="btn btn-ghost" type="button" onClick={clearCredentials}>
+              Clear
+            </button>
+          </div>
+          {message ? <p className="alert alert-success">{message}</p> : null}
+        </div>
+      </div>
 
-      <section style={{ marginBottom: "1.5rem" }}>
-        <h2>Export dead-letter</h2>
-        <button type="button" onClick={() => void loadExportDeadLetter()} style={{ marginBottom: "0.5rem" }}>
-          Refresh
-        </button>
-        {exportEvents.length === 0 ? <div>No failed exports recorded.</div> : null}
-        <ul>
-          {exportEvents.map((event) => (
-            <li key={event.event_id} style={{ marginBottom: "0.5rem" }}>
-              <div>
-                <strong>{event.mode}</strong> → {event.target_url_host ?? "unknown host"} ({event.last_error_code || "unknown"}
-                )
-              </div>
-              <div>
-                Attempts: {event.attempts} · Lead: {event.lead_id ?? "unknown"} · Created: {formatDateTime(event.created_at)}
-              </div>
-            </li>
-          ))}
-        </ul>
-      </section>
+      <div className="admin-grid">
+        <section className="admin-card admin-section">
+          <div className="section-heading">
+            <h2>Leads</h2>
+            <p className="muted">Filter and set statuses directly.</p>
+          </div>
+          <div className="admin-actions">
+            <label style={{ width: "100%" }}>
+              <span className="label">Status filter</span>
+              <input
+                value={leadStatusFilter}
+                onChange={(e) => setLeadStatusFilter(e.target.value.toUpperCase())}
+                placeholder="e.g. CONTACTED"
+              />
+            </label>
+            <button className="btn btn-ghost" type="button" onClick={() => void loadLeads()}>
+              Refresh
+            </button>
+          </div>
+          <table className="table-like">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {leads.map((lead) => (
+                <tr key={lead.lead_id}>
+                  <td>{lead.name}</td>
+                  <td>{lead.email || "no email"}</td>
+                  <td>{statusBadge(lead.status)}</td>
+                  <td>
+                    <div className="admin-actions">
+                      {["CONTACTED", "BOOKED", "DONE", "CANCELLED"].map((status) => (
+                        <button key={status} className="btn btn-ghost" type="button" onClick={() => updateLeadStatus(lead.lead_id, status)}>
+                          {status}
+                        </button>
+                      ))}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
 
-      <section>
-        <h2>Bookings</h2>
-        <label>
-          Date:
-          <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} />
-        </label>
-        <ul>
-          {bookings
-            .filter((booking) => bookingLocalYMD(booking.starts_at) === selectedDate)
-            .map((booking) => (
-            <li key={booking.booking_id} style={{ marginBottom: "0.5rem" }}>
-              <div>
-                <strong>{booking.status}</strong> – {formatDateTime(booking.starts_at)} – {booking.duration_minutes}m
+        <section className="admin-card admin-section">
+          <div className="section-heading">
+            <h2>Export dead-letter</h2>
+            <p className="muted">Failed webhook deliveries (latest 50).</p>
+          </div>
+          <div className="admin-actions">
+            <button className="btn btn-ghost" type="button" onClick={() => void loadExportDeadLetter()}>
+              Refresh
+            </button>
+          </div>
+          {exportEvents.length === 0 ? <div className="muted">No failed exports recorded.</div> : null}
+          <div className="dead-letter-list">
+            {exportEvents.map((event) => (
+              <div key={event.event_id} className="admin-card">
+                <div className="admin-section">
+                  <div className="admin-actions" style={{ justifyContent: "space-between" }}>
+                    <strong>{event.mode}</strong>
+                    <span className="muted">{event.target_url_host ?? "unknown host"}</span>
+                  </div>
+                  <div className="muted">
+                    Attempts: {event.attempts} · Lead: {event.lead_id ?? "unknown"} · Created: {formatDateTime(event.created_at)}
+                  </div>
+                  <div className="muted">Last error: {event.last_error_code || "unknown"}</div>
+                </div>
               </div>
-              <div>{booking.lead_name || "Unassigned"}</div>
-              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                <button type="button" onClick={() => performBookingAction(booking.booking_id, "confirm")}>
-                  Confirm
-                </button>
-                <button type="button" onClick={() => performBookingAction(booking.booking_id, "cancel")}>
-                  Cancel
-                </button>
-                <button type="button" onClick={() => rescheduleBooking(booking.booking_id)}>
-                  Reschedule
-                </button>
-              </div>
-            </li>
             ))}
-        </ul>
+          </div>
+        </section>
+      </div>
+
+      <section className="admin-card admin-section">
+        <div className="section-heading">
+          <h2>Bookings</h2>
+          <p className="muted">Day view with actions, plus a quick week glance.</p>
+        </div>
+        <div className="admin-actions">
+          <label>
+            <span className="label">Date</span>
+            <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} />
+          </label>
+          <button className="btn btn-ghost" type="button" onClick={() => void loadBookings()}>
+            Refresh
+          </button>
+        </div>
+        <table className="table-like">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Status</th>
+              <th>Lead</th>
+              <th>Duration</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {bookings
+              .filter((booking) => bookingLocalYMD(booking.starts_at) === selectedDate)
+              .map((booking) => (
+                <tr key={booking.booking_id}>
+                  <td>{formatDateTime(booking.starts_at)}</td>
+                  <td>{statusBadge(booking.status)}</td>
+                  <td>
+                    <div>{booking.lead_name || "Unassigned"}</div>
+                    <div className="muted">{booking.lead_email || "no email"}</div>
+                  </td>
+                  <td>{booking.duration_minutes}m</td>
+                  <td>
+                    <div className="admin-actions">
+                      <button className="btn btn-ghost" type="button" onClick={() => performBookingAction(booking.booking_id, "confirm")}>
+                        Confirm
+                      </button>
+                      <button className="btn btn-ghost" type="button" onClick={() => performBookingAction(booking.booking_id, "cancel")}>
+                        Cancel
+                      </button>
+                      <button className="btn btn-secondary" type="button" onClick={() => rescheduleBooking(booking.booking_id)}>
+                        Reschedule
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+
         <h3>Week view</h3>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "0.5rem" }}>
+        <div className="slot-grid">
           {weekView.map((day) => (
-            <div key={day.date} style={{ border: "1px solid #ccc", padding: "0.5rem" }}>
-              <strong>{day.label}</strong>
-              <div>{day.items.length} bookings</div>
-              <ul>
-                {day.items.map((booking) => (
-                  <li key={booking.booking_id}>{formatDateTime(booking.starts_at)}</li>
-                ))}
-              </ul>
+            <div key={day.date} className="slot-column admin-card" style={{ boxShadow: "none" }}>
+              <div className="admin-section">
+                <strong>{day.label}</strong>
+                <div className="muted">{day.items.length} bookings</div>
+                <ul style={{ paddingLeft: 16, margin: 0, display: "grid", gap: 6 }}>
+                  {day.items.map((booking) => (
+                    <li key={booking.booking_id}>• {formatDateTime(booking.starts_at)}</li>
+                  ))}
+                </ul>
+              </div>
             </div>
           ))}
         </div>
