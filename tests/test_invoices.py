@@ -253,31 +253,35 @@ async def _seed_invoice_with_token(async_session_maker) -> tuple[str, str]:
 
 
 def test_public_invoice_view_and_pdf(client, async_session_maker):
+    previous_secret = settings.invoice_public_token_secret
     settings.invoice_public_token_secret = "test-secret"
-    invoice_id, token = asyncio.run(_seed_invoice_with_token(async_session_maker))
+    try:
+        invoice_id, token = asyncio.run(_seed_invoice_with_token(async_session_maker))
 
-    ok = client.get(f"/i/{token}")
-    assert ok.status_code == 200
-    assert "Invoice #" in ok.text
-    assert "Download PDF" in ok.text
+        ok = client.get(f"/i/{token}")
+        assert ok.status_code == 200
+        assert "Invoice #" in ok.text
+        assert "Download PDF" in ok.text
 
-    pdf = client.get(f"/i/{token}.pdf")
-    assert pdf.status_code == 200
-    assert pdf.headers["content-type"].startswith("application/pdf")
-    assert len(pdf.content) > 100
+        pdf = client.get(f"/i/{token}.pdf")
+        assert pdf.status_code == 200
+        assert pdf.headers["content-type"].startswith("application/pdf")
+        assert len(pdf.content) > 100
 
-    missing = client.get("/i/not-a-token")
-    assert missing.status_code == 404
+        missing = client.get("/i/not-a-token")
+        assert missing.status_code == 404
 
-    async def _count_tokens() -> int:
-        async with async_session_maker() as session:
-            result = await session.execute(sa.select(InvoicePublicToken))
-            rows = result.scalars().all()
-            assert all(len(row.token_hash) == 64 for row in rows)
-            assert all(row.token_hash != token for row in rows)
-            return len(rows)
+        async def _count_tokens() -> int:
+            async with async_session_maker() as session:
+                result = await session.execute(sa.select(InvoicePublicToken))
+                rows = result.scalars().all()
+                assert all(len(row.token_hash) == 64 for row in rows)
+                assert all(row.token_hash != token for row in rows)
+                return len(rows)
 
-    assert asyncio.run(_count_tokens()) == 1
+        assert asyncio.run(_count_tokens()) == 1
+    finally:
+        settings.invoice_public_token_secret = previous_secret
 
 
 def test_admin_send_invoice_sets_status_and_token(client, async_session_maker):

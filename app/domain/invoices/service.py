@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import logging
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 import hashlib
@@ -11,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from app.domain.bookings.db_models import Booking
@@ -26,6 +28,8 @@ from app.domain.invoices.schemas import InvoiceItemCreate
 from app.domain.leads.db_models import Lead
 from app.settings import settings
 
+
+logger = logging.getLogger(__name__)
 
 _SQLITE_INVOICE_NUMBER_LOCK = asyncio.Lock()
 
@@ -187,7 +191,16 @@ async def register_payment(
         reference=reference,
     )
     session.add(payment)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError:
+        logger.info(
+            "invoice_payment_duplicate",
+            extra={"extra": {"invoice_id": invoice.invoice_id, "provider": provider, "provider_ref": provider_ref}},
+        )
+        await session.rollback()
+        return None
+
     await _refresh_invoice_payment_status(session, invoice)
     await session.flush()
     return payment
@@ -329,12 +342,12 @@ def generate_public_token() -> str:
 
 
 def _public_token_secret() -> str:
-    return (
-        settings.invoice_public_token_secret
-        or settings.admin_basic_password
-        or settings.dispatcher_basic_password
-        or settings.app_name
-    )
+    secret = getattr(settings, "invoice_public_token_secret", None)
+    if secret:
+        return secret
+    fallback = getattr(settings, "app_name", "cleaning")
+    logger.debug("using_fallback_public_token_secret", extra={"extra": {"fallback": fallback}})
+    return fallback
 
 
 def hash_public_token(token: str) -> str:

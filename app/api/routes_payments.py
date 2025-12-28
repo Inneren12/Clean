@@ -55,11 +55,25 @@ async def _handle_payment_event(session: AsyncSession, event: Any) -> bool:
         return False
 
     payment_status = None
+    provider_ref = None
     if event_type == "checkout.session.completed":
-        payment_status = invoice_statuses.PAYMENT_STATUS_SUCCEEDED if _safe_get(payload_object, "payment_status") == "paid" else None
+        provider_ref = _safe_get(payload_object, "payment_intent")
+        if not provider_ref:
+            logger.info(
+                "stripe_invoice_event_ignored",
+                extra={"extra": {"reason": "missing_payment_intent", "event_type": event_type}},
+            )
+            return False
+        payment_status = (
+            invoice_statuses.PAYMENT_STATUS_SUCCEEDED
+            if _safe_get(payload_object, "payment_status") == "paid"
+            else None
+        )
     elif event_type == "payment_intent.succeeded":
+        provider_ref = _safe_get(payload_object, "id")
         payment_status = invoice_statuses.PAYMENT_STATUS_SUCCEEDED
     elif event_type == "payment_intent.payment_failed":
+        provider_ref = _safe_get(payload_object, "id")
         payment_status = invoice_statuses.PAYMENT_STATUS_FAILED
 
     if payment_status is None:
@@ -69,7 +83,6 @@ async def _handle_payment_event(session: AsyncSession, event: Any) -> bool:
         )
         return False
 
-    provider_ref = _safe_get(payload_object, "payment_intent") or _safe_get(payload_object, "id")
     amount_cents = (
         _safe_get(payload_object, "amount_received")
         or _safe_get(payload_object, "amount_total")
