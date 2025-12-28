@@ -47,7 +47,8 @@ async def require_identity(request: Request) -> client_schemas.ClientIdentity:
 
 
 def _magic_link_destination(request: Request) -> str:
-    base_url = settings.client_portal_base_url or settings.public_base_url
+    public_base = getattr(settings, "public_base_url", None)
+    base_url = settings.client_portal_base_url or public_base
     if not base_url:
         base_url = str(request.base_url).rstrip("/")
     return f"{base_url}/client/login/callback"
@@ -107,8 +108,9 @@ async def request_login(
 
 
 @router.get("/client/login/callback")
-async def login_callback(token: str) -> HTMLResponse:
+async def login_callback(token: str, request: Request) -> HTMLResponse:
     identity = await _get_identity_from_token(token)
+    secure = settings.app_env != "dev" or request.url.scheme == "https"
     response = HTMLResponse(
         "<html><body><p>Login successful. Continue to <a href='/client'>your dashboard</a>.</p></body></html>"
     )
@@ -116,7 +118,7 @@ async def login_callback(token: str) -> HTMLResponse:
         SESSION_COOKIE_NAME,
         token,
         httponly=True,
-        secure=False,
+        secure=secure,
         samesite="lax",
         max_age=int(timedelta(minutes=settings.client_portal_token_ttl_minutes).total_seconds()),
     )

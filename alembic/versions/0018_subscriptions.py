@@ -2,7 +2,7 @@
 subscriptions
 
 Revision ID: 0018_subscriptions
-Revises: 0017_merge_heads
+Revises: 0017_client_portal_linear
 Create Date: 2025-05-15
 """
 
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "0018_subscriptions"
-down_revision = "0017_merge_heads"
+down_revision = "0017_client_portal_linear"
 branch_labels = None
 depends_on = None
 

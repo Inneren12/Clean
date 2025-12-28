@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
@@ -29,8 +30,8 @@ def test_magic_link_expiry():
         verify_magic_token(token, secret=secret)
 
 
-def test_client_cannot_access_foreign_order(client):
-    session_factory = app.state.db_session_factory
+def test_client_cannot_access_foreign_order(client, async_session_maker):
+    session_factory = async_session_maker
 
     async def seed_data():
         async with session_factory() as session:
@@ -67,8 +68,6 @@ def test_client_cannot_access_foreign_order(client):
             await session.commit()
             return c1.client_id, c2.client_id
 
-    import asyncio
-
     c1_id, _ = asyncio.run(seed_data())
 
     token = issue_magic_token(
@@ -95,7 +94,7 @@ def test_repeat_order_reevaluates_deposit_policy(client, async_session_maker, mo
     Ensures that when repeating an order, deposit rules are re-evaluated
     for the new booking date rather than bypassed with deposit_decision=None.
     """
-    session_factory = app.state.db_session_factory
+    session_factory = async_session_maker
 
     async def seed_data():
         async with session_factory() as session:
@@ -153,8 +152,6 @@ def test_repeat_order_reevaluates_deposit_policy(client, async_session_maker, mo
             session.add(booking)
             await session.commit()
             return client_user.client_id
-
-    import asyncio
 
     client_id = asyncio.run(seed_data())
 
