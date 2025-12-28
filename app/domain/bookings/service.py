@@ -372,6 +372,7 @@ async def create_booking(
             lead_id=lead_id,
             starts_at=normalized,
             duration_minutes=duration_minutes,
+            planned_minutes=duration_minutes,
             status="PENDING",
             deposit_required=decision.required,
             deposit_cents=decision.deposit_cents,
@@ -563,6 +564,7 @@ async def mark_booking_completed(
         raise ValueError("Booking already completed")
 
     booking.actual_duration_minutes = actual_duration_minutes
+    booking.actual_seconds = actual_duration_minutes * 60
     booking.status = "DONE"
     lead = await session.get(Lead, booking.lead_id) if booking.lead_id else None
     try:
