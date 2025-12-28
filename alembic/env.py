@@ -14,6 +14,7 @@ from app.domain.checklists import db_models as checklist_db_models  # noqa: F401
 from app.domain.export_events import db_models as export_events_db_models  # noqa: F401
 from app.domain.leads import db_models  # noqa: F401
 from app.domain.invoices import db_models as invoice_db_models  # noqa: F401
+from app.domain.reason_logs import db_models as reason_logs_db_models  # noqa: F401
 from app.domain.time_tracking import db_models as time_tracking_db_models  # noqa: F401
 from app.infra.db import Base
 from app.settings import settings
