@@ -230,12 +230,26 @@ async def repeat_order(
 ) -> client_schemas.ClientOrderSummary:
     original = await _get_client_booking(session, order_id, identity.client_id)
     new_start = original.starts_at + timedelta(days=7)
+
+    # Fetch the lead to evaluate deposit policy for the new booking date
+    lead = None
+    if original.lead_id:
+        lead = await session.get(Lead, original.lead_id)
+
+    # Re-evaluate deposit policy based on the new start time and lead details
+    deposit_decision = await booking_service.evaluate_deposit_policy(
+        session=session,
+        lead=lead,
+        starts_at=new_start,
+        deposit_percent=settings.deposit_percent,
+    )
+
     new_booking = await booking_service.create_booking(
         starts_at=new_start,
         duration_minutes=original.duration_minutes,
         lead_id=original.lead_id,
         session=session,
-        deposit_decision=None,
+        deposit_decision=deposit_decision,
         client_id=identity.client_id,
     )
     logger.info(
