@@ -9,3 +9,4 @@ node_modules/
 out/
 web/.env.local
 *.tsbuildinfo
+*.db
