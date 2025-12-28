@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -30,6 +30,27 @@ from app.infra.bot_store import BotStore
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
+
+
+# FAQ/Handoff stub functions (to be implemented in future iterations)
+def match_faq(text: str) -> List[Dict[str, str]]:
+    """Stub: Match user text against FAQ knowledge base. Returns list of matched FAQ entries."""
+    return []
+
+
+def evaluate_handoff(
+    intent: Intent,
+    confidence: float,
+    faq_matches: Optional[List[Dict[str, str]]],
+    fsm_is_flow: bool,
+) -> Dict[str, bool]:
+    """Stub: Evaluate whether conversation should be handed off to human.
+
+    Returns dict with keys:
+        - should_handoff: bool
+        - suggested_action: str (e.g., "clarify", "handoff", "continue")
+    """
+    return {"should_handoff": False, "suggested_action": "continue"}
 
 
 def _fsm_step_for_intent(intent: Intent) -> FsmStep:
@@ -80,10 +101,47 @@ async def post_message(
     fsm_step_value = fsm_step.value if hasattr(fsm_step, "value") else fsm_step
     await store.update_state(request.conversation_id, updated_state)
 
-    bot_text = fsm_reply.text or (
-        "Thanks! I noted your request. "
-        "I'll keep gathering details so we can prepare the right follow-up."
+    # A1: Compute fsm_is_flow to safeguard against FAQ/clarification overlays
+    # When fsm_is_flow is True, NEVER override FSM reply with FAQ/clarify prompts
+    step_str = str(fsm_step_value) if fsm_step_value else ""
+    fsm_is_flow = step_str.startswith("ask_") or step_str == "confirm_lead"
+
+    # A2: Detect explicit FAQ requests (faq:, faq command, or "faq ")
+    text_lower = request.text.lower().strip()
+    faq_requested = (
+        text_lower.startswith("faq:")
+        or text_lower.startswith("faq ")
+        or text_lower == "faq"
     )
+
+    # A3: Only compute faq_matches when FAQ explicitly requested
+    faq_matches = match_faq(request.text) if faq_requested else None
+
+    # A4: Evaluate handoff decision with faq_matches context
+    # Pass faq_matches so handoff logic can treat FAQ unclear appropriately
+    handoff_decision = evaluate_handoff(
+        intent=nlu_result.intent,
+        confidence=nlu_result.confidence,
+        faq_matches=faq_matches,
+        fsm_is_flow=fsm_is_flow,
+    )
+
+    # A5: Apply FAQ/clarification ONLY if:
+    #     - FAQ was explicitly requested AND
+    #     - NOT in active flow (fsm_is_flow=False)
+    # Otherwise, always use FSM reply (no router-level clarification override)
+    bot_text = fsm_reply.text
+    if faq_requested and not fsm_is_flow:
+        # Future: format FAQ answers or clarification prompt here
+        # For now, fall back to FSM reply
+        bot_text = fsm_reply.text or "I'll help with that FAQ."
+
+    # Ensure we always have bot_text
+    if not bot_text:
+        bot_text = (
+            "Thanks! I noted your request. "
+            "I'll keep gathering details so we can prepare the right follow-up."
+        )
     bot_payload = MessagePayload(
         role=MessageRole.bot,
         text=bot_text,

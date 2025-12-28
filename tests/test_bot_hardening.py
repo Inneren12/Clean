@@ -58,7 +58,8 @@ def test_intents_use_enums_and_messages_list(client):
     assert response.status_code == 200
     body = response.json()
     assert body["reply"]["intent"] == "faq"
-    assert body["reply"]["state"]["fsmStep"] == "routing"
+    assert body["reply"]["state"]["fsmStep"] == "ask_service_type"
+    assert body["reply"]["quickReplies"]  # FSM provides quick replies for flow
 
     session_response = client.get(f"/api/bot/session/{conversation_id}")
     assert session_response.status_code == 200

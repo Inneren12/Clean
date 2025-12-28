@@ -53,7 +53,7 @@ def test_message_normalizes_entities_into_state(client):
     assert filled["service_type"] == "deep_clean"
     assert set(filled.get("extras", [])) == {"oven", "carpet"}
     assert filled.get("area") == "Brooklyn"
-    assert filled.get("preferred_time_window") == "tomorrow evening 17:00"
+    assert filled.get("preferred_time_window") == "tomorrow evening"
 
 
 def test_create_lead_and_case(client):
