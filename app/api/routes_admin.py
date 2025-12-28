@@ -1,9 +1,12 @@
 import html
+import json
 import logging
+import math
 import secrets
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from typing import Iterable, List, Optional
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse
@@ -263,30 +266,80 @@ def _render_dialogs(
     return "".join(cards)
 
 
-def _wrap_page(content: str) -> str:
+def _wrap_page(content: str, *, title: str = "Admin", active: str | None = None) -> str:
+    nav_links = [
+        ("Observability", "/v1/admin/observability", "observability"),
+        ("Invoices", "/v1/admin/ui/invoices", "invoices"),
+    ]
+    nav = "".join(
+        f'<a class="nav-link{" nav-link-active" if active == key else ""}" href="{href}">{html.escape(label)}</a>'
+        for label, href, key in nav_links
+    )
     return f"""
     <html>
       <head>
-        <title>Admin Observability</title>
+        <title>{html.escape(title)}</title>
         <style>
-          body {{ font-family: Arial, sans-serif; margin: 24px; background: #fafafa; }}
+          body {{ font-family: Arial, sans-serif; margin: 24px; background: #fafafa; color: #111827; }}
           h1 {{ margin-bottom: 8px; }}
           h2 {{ margin-top: 28px; margin-bottom: 12px; }}
-          .card {{ background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; margin-bottom: 10px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }}
-          .card-row {{ display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }}
+          a {{ color: #2563eb; }}
+          .page {{ max-width: 1080px; margin: 0 auto; }}
+          .topbar {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 12px; flex-wrap: wrap; }}
+          .nav {{ display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }}
+          .nav-link {{ text-decoration: none; color: #374151; padding: 6px 10px; border-radius: 8px; border: 1px solid transparent; }}
+          .nav-link-active {{ background: #111827; color: #fff; border-color: #111827; }}
+          .card {{ background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }}
+          .card-row {{ display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }}
           .title {{ font-weight: 600; }}
           .status {{ font-weight: 600; color: #2563eb; }}
           .muted {{ color: #6b7280; font-size: 13px; }}
-          .filters {{ display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }}
-          .badge {{ padding: 4px 8px; border-radius: 999px; border: 1px solid #d1d5db; text-decoration: none; color: #111827; font-size: 13px; }}
+          .small {{ font-size: 12px; }}
+          .filters {{ display: flex; gap: 8px; align-items: flex-end; margin-bottom: 12px; flex-wrap: wrap; }}
+          .form-group {{ display: flex; flex-direction: column; gap: 4px; font-size: 13px; }}
+          .input {{ padding: 6px 8px; border-radius: 6px; border: 1px solid #d1d5db; min-width: 140px; font-size: 14px; }}
+          .badge {{ display: inline-block; padding: 4px 8px; border-radius: 999px; border: 1px solid #d1d5db; text-decoration: none; color: #111827; font-size: 13px; }}
           .badge-active {{ background: #2563eb; color: #fff; border-color: #2563eb; }}
-          .btn {{ padding: 6px 10px; background: #111827; color: #fff; border-radius: 6px; text-decoration: none; font-size: 13px; }}
+          .badge-status {{ font-weight: 600; }}
+          .status-draft {{ background: #f3f4f6; }}
+          .status-sent {{ background: #eef2ff; color: #4338ca; border-color: #c7d2fe; }}
+          .status-partial {{ background: #fffbeb; color: #92400e; border-color: #fcd34d; }}
+          .status-paid {{ background: #ecfdf3; color: #065f46; border-color: #a7f3d0; }}
+          .status-overdue {{ background: #fef2f2; color: #b91c1c; border-color: #fecaca; }}
+          .status-void {{ background: #f3f4f6; color: #374151; }}
+          .btn {{ padding: 8px 12px; background: #111827; color: #fff; border-radius: 6px; text-decoration: none; font-size: 13px; border: none; cursor: pointer; }}
+          .btn.secondary {{ background: #fff; color: #111827; border: 1px solid #d1d5db; }}
+          .btn.small {{ padding: 6px 8px; font-size: 12px; }}
+          .btn:disabled {{ opacity: 0.6; cursor: not-allowed; }}
           .tag {{ display: inline-block; background: #eef2ff; color: #4338ca; padding: 2px 6px; border-radius: 6px; font-size: 12px; margin-left: 4px; }}
+          .table {{ width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 14px; }}
+          .table th, .table td {{ padding: 10px 8px; border-bottom: 1px solid #e5e7eb; text-align: left; vertical-align: top; }}
+          .table th {{ background: #f9fafb; font-weight: 600; }}
+          .table .muted {{ font-size: 12px; }}
+          .table .align-right {{ text-align: right; }}
+          .pill {{ display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 10px; border: 1px solid #e5e7eb; background: #f9fafb; }}
+          .metric-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-top: 8px; }}
+          .metric {{ background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; }}
+          .metric .label {{ font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.03em; }}
+          .metric .value {{ font-size: 18px; font-weight: 700; margin-top: 2px; }}
+          .danger {{ color: #b91c1c; }}
+          .success {{ color: #065f46; }}
+          .chip {{ display: inline-flex; align-items: center; gap: 6px; background: #eef2ff; border: 1px solid #c7d2fe; padding: 6px 8px; border-radius: 8px; font-size: 13px; }}
+          .stack {{ display: flex; flex-direction: column; gap: 6px; }}
+          .row-highlight {{ background: #fffbeb; }}
+          .actions {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }}
+          .section {{ margin-top: 16px; }}
+          .note {{ padding: 8px 10px; background: #f9fafb; border: 1px dashed #d1d5db; border-radius: 8px; }}
         </style>
       </head>
       <body>
-        <h1>Admin — Leads, Cases & Dialogs</h1>
-        {content}
+        <div class="page">
+          <div class="topbar">
+            <h1>{html.escape(title)}</h1>
+            <div class="nav">{nav}</div>
+          </div>
+          {content}
+        </div>
       </body>
     </html>
     """
@@ -629,7 +682,9 @@ async def admin_observability(
             _render_section("Dialogs", _render_dialogs(conversations, message_lookup, active_filters)),
         ]
     )
-    return HTMLResponse(_wrap_page(content))
+    return HTMLResponse(
+        _wrap_page(content, title="Admin — Leads, Cases & Dialogs", active="observability")
+    )
 
 
 @router.get("/v1/admin/observability/cases/{case_id}", response_class=HTMLResponse)
@@ -739,7 +794,9 @@ async def admin_case_detail(
             _render_section("Transcript", transcript_html),
         ]
     )
-    return HTMLResponse(_wrap_page(content))
+    return HTMLResponse(
+        _wrap_page(content, title="Admin — Leads, Cases & Dialogs", active="observability")
+    )
 
 
 @router.post("/v1/admin/bookings/{booking_id}/cancel", response_model=booking_schemas.BookingResponse)
@@ -854,17 +911,16 @@ def _invoice_list_item(invoice: Invoice) -> invoice_schemas.InvoiceListItem:
     return invoice_schemas.InvoiceListItem(**data)
 
 
-@router.get("/v1/admin/invoices", response_model=invoice_schemas.InvoiceListResponse)
-async def list_invoices(
-    status_filter: str | None = Query(default=None, alias="status"),
-    customer_id: str | None = None,
-    order_id: str | None = None,
-    q: str | None = None,
-    page: int = Query(default=1, ge=1),
-    session: AsyncSession = Depends(get_db_session),
-    _admin: AdminIdentity = Depends(require_admin),
+async def _query_invoice_list(
+    *,
+    session: AsyncSession,
+    status_filter: str | None,
+    customer_id: str | None,
+    order_id: str | None,
+    q: str | None,
+    page: int,
+    page_size: int = 50,
 ) -> invoice_schemas.InvoiceListResponse:
-    page_size = 50
     filters = []
     if status_filter:
         try:
@@ -899,6 +955,167 @@ async def list_invoices(
     )
 
 
+@router.get("/v1/admin/invoices", response_model=invoice_schemas.InvoiceListResponse)
+async def list_invoices(
+    status_filter: str | None = Query(default=None, alias="status"),
+    customer_id: str | None = None,
+    order_id: str | None = None,
+    q: str | None = None,
+    page: int = Query(default=1, ge=1),
+    session: AsyncSession = Depends(get_db_session),
+    _admin: AdminIdentity = Depends(require_admin),
+) -> invoice_schemas.InvoiceListResponse:
+    return await _query_invoice_list(
+        session=session,
+        status_filter=status_filter,
+        customer_id=customer_id,
+        order_id=order_id,
+        q=q,
+        page=page,
+    )
+
+
+@router.get("/v1/admin/ui/invoices", response_class=HTMLResponse)
+async def admin_invoice_list_ui(
+    status_filter: str | None = Query(default=None, alias="status"),
+    customer_id: str | None = Query(default=None),
+    order_id: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    session: AsyncSession = Depends(get_db_session),
+    _admin: AdminIdentity = Depends(require_admin),
+) -> HTMLResponse:
+    invoice_list = await _query_invoice_list(
+        session=session,
+        status_filter=status_filter,
+        customer_id=customer_id,
+        order_id=order_id,
+        q=q,
+        page=page,
+    )
+
+    def _cell(label: str, value: str) -> str:
+        return f"<div class=\"muted small\">{html.escape(label)}: {html.escape(value)}</div>"
+
+    rows: list[str] = []
+    today = date.today()
+    for invoice in invoice_list.invoices:
+        overdue = invoice.status == invoice_statuses.INVOICE_STATUS_OVERDUE or (
+            invoice.due_date and invoice.balance_due_cents > 0 and invoice.due_date < today
+        )
+        row_class = " class=\"row-highlight\"" if overdue else ""
+        balance_class = "danger" if invoice.balance_due_cents > 0 else "success"
+        rows.append(
+            """
+            <tr{row_class}>
+              <td>
+                <div class="title"><a href="/v1/admin/ui/invoices/{invoice_id}">{invoice_number}</a></div>
+                {_id}
+              </td>
+              <td>{status}</td>
+              <td>{issue}{due}</td>
+              <td class="align-right">{total}<div class="muted small">Paid: {paid}</div></td>
+              <td class="align-right {balance_class}">{balance}</td>
+              <td>{order}{customer}</td>
+              <td class="muted small">{created}</td>
+            </tr>
+            """.format(
+                row_class=row_class,
+                invoice_id=html.escape(invoice.invoice_id),
+                invoice_number=html.escape(invoice.invoice_number),
+                status=_status_badge(invoice.status),
+                issue=_cell("Issue", _format_date(invoice.issue_date)),
+                due=_cell("Due", _format_date(invoice.due_date)),
+                total=_format_money(invoice.total_cents, invoice.currency),
+                paid=_format_money(invoice.paid_cents, invoice.currency),
+                balance=_format_money(invoice.balance_due_cents, invoice.currency),
+                balance_class=balance_class,
+                order=_cell("Order", invoice.order_id or "-"),
+                customer=_cell("Customer", invoice.customer_id or "-"),
+                created=_format_dt(invoice.created_at),
+                _id=_cell("ID", invoice.invoice_id),
+            )
+        )
+
+    table_body = "".join(rows) if rows else f"<tr><td colspan=7>{_render_empty('No invoices match these filters.')}</td></tr>"
+
+    total_pages = max(math.ceil(invoice_list.total / invoice_list.page_size), 1)
+    prev_page = invoice_list.page - 1 if invoice_list.page > 1 else None
+    next_page = invoice_list.page + 1 if invoice_list.page < total_pages else None
+    base_params = {
+        "status": status_filter,
+        "customer_id": customer_id,
+        "order_id": order_id,
+        "q": q,
+    }
+
+    pagination_parts = [
+        "<div class=\"card-row\">",
+        f"<div class=\"muted\">Page {invoice_list.page} of {total_pages} · {invoice_list.total} total</div>",
+        "<div class=\"actions\">",
+    ]
+    if prev_page:
+        prev_query = _build_query({**base_params, "page": prev_page})
+        pagination_parts.append(f"<a class=\"btn secondary\" href=\"?{prev_query}\">Previous</a>")
+    if next_page:
+        next_query = _build_query({**base_params, "page": next_page})
+        pagination_parts.append(f"<a class=\"btn secondary\" href=\"?{next_query}\">Next</a>")
+    pagination_parts.append("</div></div>")
+    pagination = "".join(pagination_parts)
+
+    status_options = "".join(
+        f'<option value="{html.escape(status)}" {"selected" if status_filter == status else ""}>{html.escape(status.title())}</option>'
+        for status in sorted(invoice_statuses.INVOICE_STATUSES)
+    )
+
+    filters_html = f"""
+        <form class=\"filters\" method=\"get\">
+          <div class=\"form-group\">
+            <label>Status</label>
+            <select class=\"input\" name=\"status\">
+              <option value=\"\">Any</option>
+              {status_options}
+            </select>
+          </div>
+          <div class=\"form-group\">
+            <label>Customer ID</label>
+            <input class=\"input\" type=\"text\" name=\"customer_id\" value=\"{html.escape(customer_id or '')}\" placeholder=\"lead id\" />
+          </div>
+          <div class=\"form-group\">
+            <label>Order ID</label>
+            <input class=\"input\" type=\"text\" name=\"order_id\" value=\"{html.escape(order_id or '')}\" placeholder=\"booking id\" />
+          </div>
+          <div class=\"form-group\">
+            <label>Invoice #</label>
+            <input class=\"input\" type=\"text\" name=\"q\" value=\"{html.escape(q or '')}\" placeholder=\"INV-2024-000001\" />
+          </div>
+          <div class=\"form-group\">
+            <label>&nbsp;</label>
+            <div class=\"actions\">
+              <button class=\"btn\" type=\"submit\">Apply</button>
+              <a class=\"btn secondary\" href=\"/v1/admin/ui/invoices\">Reset</a>
+            </div>
+          </div>
+        </form>
+    """
+
+    content = "".join(
+        [
+            "<div class=\"card\">",
+            "<div class=\"card-row\"><div><div class=\"title\">Invoices</div><div class=\"muted\">Search, filter and drill into invoices</div></div>",
+            f"<div class=\"chip\">Total: {invoice_list.total}</div></div>",
+            filters_html,
+            "<table class=\"table\">",
+            "<thead><tr><th>Invoice</th><th>Status</th><th>Dates</th><th>Total</th><th>Balance</th><th>Order/Customer</th><th>Created</th></tr></thead>",
+            f"<tbody>{table_body}</tbody>",
+            "</table>",
+            pagination,
+            "</div>",
+        ]
+    )
+    return HTMLResponse(_wrap_page(content, title="Admin — Invoices", active="invoices"))
+
+
 @router.get("/v1/admin/invoices/{invoice_id}", response_model=invoice_schemas.InvoiceResponse)
 async def get_invoice(
     invoice_id: str,
@@ -916,8 +1133,367 @@ async def get_invoice(
     return _invoice_response(invoice)
 
 
+@router.get("/v1/admin/ui/invoices/{invoice_id}", response_class=HTMLResponse)
+async def admin_invoice_detail_ui(
+    invoice_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    _admin: AdminIdentity = Depends(require_admin),
+) -> HTMLResponse:
+    invoice_model = await session.get(
+        Invoice,
+        invoice_id,
+        options=(selectinload(Invoice.items), selectinload(Invoice.payments)),
+    )
+    if invoice_model is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
+
+    lead = await invoice_service.fetch_customer(session, invoice_model)
+    invoice = _invoice_response(invoice_model)
+
+    customer_bits: list[str] = []
+    if lead:
+        contact_parts = [part for part in [lead.email, lead.phone] if part]
+        contact = " · ".join(contact_parts) if contact_parts else "-"
+        customer_bits.append(f"<div class=\"title\">{html.escape(lead.name)}</div>")
+        customer_bits.append(f"<div class=\"muted\">{html.escape(contact)}</div>")
+        if lead.address:
+            customer_bits.append(f"<div class=\"muted small\">{html.escape(lead.address)}</div>")
+    else:
+        customer_bits.append(f"<div class=\"title\">Customer</div>")
+        customer_bits.append(f"<div class=\"muted\">ID: {html.escape(invoice.customer_id or '-')}</div>")
+    customer_section = "".join(
+        [
+            "<div class=\"card\">",
+            "<div class=\"card-row\"><div class=\"title\">Customer</div>",
+            f"<div class=\"muted small\">Invoice ID: {html.escape(invoice.invoice_id)} {_copy_button('Copy ID', invoice.invoice_id)}</div></div>",
+            "<div class=\"stack\">",
+            *customer_bits,
+            f"<div class=\"muted small\">Order: {html.escape(invoice.order_id or '-')}</div>",
+            "</div></div>",
+        ]
+    )
+
+    items_rows = "".join(
+        """
+        <tr>
+          <td>{desc}</td>
+          <td class="align-right">{qty}</td>
+          <td class="align-right">{unit}</td>
+          <td class="align-right">{line}</td>
+        </tr>
+        """.format(
+            desc=html.escape(item.description),
+            qty=item.qty,
+            unit=_format_money(item.unit_price_cents, invoice.currency),
+            line=_format_money(item.line_total_cents, invoice.currency),
+        )
+        for item in invoice.items
+    )
+    if not items_rows:
+        items_rows = f"<tr><td colspan=4>{_render_empty('No items recorded')}</td></tr>"
+
+    payment_rows = "".join(
+        """
+        <tr>
+          <td>{created}</td>
+          <td>{provider}</td>
+          <td>{method}</td>
+          <td class="align-right">{amount}</td>
+          <td>{status}</td>
+          <td>{reference}</td>
+        </tr>
+        """.format(
+            created=_format_dt(payment.created_at),
+            provider=html.escape(payment.provider_ref or payment.provider or "-"),
+            method=html.escape(payment.method),
+            amount=_format_money(payment.amount_cents, payment.currency),
+            status=html.escape(payment.status),
+            reference=html.escape(payment.reference or "-"),
+        )
+        for payment in invoice.payments
+    )
+    if not payment_rows:
+        payment_rows = f"<tr id=\"payments-empty\"><td colspan=6>{_render_empty('No payments yet')}</td></tr>"
+
+    copy_number_btn = _copy_button("Copy number", invoice.invoice_number)
+    status_badge = (
+        f'<span id="status-badge" class="badge badge-status status-{invoice.status.lower()}">' \
+        f"{html.escape(invoice.status)}</span>"
+    )
+    overdue = invoice.status == invoice_statuses.INVOICE_STATUS_OVERDUE or (
+        invoice.due_date and invoice.balance_due_cents > 0 and invoice.due_date < date.today()
+    )
+    balance_class = " danger" if invoice.balance_due_cents else ""
+    due_class = " danger" if overdue else ""
+    header = "".join(
+        [
+            "<div class=\"card\">",
+            "<div class=\"card-row\">",
+            "<div>",
+            f"<div class=\"title\">Invoice {html.escape(invoice.invoice_number)}</div>",
+            f"<div class=\"muted small\">{copy_number_btn} {_copy_button('Copy invoice ID', invoice.invoice_id)}</div>",
+            "</div>",
+            f"<div class=\"actions\">{status_badge}</div>",
+            "</div>",
+            "<div class=\"metric-grid\">",
+            f"<div class=\"metric\"><div class=\"label\">Total</div><div id=\"total-amount\" class=\"value\">{_format_money(invoice.total_cents, invoice.currency)}</div></div>",
+            f"<div class=\"metric\"><div class=\"label\">Paid</div><div id=\"paid-amount\" class=\"value\">{_format_money(invoice.paid_cents, invoice.currency)}</div></div>",
+            f"<div class=\"metric\"><div class=\"label\">Balance due</div><div id=\"balance-due\" class=\"value{balance_class}\">{_format_money(invoice.balance_due_cents, invoice.currency)}</div></div>",
+            f"<div class=\"metric\"><div class=\"label\">Due date</div><div id=\"due-date\" class=\"value{due_class}\">{_format_date(invoice.due_date)}</div></div>",
+            "</div>",
+            "<div class=\"card-row\">",
+            "<div class=\"actions\">",
+            "<button id=\"send-invoice-btn\" class=\"btn\" type=\"button\" onclick=\"sendInvoice()\">Send invoice</button>",
+            "<span id=\"public-link-slot\"></span>",
+            "</div>",
+            "<div id=\"action-message\" class=\"muted small\"></div>",
+            "</div>",
+            "</div>",
+        ]
+    )
+
+    payment_form = f"""
+        <form id="payment-form" class="stack" onsubmit="recordPayment(event)">
+          <div class="form-group">
+            <label>Amount ({html.escape(invoice.currency)})</label>
+            <input class="input" type="number" name="amount" step="0.01" min="0.01" placeholder="100.00" required />
+          </div>
+          <div class="form-group">
+            <label>Method</label>
+            <select class="input" name="method">
+              <option value="cash">Cash</option>
+              <option value="etransfer">E-transfer</option>
+              <option value="card">Card</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Reference</label>
+            <input class="input" type="text" name="reference" placeholder="Receipt or note" />
+          </div>
+          <button class="btn" type="submit">Record payment</button>
+        </form>
+    """
+
+    items_table = "".join(
+        [
+            "<div class=\"card section\">",
+            "<div class=\"card-row\"><div class=\"title\">Line items</div>",
+            f"<div class=\"muted small\">{len(invoice.items)} item(s)</div></div>",
+            "<table class=\"table\"><thead><tr><th>Description</th><th class=\"align-right\">Qty</th><th class=\"align-right\">Unit</th><th class=\"align-right\">Line total</th></tr></thead>",
+            f"<tbody>{items_rows}</tbody>",
+            "</table>",
+            "</div>",
+        ]
+    )
+
+    payments_table = "".join(
+        [
+            "<div class=\"card section\">",
+            "<div class=\"card-row\"><div class=\"title\">Payments</div><div class=\"muted small\">Including manual entries</div></div>",
+            "<table class=\"table\"><thead><tr><th>Created</th><th>Provider</th><th>Method</th><th class=\"align-right\">Amount</th><th>Status</th><th>Reference</th></tr></thead>",
+            f"<tbody id=\"payments-table-body\">{payment_rows}</tbody>",
+            "</table>",
+            "</div>",
+        ]
+    )
+
+    notes_block = ""
+    if invoice.notes:
+        notes_block = "".join(
+            [
+                "<div class=\"card section\">",
+                "<div class=\"title\">Notes</div>",
+                f"<div class=\"note\">{html.escape(invoice.notes)}</div>",
+                "</div>",
+            ]
+        )
+
+    invoice_id_json = json.dumps(invoice.invoice_id)
+    currency_json = json.dumps(invoice.currency)
+
+    script = f"""
+      <script>
+        const invoiceId = {invoice_id_json};
+        const currency = {currency_json};
+
+        function formatMoney(cents) {{
+          return `${{currency}} ${{(cents / 100).toFixed(2)}}`;
+        }}
+
+        function isOverdue(invoice) {{
+          if (!invoice.due_date) return false;
+          const today = new Date().toISOString().slice(0, 10);
+          return invoice.status === "OVERDUE" || (invoice.balance_due_cents > 0 && invoice.due_date < today);
+        }}
+
+        function applyInvoiceUpdate(invoice) {{
+          const statusBadge = document.getElementById('status-badge');
+          if (statusBadge) {{
+            statusBadge.textContent = invoice.status;
+            statusBadge.className = `badge badge-status status-${{invoice.status.toLowerCase()}}`;
+          }}
+          const paid = document.getElementById('paid-amount');
+          const balance = document.getElementById('balance-due');
+          if (paid) paid.textContent = formatMoney(invoice.paid_cents);
+          if (balance) {{
+            balance.textContent = formatMoney(invoice.balance_due_cents);
+            balance.classList.toggle('danger', invoice.balance_due_cents > 0);
+          }}
+          const due = document.getElementById('due-date');
+          if (due) {{
+            if (invoice.due_date) {{
+              due.textContent = invoice.due_date;
+              due.classList.toggle('danger', isOverdue(invoice));
+            }} else {{
+              due.textContent = '-';
+              due.classList.remove('danger');
+            }}
+          }}
+        }}
+
+        function showPublicLink(link) {{
+          const slot = document.getElementById('public-link-slot');
+          if (!slot || !link) return;
+          slot.innerHTML = '';
+          const anchor = document.createElement('a');
+          anchor.href = link;
+          anchor.target = '_blank';
+          anchor.className = 'btn secondary small';
+          anchor.textContent = 'Public link';
+          slot.appendChild(anchor);
+          const copy = document.createElement('button');
+          copy.type = 'button';
+          copy.className = 'btn secondary small';
+          copy.textContent = 'Copy link';
+          copy.onclick = () => navigator.clipboard.writeText(link);
+          slot.appendChild(copy);
+        }}
+
+        async function sendInvoice() {{
+          const button = document.getElementById('send-invoice-btn');
+          const message = document.getElementById('action-message');
+          button.disabled = true;
+          message.textContent = 'Sending…';
+          try {{
+            const response = await fetch(`/v1/admin/invoices/${{invoiceId}}/send`, {{ method: 'POST' }});
+            const data = await response.json();
+            if (!response.ok) {{
+              throw new Error(data.detail || response.statusText || 'Send failed');
+            }}
+            applyInvoiceUpdate(data.invoice);
+            showPublicLink(data.public_link);
+            message.textContent = data.email_sent ? 'Invoice emailed' : 'Public link generated';
+          }} catch (err) {{
+            message.textContent = `Send failed: ${{err.message}}`;
+          }} finally {{
+            button.disabled = false;
+          }}
+        }}
+
+        function appendPaymentRow(payment) {{
+          const tbody = document.getElementById('payments-table-body');
+          const empty = document.getElementById('payments-empty');
+          if (empty) empty.remove();
+          const row = document.createElement('tr');
+          const cells = [
+            {{ value: payment.created_at ? new Date(payment.created_at).toLocaleString() : '-' }},
+            {{ value: payment.provider_ref || payment.provider || '-' }},
+            {{ value: payment.method }},
+            {{ value: formatMoney(payment.amount_cents), className: 'align-right' }},
+            {{ value: payment.status }},
+            {{ value: payment.reference || '-' }},
+          ];
+          cells.forEach(({{ value, className }}) => {{
+            const td = document.createElement('td');
+            if (className) td.className = className;
+            td.textContent = value ?? '-';
+            row.appendChild(td);
+          }});
+          tbody.appendChild(row);
+        }}
+
+        async function recordPayment(event) {{
+          event.preventDefault();
+          const form = event.target;
+          const message = document.getElementById('action-message');
+          const amount = parseFloat(form.amount.value);
+          if (Number.isNaN(amount) || amount <= 0) {{
+            message.textContent = 'Amount must be greater than zero';
+            return;
+          }}
+          const payload = {{
+            amount_cents: Math.round(amount * 100),
+            method: form.method.value,
+            reference: form.reference.value || null,
+          }};
+          message.textContent = 'Recording payment…';
+          try {{
+            const response = await fetch(`/v1/admin/invoices/${{invoiceId}}/record-payment`, {{
+              method: 'POST',
+              headers: {{ 'Content-Type': 'application/json' }},
+              body: JSON.stringify(payload),
+            }});
+            const data = await response.json();
+            if (!response.ok) {{
+              throw new Error(data.detail || response.statusText || 'Payment failed');
+            }}
+            applyInvoiceUpdate(data.invoice);
+            appendPaymentRow(data.payment);
+            form.reset();
+            message.textContent = 'Payment recorded';
+          }} catch (err) {{
+            message.textContent = `Payment failed: ${{err.message}}`;
+          }}
+        }}
+      </script>
+    """
+
+    detail_layout = "".join(
+        [
+            header,
+            customer_section,
+            items_table,
+            payments_table,
+            "<div class=\"card section\"><div class=\"title\">Record manual payment</div>",
+            payment_form,
+            "</div>",
+            notes_block,
+            script,
+        ]
+    )
+    return HTMLResponse(_wrap_page(detail_layout, title=f"Invoice {invoice.invoice_number}", active="invoices"))
+
+
 def _format_money(cents: int, currency: str) -> str:
     return f"{currency} {cents / 100:,.2f}"
+
+
+def _format_date(value: date | None) -> str:
+    if value is None:
+        return "-"
+    return value.strftime("%Y-%m-%d")
+
+
+def _status_badge(value: str) -> str:
+    normalized = value.lower()
+    return f'<span class="badge badge-status status-{normalized}">{html.escape(value)}</span>'
+
+
+def _copy_button(label: str, value: str, *, small: bool = True) -> str:
+    size_class = " small" if small else ""
+    return (
+        """
+        <button class="btn secondary{size}" data-copy="{value}" onclick="navigator.clipboard.writeText(this.dataset.copy)">{label}</button>
+        """
+        .replace("{size}", size_class)
+        .format(label=html.escape(label), value=html.escape(value, quote=True))
+    )
+
+
+def _build_query(params: dict[str, str | int | None]) -> str:
+    filtered = {k: v for k, v in params.items() if v not in {None, ""}}
+    return urlencode(filtered, doseq=True)
 
 
 @router.post(
