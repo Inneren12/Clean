@@ -9,6 +9,7 @@ from app.domain.bot.schemas import FsmStep
 
 
 LOW_CONFIDENCE_THRESHOLD = 0.3
+FLOW_INTENTS = {Intent.booking, Intent.price, Intent.scope, Intent.reschedule}
 _GREETING_KEYWORDS = {"hi", "hello", "hey", "thanks", "thank you", "yo"}
 
 
@@ -20,7 +21,9 @@ class HandoffDecision:
     summary: str = ""
 
 
-def _is_progressing(fsm_reply: FsmReply) -> bool:
+def _is_progressing(fsm_reply: FsmReply, current_intent: Optional[Intent] = None) -> bool:
+    if current_intent and current_intent not in FLOW_INTENTS:
+        return False
     if fsm_reply.progress is None or not fsm_reply.quick_replies:
         return False
     step_value = fsm_reply.step.value if isinstance(fsm_reply.step, FsmStep) else fsm_reply.step
@@ -45,6 +48,7 @@ def evaluate_handoff(
     fsm_reply: FsmReply,
     message_text: str,
     faq_matches: Optional[List[dict]] = None,
+    current_intent: Optional[Intent] = None,
 ) -> HandoffDecision:
     """Evaluate whether to hand off based on revised rules.
 
@@ -53,7 +57,7 @@ def evaluate_handoff(
 
     intent = intent_result.intent
     normalized = message_text.strip().lower()
-    progressing = _is_progressing(fsm_reply)
+    progressing = _is_progressing(fsm_reply, current_intent)
 
     if intent in {Intent.complaint, Intent.human}:
         return HandoffDecision(
@@ -63,12 +67,20 @@ def evaluate_handoff(
             summary="User explicitly requested human support",
         )
 
+    if intent == Intent.reschedule and intent_result.entities.time_window is None:
+        return HandoffDecision(
+            should_handoff=True,
+            reason="scheduling_conflict",
+            suggested_action="handoff",
+            summary="Reschedule requested without a viable time window",
+        )
+
     if progressing:
         return HandoffDecision(
             should_handoff=False,
-            reason="fsm_progressing",
+            reason="fsm_progressing_suppress_faq",
             suggested_action="continue",
-            summary="FSM flow is in progress; deferring handoff",
+            summary="FSM flow is in progress; suppressing FAQ fallback handoff",
         )
 
     if faq_matches:
@@ -77,14 +89,6 @@ def evaluate_handoff(
             reason="faq_matched",
             suggested_action="continue",
             summary="FAQ match found; no handoff needed",
-        )
-
-    if intent == Intent.reschedule and intent_result.entities.time_window is None:
-        return HandoffDecision(
-            should_handoff=True,
-            reason="scheduling_conflict",
-            suggested_action="handoff",
-            summary="Reschedule requested without a viable time window",
         )
 
     low_confidence = intent_result.confidence < LOW_CONFIDENCE_THRESHOLD

@@ -76,3 +76,30 @@ def test_status_does_not_trigger_handoff(client):
     resume = _send_message(client, conversation_id, "Deep clean apartment")
     assert resume["reply"]["state"]["fsmStep"] == FsmStep.ask_size.value
     assert _list_cases() == []
+
+
+def test_progressing_faq_fallback_does_not_handoff(client):
+    conversation_id = client.post("/api/bot/session", json={"channel": "web"}).json()["conversationId"]
+
+    booking = _send_message(client, conversation_id, "Book a cleaning")
+    assert booking["reply"]["state"]["fsmStep"] == FsmStep.ask_service_type.value
+
+    fallback = _send_message(client, conversation_id, "2")
+    assert fallback["reply"]["intent"] == Intent.faq.value
+    assert fallback["reply"]["state"]["fsmStep"] == FsmStep.ask_service_type.value
+    assert _list_cases() == []
+
+
+def test_reschedule_without_time_triggers_handoff(client):
+    conversation_id = client.post("/api/bot/session", json={"channel": "web"}).json()["conversationId"]
+
+    booking = _send_message(client, conversation_id, "Book a cleaning")
+    assert booking["reply"]["state"]["fsmStep"] == FsmStep.ask_service_type.value
+
+    reschedule = _send_message(client, conversation_id, "Reschedule")
+    assert reschedule["reply"]["intent"] == Intent.reschedule.value
+    assert reschedule["reply"]["state"]["fsmStep"] == FsmStep.handoff_check.value
+
+    cases = _list_cases()
+    assert len(cases) == 1
+    assert cases[0].reason == "scheduling_conflict"
