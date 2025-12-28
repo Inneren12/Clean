@@ -2,16 +2,26 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
+import hashlib
+import secrets
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.domain.bookings.db_models import Booking
 from app.domain.invoices import statuses
-from app.domain.invoices.db_models import Invoice, InvoiceItem, InvoiceNumberSequence, Payment
+from app.domain.invoices.db_models import (
+    Invoice,
+    InvoiceItem,
+    InvoiceNumberSequence,
+    InvoicePublicToken,
+    Payment,
+)
 from app.domain.invoices.schemas import InvoiceItemCreate
+from app.domain.leads.db_models import Lead
 
 
 def _calculate_tax(line_total_cents: int, tax_rate: Decimal | float | None) -> int:
@@ -221,3 +231,69 @@ def build_invoice_list_item(invoice: Invoice) -> dict:
         "created_at": invoice.created_at,
         "updated_at": invoice.updated_at,
     }
+
+
+def generate_public_token() -> str:
+    # urlsafe -> avoids leaking format; 48 bytes ~ 64 chars
+    return secrets.token_urlsafe(48)
+
+
+def _hash_public_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+async def upsert_public_token(
+    session: AsyncSession, invoice: Invoice, *, mark_sent: bool = False
+) -> str:
+    token = generate_public_token()
+    token_hash = _hash_public_token(token)
+    now = datetime.now(tz=timezone.utc)
+
+    existing = await session.scalar(
+        select(InvoicePublicToken).where(InvoicePublicToken.invoice_id == invoice.invoice_id)
+    )
+    if existing:
+        existing.token_hash = token_hash
+        existing.rotated_at = now
+        if mark_sent:
+            existing.last_sent_at = now
+    else:
+        record = InvoicePublicToken(
+            invoice_id=invoice.invoice_id,
+            token_hash=token_hash,
+            created_at=now,
+        )
+        if mark_sent:
+            record.last_sent_at = now
+        session.add(record)
+
+    await session.flush()
+    return token
+
+
+async def get_invoice_by_public_token(session: AsyncSession, token: str) -> Invoice | None:
+    token_hash = _hash_public_token(token)
+    stmt = (
+        select(Invoice)
+        .join(InvoicePublicToken, InvoicePublicToken.invoice_id == Invoice.invoice_id)
+        .options(selectinload(Invoice.items), selectinload(Invoice.payments))
+        .where(InvoicePublicToken.token_hash == token_hash)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def fetch_customer(session: AsyncSession, invoice: Invoice) -> Lead | None:
+    if not invoice.customer_id:
+        return None
+    return await session.get(Lead, invoice.customer_id)
+
+
+def build_public_invoice_view(invoice: Invoice, lead: Lead | None) -> dict:
+    invoice_data = build_invoice_response(invoice)
+    customer = {
+        "name": getattr(lead, "name", None),
+        "email": getattr(lead, "email", None),
+        "address": getattr(lead, "address", None),
+    }
+    return {"invoice": invoice_data, "customer": customer}

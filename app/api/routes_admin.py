@@ -916,6 +916,80 @@ async def get_invoice(
     return _invoice_response(invoice)
 
 
+def _format_money(cents: int, currency: str) -> str:
+    return f"{currency} {cents / 100:,.2f}"
+
+
+@router.post(
+    "/v1/admin/invoices/{invoice_id}/send",
+    response_model=invoice_schemas.InvoiceSendResponse,
+)
+async def send_invoice(
+    invoice_id: str,
+    http_request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    _admin: AdminIdentity = Depends(require_admin),
+) -> invoice_schemas.InvoiceSendResponse:
+    invoice = await session.get(
+        Invoice,
+        invoice_id,
+        options=(selectinload(Invoice.items), selectinload(Invoice.payments)),
+    )
+    if invoice is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
+
+    lead = await invoice_service.fetch_customer(session, invoice)
+    if lead is None or not lead.email:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invoice missing customer email")
+
+    token = await invoice_service.upsert_public_token(session, invoice, mark_sent=True)
+    public_link = str(http_request.url_for("public_invoice_view", token=token))
+
+    adapter = getattr(http_request.app.state, "email_adapter", None)
+    if adapter is None:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Email adapter unavailable")
+
+    subject = f"Invoice {invoice.invoice_number}"
+    body = (
+        f"Hi {lead.name},\n\n"
+        f"Here's your invoice ({invoice.invoice_number}).\n"
+        f"View online or download a PDF: {public_link}\n"
+        f"Total due: {_format_money(invoice.total_cents, invoice.currency)}\n\n"
+        "If you have questions, reply to this email."
+    )
+    try:
+        delivered = await adapter.send_email(recipient=lead.email, subject=subject, body=body)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "invoice_email_failed",
+            extra={"extra": {"invoice_id": invoice.invoice_id, "reason": type(exc).__name__}},
+        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Email send failed") from exc
+
+    if not delivered:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Email send failed")
+
+    if invoice.status == invoice_statuses.INVOICE_STATUS_DRAFT:
+        invoice.status = invoice_statuses.INVOICE_STATUS_SENT
+
+    await session.commit()
+    refreshed = await session.get(
+        Invoice,
+        invoice.invoice_id,
+        options=(selectinload(Invoice.items), selectinload(Invoice.payments)),
+    )
+    assert refreshed is not None
+    await session.refresh(refreshed)
+    invoice_response = invoice_schemas.InvoiceResponse(
+        **invoice_service.build_invoice_response(refreshed)
+    )
+    return invoice_schemas.InvoiceSendResponse(
+        invoice=invoice_response,
+        public_link=public_link,
+        email_sent=bool(delivered),
+    )
+
+
 @router.post(
     "/v1/admin/orders/{order_id}/invoice",
     response_model=invoice_schemas.InvoiceResponse,

@@ -117,3 +117,9 @@ class InvoiceStatusUpdate(BaseModel):
 class ManualPaymentResult(BaseModel):
     invoice: InvoiceResponse
     payment: PaymentResponse
+
+
+class InvoiceSendResponse(BaseModel):
+    invoice: InvoiceResponse
+    public_link: str
+    email_sent: bool
