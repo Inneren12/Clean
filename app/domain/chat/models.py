@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, conint
 
@@ -57,17 +57,17 @@ class ChoicesConfig(BaseModel):
 
 class StepInfo(BaseModel):
     """Progress information for form-style conversations."""
-    current_step: int  # Current step number (1-indexed)
-    total_steps: int  # Total number of steps
+    current_step: conint(ge=1)  # Current step number (1-indexed)
+    total_steps: conint(ge=1)  # Total number of steps
     step_label: Optional[str] = None  # Label for current step (e.g., "Property Details")
-    remaining_questions: Optional[int] = None  # Estimated questions left
+    remaining_questions: Optional[conint(ge=0)] = None  # Estimated questions left
 
 
 class SummaryField(BaseModel):
     """Editable field in the conversation summary."""
     key: str  # Field identifier (e.g., "beds", "cleaning_type")
     label: str  # Display label (e.g., "Bedrooms")
-    value: Any  # Current value
+    value: Union[str, int, float, bool, None]  # Current value (primitive types only)
     editable: bool = True  # Whether user can edit this field
     field_type: Literal["text", "number", "select", "boolean"] = "text"  # Input type
     options: Optional[List[Choice]] = None  # For select type fields
@@ -81,11 +81,11 @@ class SummaryPatch(BaseModel):
 
 class UIHint(BaseModel):
     """UI behavior hints for the frontend."""
-    show_summary: bool = False  # Display summary panel
-    show_confirm: bool = False  # Show confirmation button
-    show_choices: bool = False  # Render choices if available
-    show_progress: bool = False  # Display step progress indicator
-    minimize_text: bool = False  # De-emphasize text in favor of structured UI
+    show_summary: Optional[bool] = None  # Display summary panel
+    show_confirm: Optional[bool] = None  # Show confirmation button
+    show_choices: Optional[bool] = None  # Render choices if available
+    show_progress: Optional[bool] = None  # Display step progress indicator
+    minimize_text: Optional[bool] = None  # De-emphasize text in favor of structured UI
 
 
 class ChatTurnResponse(BaseModel):
@@ -94,7 +94,7 @@ class ChatTurnResponse(BaseModel):
     parsed_fields: ParsedFields
     state: Dict[str, object] = Field(default_factory=dict)
     missing_fields: List[str]
-    proposed_questions: List[str]
+    proposed_questions: List[str] = Field(default_factory=list)
     reply_text: str
     handoff_required: bool
     estimate: Optional[EstimateResponse] = None
