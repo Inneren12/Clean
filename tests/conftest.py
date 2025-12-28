@@ -16,6 +16,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.domain.analytics import db_models as analytics_db_models  # noqa: F401
 from app.domain.bookings import db_models as booking_db_models  # noqa: F401
+from app.domain.addons import db_models as addon_db_models  # noqa: F401
 from app.domain.export_events import db_models as export_events_db_models  # noqa: F401
 from app.domain.leads import db_models  # noqa: F401
 from app.domain.invoices import db_models as invoice_db_models  # noqa: F401
