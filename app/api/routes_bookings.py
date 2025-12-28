@@ -180,6 +180,8 @@ async def create_booking(
                 extra={"extra": {"booking_id": booking.booking_id, "lead_id": booking.lead_id}},
             )
 
+    await session.commit()
+
     return booking_schemas.BookingResponse(
         booking_id=booking.booking_id,
         status=booking.status,
