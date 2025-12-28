@@ -24,7 +24,13 @@ class BotStore(Protocol):
 
     async def get_conversation(self, conversation_id: str) -> Optional[ConversationRecord]: ...
 
-    async def update_state(self, conversation_id: str, state: ConversationState) -> ConversationRecord: ...
+    async def update_state(
+        self,
+        conversation_id: str,
+        state: ConversationState,
+        *,
+        status: ConversationStatus | None = None,
+    ) -> ConversationRecord: ...
 
     async def append_message(self, conversation_id: str, payload: MessagePayload) -> MessageRecord: ...
 
@@ -33,6 +39,8 @@ class BotStore(Protocol):
     async def create_lead(self, payload: LeadPayload) -> LeadRecord: ...
 
     async def create_case(self, payload: CasePayload) -> CaseRecord: ...
+
+    async def list_cases(self) -> List[CaseRecord]: ...
 
 
 class InMemoryBotStore(BotStore):
@@ -65,10 +73,18 @@ class InMemoryBotStore(BotStore):
         async with self._lock:
             return self._conversations.get(conversation_id)
 
-    async def update_state(self, conversation_id: str, state: ConversationState) -> ConversationRecord:
+    async def update_state(
+        self,
+        conversation_id: str,
+        state: ConversationState,
+        *,
+        status: ConversationStatus | None = None,
+    ) -> ConversationRecord:
         async with self._lock:
             record = self._conversations[conversation_id]
             record.state = state
+            if status is not None:
+                record.status = status
             record.updated_at = time.time()
             self._conversations[conversation_id] = record
             return record
@@ -108,4 +124,8 @@ class InMemoryBotStore(BotStore):
             record = CaseRecord(**payload.model_dump(), case_id=case_id, created_at=time.time())
             self._cases[case_id] = record
             return record
+
+    async def list_cases(self) -> List[CaseRecord]:
+        async with self._lock:
+            return list(self._cases.values())
 
