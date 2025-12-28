@@ -1842,10 +1842,11 @@ async def create_invoice_from_order(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
 
     addon_items = await addon_service.addon_invoice_items_for_order(session, order_id)
-    all_items = [*request.items, *addon_items]
+    base_items = list(request.items)
+    all_items = [*base_items, *addon_items]
 
     expected_subtotal = reason_service.estimate_subtotal_from_lead(order.lead)
-    requested_subtotal = sum(item.qty * item.unit_price_cents for item in all_items)
+    requested_subtotal = sum(item.qty * item.unit_price_cents for item in base_items)
     if (
         expected_subtotal is not None
         and requested_subtotal != expected_subtotal

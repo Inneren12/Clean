@@ -1,12 +1,15 @@
 import base64
+import asyncio
 from datetime import datetime, timezone
+from uuid import uuid4
+
+import sqlalchemy as sa
 
 from app.domain.bookings.db_models import Booking
 from app.domain.clients.db_models import ClientUser
 from app.domain.leads.db_models import Lead
 from app.domain.nps import service as nps_service
 from app.domain.nps.db_models import NpsResponse, SupportTicket
-from app.main import app
 from app.settings import settings
 
 
@@ -15,11 +18,11 @@ def _auth_headers(username: str, password: str) -> dict[str, str]:
     return {"Authorization": f"Basic {token}"}
 
 
-def _lead_payload(name: str = "Survey Lead") -> dict:
+def _lead_payload(name: str = "Survey Lead", email: str = "survey@example.com") -> dict:
     return {
         "name": name,
         "phone": "780-555-9999",
-        "email": "survey@example.com",
+        "email": email,
         "postal_code": "T5A",
         "address": "1 Test St",
         "preferred_dates": ["Mon"],
@@ -37,14 +40,14 @@ def _lead_payload(name: str = "Survey Lead") -> dict:
     }
 
 
-def _seed_order(session_factory, order_id: str = "order-nps-1") -> tuple[str, str, str]:
+def _seed_order(session_factory, order_id: str = "order-nps-1", *, email: str) -> tuple[str, str, str]:
     async def _create():
         async with session_factory() as session:
-            client = ClientUser(email="survey@example.com")
+            client = ClientUser(email=email)
             session.add(client)
             await session.flush()
 
-            lead = Lead(**_lead_payload())
+            lead = Lead(**_lead_payload(email=email))
             session.add(lead)
             await session.flush()
 
@@ -65,17 +68,16 @@ def _seed_order(session_factory, order_id: str = "order-nps-1") -> tuple[str, st
             await session.commit()
             return booking.booking_id, client.client_id, lead.lead_id
 
-    import asyncio
-
     return asyncio.run(_create())
 
 
-def test_nps_token_validation_and_single_response(client):
-    order_id, client_id, lead_id = _seed_order(app.state.db_session_factory, "order-nps-1")
+def test_nps_token_validation_and_single_response(client, async_session_maker):
+    email = f"survey-{uuid4()}@example.com"
+    order_id, client_id, _ = _seed_order(async_session_maker, "order-nps-1", email=email)
     token = nps_service.issue_nps_token(
         order_id,
         client_id=client_id,
-        email="survey@example.com",
+        email=email,
         secret=settings.client_portal_secret,
     )
 
@@ -100,26 +102,24 @@ def test_nps_token_validation_and_single_response(client):
     assert "already received" in repeat.text
 
     async def _verify_response():
-        async with app.state.db_session_factory() as session:
+        async with async_session_maker() as session:
             result = await session.execute(
                 sa.select(NpsResponse).where(NpsResponse.order_id == order_id)
             )
             return result.scalar_one()
-
-    import sqlalchemy as sa
-    import asyncio
 
     saved = asyncio.run(_verify_response())
     assert saved.score == 8
     assert saved.order_id == order_id
 
 
-def test_low_score_creates_ticket_and_admin_api(client):
-    order_id, client_id, _ = _seed_order(app.state.db_session_factory, "order-nps-2")
+def test_low_score_creates_ticket_and_admin_api(client, async_session_maker):
+    email = f"survey-low-{uuid4()}@example.com"
+    order_id, client_id, _ = _seed_order(async_session_maker, "order-nps-2", email=email)
     token = nps_service.issue_nps_token(
         order_id,
         client_id=client_id,
-        email="survey@example.com",
+        email=email,
         secret=settings.client_portal_secret,
     )
 
@@ -129,11 +129,8 @@ def test_low_score_creates_ticket_and_admin_api(client):
     )
     assert submission.status_code == 200
 
-    import asyncio
-    import sqlalchemy as sa
-
     async def _fetch_ticket():
-        async with app.state.db_session_factory() as session:
+        async with async_session_maker() as session:
             result = await session.execute(
                 sa.select(SupportTicket).where(SupportTicket.order_id == order_id)
             )
@@ -161,3 +158,10 @@ def test_low_score_creates_ticket_and_admin_api(client):
     )
     assert update.status_code == 200
     assert update.json()["status"] == "IN_PROGRESS"
+
+
+def test_admin_ticket_requires_auth(client):
+    settings.admin_basic_username = "admin"
+    settings.admin_basic_password = "secret"
+    response = client.get("/api/admin/tickets")
+    assert response.status_code == 401
