@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import hmac
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 import hashlib
@@ -22,6 +24,10 @@ from app.domain.invoices.db_models import (
 )
 from app.domain.invoices.schemas import InvoiceItemCreate
 from app.domain.leads.db_models import Lead
+from app.settings import settings
+
+
+_SQLITE_INVOICE_NUMBER_LOCK = asyncio.Lock()
 
 
 def _calculate_tax(line_total_cents: int, tax_rate: Decimal | float | None) -> int:
@@ -51,10 +57,13 @@ async def generate_invoice_number(session: AsyncSession, issue_date: date) -> st
             result = await session.execute(upsert.returning(InvoiceNumberSequence.last_number))
             number = int(result.scalar_one())
         except Exception:  # noqa: BLE001
-            await session.execute(upsert)
-            seq_stmt = select(InvoiceNumberSequence.last_number).where(InvoiceNumberSequence.year == issue_date.year)
-            result = await session.execute(seq_stmt)
-            number = int(result.scalar_one())
+            async with _SQLITE_INVOICE_NUMBER_LOCK:
+                await session.execute(upsert)
+                seq_stmt = select(InvoiceNumberSequence.last_number).where(
+                    InvoiceNumberSequence.year == issue_date.year
+                )
+                result = await session.execute(seq_stmt)
+                number = int(result.scalar_one())
     return f"INV-{issue_date.year}-{number:06d}"
 
 
@@ -234,19 +243,28 @@ def build_invoice_list_item(invoice: Invoice) -> dict:
 
 
 def generate_public_token() -> str:
-    # urlsafe -> avoids leaking format; 48 bytes ~ 64 chars
-    return secrets.token_urlsafe(48)
+    return secrets.token_urlsafe(32)
 
 
-def _hash_public_token(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+def _public_token_secret() -> str:
+    return (
+        settings.invoice_public_token_secret
+        or settings.admin_basic_password
+        or settings.dispatcher_basic_password
+        or settings.app_name
+    )
+
+
+def hash_public_token(token: str) -> str:
+    secret = _public_token_secret().encode("utf-8")
+    return hmac.new(secret, token.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 async def upsert_public_token(
     session: AsyncSession, invoice: Invoice, *, mark_sent: bool = False
 ) -> str:
     token = generate_public_token()
-    token_hash = _hash_public_token(token)
+    token_hash = hash_public_token(token)
     now = datetime.now(tz=timezone.utc)
 
     existing = await session.scalar(
@@ -272,7 +290,7 @@ async def upsert_public_token(
 
 
 async def get_invoice_by_public_token(session: AsyncSession, token: str) -> Invoice | None:
-    token_hash = _hash_public_token(token)
+    token_hash = hash_public_token(token)
     stmt = (
         select(Invoice)
         .join(InvoicePublicToken, InvoicePublicToken.invoice_id == Invoice.invoice_id)
