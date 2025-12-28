@@ -16,6 +16,7 @@ from app.api.routes_estimate import router as estimate_router
 from app.api.routes_bot import router as bot_router
 from app.api.routes_health import router as health_router
 from app.api.routes_leads import router as leads_router
+from app.bot.analytics.metrics import BotMetrics
 from app.domain.errors import DomainError
 from app.infra.db import get_session_factory
 from app.infra.email import EmailAdapter
@@ -124,6 +125,7 @@ def create_app(app_settings) -> FastAPI:
     app.state.export_resolver = None
     app.state.email_adapter = EmailAdapter()
     app.state.stripe_client = None
+    app.state.bot_metrics = BotMetrics()
 
     @app.on_event("shutdown")
     async def shutdown_limiter() -> None:
