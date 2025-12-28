@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     redis_url: str | None = Field(None, env="REDIS_URL")
     rate_limit_per_minute: int = Field(30, env="RATE_LIMIT_PER_MINUTE")
     rate_limit_cleanup_minutes: int = Field(10, env="RATE_LIMIT_CLEANUP_MINUTES")
+    time_overrun_reason_threshold: float = Field(1.2, env="TIME_OVERRUN_REASON_THRESHOLD")
     trust_proxy_headers: bool = Field(False, env="TRUST_PROXY_HEADERS")
     trusted_proxy_ips_raw: str | None = Field(
         None,
@@ -101,6 +102,13 @@ class Settings(BaseSettings):
     def validate_deposit_percent(cls, value: float) -> float:
         if value < 0 or value > 1:
             raise ValueError("deposit_percent must be between 0 and 1")
+        return value
+
+    @field_validator("time_overrun_reason_threshold")
+    @classmethod
+    def validate_time_threshold(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("time_overrun_reason_threshold must be positive")
         return value
 
     @property
