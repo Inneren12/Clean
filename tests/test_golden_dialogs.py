@@ -17,7 +17,9 @@ def pricing_config():
     repo_root = Path(__file__).resolve().parents[1]
     pricing_path = repo_root / "pricing" / "economy_v1.json"
     if not pricing_path.exists():
-        raise RuntimeError(f"Pricing config not found at {pricing_path}")
+        raise RuntimeError(
+            f"Pricing config not found at {pricing_path} (cwd={Path.cwd()})"
+        )
     return load_pricing_config(str(pricing_path))
 
 STEP_LABEL_TO_STAGE = {
@@ -56,12 +58,12 @@ def _derive_stage(response) -> str | None:
 
     step_info = response.step_info
     if step_info:
-        if step_info.remaining_questions:
-            return "collect"
         step_label = (step_info.step_label or "").strip().lower()
         for label, stage in STEP_LABEL_TO_STAGE.items():
             if step_label.startswith(label.lower()):
                 return stage
+        if step_info.remaining_questions:
+            return "collect"
         if step_info.current_step and step_info.total_steps:
             if step_info.current_step >= step_info.total_steps:
                 return "created"

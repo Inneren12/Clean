@@ -1,5 +1,4 @@
 import html
-import json
 import logging
 import secrets
 from datetime import date, datetime, time, timezone
@@ -688,13 +687,13 @@ async def admin_case_detail(
     }
     for field, value in contact_quick_actions.items():
         if value:
+            escaped_value = html.escape(str(value), quote=True)
             quick_actions.append(
                 """
-                <button class="btn" onclick='navigator.clipboard.writeText({value})'>Copy {label}</button>
+                <button class="btn" data-copy="{value}" onclick="navigator.clipboard.writeText(this.dataset.copy)">Copy {label}</button>
                 """.format(
-                    # Use single quotes for the attribute so the JSON double-quoted string stays valid.
-                    value=json.dumps(str(value)),
-                    label=field.title(),
+                    value=escaped_value,
+                    label=html.escape(field.title()),
                 )
             )
     quick_actions.append("<button class=\"btn\" onclick=\"alert('Mark contacted placeholder')\">Mark contacted</button>")
