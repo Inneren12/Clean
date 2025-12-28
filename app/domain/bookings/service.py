@@ -360,6 +360,8 @@ async def create_booking(
     deposit_decision: DepositDecision | None = None,
     manage_transaction: bool = True,
     client_id: str | None = None,
+    subscription_id: str | None = None,
+    scheduled_date: date | None = None,
 ) -> Booking:
     normalized = _normalize_datetime(starts_at)
     decision = deposit_decision or DepositDecision(required=False, reasons=[], deposit_cents=None)
@@ -376,6 +378,8 @@ async def create_booking(
             duration_minutes=duration_minutes,
             planned_minutes=duration_minutes,
             status="PENDING",
+            subscription_id=subscription_id,
+            scheduled_date=scheduled_date,
             deposit_required=decision.required,
             deposit_cents=decision.deposit_cents,
             deposit_policy=decision.reasons,

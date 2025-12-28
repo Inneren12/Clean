@@ -15,6 +15,9 @@ from app.domain.clients import schemas as client_schemas
 from app.domain.clients import service as client_service
 from app.domain.invoices.db_models import Invoice
 from app.domain.leads.db_models import Lead
+from app.domain.subscriptions import schemas as subscription_schemas
+from app.domain.subscriptions import service as subscription_service
+from app.domain.subscriptions.db_models import Subscription
 from app.settings import settings
 
 router = APIRouter()
@@ -149,6 +152,77 @@ async def _list_orders(session: AsyncSession, client_id: str) -> list[client_sch
         )
         for booking in bookings
     ]
+
+
+def _subscription_response(model: Subscription) -> subscription_schemas.SubscriptionResponse:
+    return subscription_schemas.SubscriptionResponse(
+        subscription_id=model.subscription_id,
+        client_id=model.client_id,
+        status=model.status,
+        frequency=model.frequency,
+        start_date=model.start_date,
+        next_run_at=model.next_run_at,
+        preferred_weekday=model.preferred_weekday,
+        preferred_day_of_month=model.preferred_day_of_month,
+        base_service_type=model.base_service_type,
+        base_price=model.base_price,
+        created_at=model.created_at,
+    )
+
+
+async def _get_client_subscription(
+    session: AsyncSession, subscription_id: str, client_id: str
+) -> Subscription:
+    subscription = await session.get(Subscription, subscription_id)
+    if not subscription or subscription.client_id != client_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscription not found")
+    return subscription
+
+
+@router.post(
+    "/client/subscriptions",
+    response_model=subscription_schemas.SubscriptionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_subscription(
+    payload: subscription_schemas.SubscriptionCreateRequest,
+    identity: client_schemas.ClientIdentity = Depends(require_identity),
+    session: AsyncSession = Depends(get_db_session),
+) -> subscription_schemas.SubscriptionResponse:
+    subscription = await subscription_service.create_subscription(
+        session, identity.client_id, payload
+    )
+    await session.commit()
+    await session.refresh(subscription)
+    return _subscription_response(subscription)
+
+
+@router.get("/client/subscriptions", response_model=list[subscription_schemas.SubscriptionResponse])
+async def list_subscriptions(
+    identity: client_schemas.ClientIdentity = Depends(require_identity),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[subscription_schemas.SubscriptionResponse]:
+    subscriptions = await subscription_service.list_client_subscriptions(
+        session, identity.client_id
+    )
+    return [_subscription_response(sub) for sub in subscriptions]
+
+
+@router.patch(
+    "/client/subscriptions/{subscription_id}",
+    response_model=subscription_schemas.SubscriptionResponse,
+)
+async def update_subscription_status(
+    subscription_id: str,
+    payload: subscription_schemas.SubscriptionUpdateRequest,
+    identity: client_schemas.ClientIdentity = Depends(require_identity),
+    session: AsyncSession = Depends(get_db_session),
+) -> subscription_schemas.SubscriptionResponse:
+    subscription = await _get_client_subscription(session, subscription_id, identity.client_id)
+    await subscription_service.update_subscription_status(session, subscription, payload.status)
+    await session.commit()
+    await session.refresh(subscription)
+    return _subscription_response(subscription)
 
 
 @router.get("/client/orders")

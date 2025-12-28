@@ -21,6 +21,7 @@ from app.domain.leads import db_models  # noqa: F401
 from app.domain.invoices import db_models as invoice_db_models  # noqa: F401
 from app.domain.time_tracking import db_models as time_tracking_db_models  # noqa: F401
 from app.domain.reason_logs import db_models as reason_logs_db_models  # noqa: F401
+from app.domain.subscriptions import db_models as subscription_db_models  # noqa: F401
 from app.domain.checklists import db_models as checklist_db_models  # noqa: F401
 from app.domain.clients import db_models as client_db_models  # noqa: F401
 from app.infra.bot_store import InMemoryBotStore

@@ -1,7 +1,7 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
@@ -48,6 +48,10 @@ class Booking(Base):
     planned_minutes: Mapped[int | None] = mapped_column(Integer)
     actual_seconds: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    subscription_id: Mapped[str | None] = mapped_column(
+        ForeignKey("subscriptions.subscription_id"), index=True
+    )
+    scheduled_date: Mapped[date | None] = mapped_column(Date)
     deposit_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     deposit_cents: Mapped[int | None] = mapped_column(Integer)
     deposit_policy: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
@@ -70,6 +74,7 @@ class Booking(Base):
     team: Mapped[Team] = relationship("Team", back_populates="bookings")
     client: Mapped[ClientUser | None] = relationship("ClientUser")
     lead = relationship("Lead", backref="bookings")
+    subscription = relationship("Subscription", back_populates="orders")
     photos: Mapped[list["OrderPhoto"]] = relationship(
         "OrderPhoto",
         back_populates="order",
@@ -80,6 +85,7 @@ class Booking(Base):
         Index("ix_bookings_starts_status", "starts_at", "status"),
         Index("ix_bookings_status", "status"),
         Index("ix_bookings_checkout_session", "stripe_checkout_session_id"),
+        UniqueConstraint("subscription_id", "scheduled_date", name="uq_bookings_subscription_schedule"),
     )
 
 
