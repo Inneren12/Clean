@@ -187,10 +187,9 @@ async def list_order_photos(
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
 ) -> booking_schemas.OrderPhotoListResponse:
-    order = await photos_service.fetch_order(session, order_id)
-    if not order.consent_photos:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Photo consent not granted")
-
+    # Admin/dispatcher can list photos regardless of consent_photos status
+    # This allows viewing admin_override uploads even when consent is false
+    await photos_service.fetch_order(session, order_id)
     photos = await photos_service.list_photos(session, order_id)
     return booking_schemas.OrderPhotoListResponse(
         photos=[

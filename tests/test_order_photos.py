@@ -158,3 +158,31 @@ def test_dispatcher_cannot_admin_override(client, async_session_maker, upload_ro
     )
 
     assert response.status_code == 403
+
+
+def test_staff_can_list_photos_without_consent(client, async_session_maker, upload_root, admin_headers, dispatcher_headers):
+    """Staff (admin/dispatcher) can list photos even when consent_photos=false, especially useful for admin_override uploads."""
+    booking_id = asyncio.run(_create_booking(async_session_maker, consent=False))
+
+    # Admin uploads photo with admin_override (no consent required)
+    files = {"file": ("before.jpg", b"test-photo-data", "image/jpeg")}
+    upload_resp = client.post(
+        f"/v1/orders/{booking_id}/photos",
+        data={"phase": "BEFORE", "admin_override": "true"},
+        files=files,
+        headers=admin_headers,
+    )
+    assert upload_resp.status_code == 201
+    photo_id = upload_resp.json()["photo_id"]
+
+    # Admin can list photos even though consent_photos=false
+    admin_list_resp = client.get(f"/v1/orders/{booking_id}/photos", headers=admin_headers)
+    assert admin_list_resp.status_code == 200
+    assert len(admin_list_resp.json()["photos"]) == 1
+    assert admin_list_resp.json()["photos"][0]["photo_id"] == photo_id
+
+    # Dispatcher can also list photos even though consent_photos=false
+    dispatcher_list_resp = client.get(f"/v1/orders/{booking_id}/photos", headers=dispatcher_headers)
+    assert dispatcher_list_resp.status_code == 200
+    assert len(dispatcher_list_resp.json()["photos"]) == 1
+    assert dispatcher_list_resp.json()["photos"][0]["photo_id"] == photo_id
