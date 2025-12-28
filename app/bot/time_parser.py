@@ -16,7 +16,7 @@ _TIME_LABEL_WINDOWS: dict[str, tuple[time, time]] = {
 }
 
 _QUALIFIER_PATTERN = re.compile(
-    r"\b(after|by|before)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b",
+    r"\b(after)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b",
     flags=re.IGNORECASE,
 )
 
@@ -107,7 +107,7 @@ def _build_window(
     start_dt = datetime.combine(target_date, start_time, tzinfo)
     end_dt = datetime.combine(target_date, end_time, tzinfo)
     if end_dt <= start_dt:
-        end_dt = end_dt + timedelta(hours=3)
+        end_dt = start_dt + timedelta(hours=3)
     return NormalizedTimeWindow(
         start_iso=start_dt.isoformat(), end_iso=end_dt.isoformat(), tz=str(tzinfo.key)
     )
@@ -153,8 +153,11 @@ def parse_time_request(
     elif qualifier_match:
         start_time = _parse_time_component(qualifier_match)
         target_date = day or base_date
-        end_time = (datetime.combine(target_date, start_time, tzinfo) + timedelta(hours=3)).time()
-        window = _build_window(target_date, start_time, end_time, tzinfo)
+        start_dt = datetime.combine(target_date, start_time, tzinfo)
+        end_dt = start_dt + timedelta(hours=3)
+        window = NormalizedTimeWindow(
+            start_iso=start_dt.isoformat(), end_iso=end_dt.isoformat(), tz=str(tzinfo.key)
+        )
         confidence = "high" if day else "medium"
         if not day:
             clarifier = Clarifier(
