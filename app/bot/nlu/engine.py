@@ -232,6 +232,24 @@ EXTRA_KEYWORDS = {
     "pets": ["pet", "pets", "dog", "dogs", "cat", "cats"],
 }
 
+PROPERTY_TYPES = {
+    "apartment": ["apartment", "apt", "квартира"],
+    "house": ["house", "home", "дом"],
+    "office": ["office", "офис"],
+    "studio": ["studio"],
+}
+
+CONDITION_KEYWORDS = {
+    "light": ["light", "easy", "quick", "slight"],
+    "standard": ["normal", "standard", "обычная"],
+    "heavy": ["messy", "dirty", "heavy", "deep dirt", "гряз"],
+}
+
+SIZE_HINTS = {
+    "studio": ["studio", "студия"],
+    "loft": ["loft", "лофт"],
+}
+
 
 def _extract_service(normalized: str, entities: Entities, reasons: List[str]) -> None:
     for service, keywords in SERVICE_KEYWORDS.items():
@@ -247,6 +265,30 @@ def _extract_service(normalized: str, entities: Entities, reasons: List[str]) ->
     if extras:
         entities.extras = sorted(set(extras))
         reasons.append(f"extras: {', '.join(entities.extras)}")
+
+
+def _extract_property_type(normalized: str, entities: Entities, reasons: List[str]) -> None:
+    for property_type, keywords in PROPERTY_TYPES.items():
+        if any(re.search(rf"\b{re.escape(keyword)}\b", normalized) for keyword in keywords):
+            entities.property_type = property_type
+            reasons.append(f"property type: {property_type}")
+            break
+
+
+def _extract_condition(normalized: str, entities: Entities, reasons: List[str]) -> None:
+    for condition, keywords in CONDITION_KEYWORDS.items():
+        if any(keyword in normalized for keyword in keywords):
+            entities.condition = condition
+            reasons.append(f"condition: {condition}")
+            break
+
+
+def _extract_size_label(normalized: str, entities: Entities, reasons: List[str]) -> None:
+    for label, keywords in SIZE_HINTS.items():
+        if any(keyword in normalized for keyword in keywords):
+            entities.size_label = label
+            reasons.append(f"size label: {label}")
+            break
 
 
 TIME_PATTERN = re.compile(r"(after|by|before)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?")
@@ -352,6 +394,9 @@ def extract_entities(text: str) -> Tuple[Entities, List[str]]:
     _extract_beds_baths(normalized, entities, reasons)
     _extract_size(normalized, entities, reasons)
     _extract_service(normalized, entities, reasons)
+    _extract_property_type(normalized, entities, reasons)
+    _extract_condition(normalized, entities, reasons)
+    _extract_size_label(normalized, entities, reasons)
     _extract_time_window(normalized, entities, reasons)
     _extract_area(text, normalized, entities, reasons)
 

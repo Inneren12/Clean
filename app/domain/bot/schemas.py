@@ -33,6 +33,15 @@ class MessageRole(str, Enum):
 
 
 class FsmStep(str, Enum):
+    ask_service_type = "AskServiceType"
+    ask_property_type = "AskPropertyType"
+    ask_size = "AskSize"
+    ask_condition = "AskCondition"
+    ask_extras = "AskExtras"
+    ask_area = "AskArea"
+    ask_preferred_time = "AskPreferredTime"
+    ask_contact = "AskContact"
+    confirm_lead = "ConfirmLead"
     collecting_requirements = "collecting_requirements"
     handoff_check = "handoff_check"
     scheduling = "scheduling"
@@ -45,6 +54,7 @@ class ConversationState(BotResponseModel):
     fsm_step: Optional[FsmStep] = None
     filled_fields: Dict[str, Any] = Field(default_factory=dict)
     confidence: Optional[float] = None
+    last_estimate: Optional[Dict[str, Any]] = None
 
 
 class ConversationCreate(BotResponseModel):
@@ -68,6 +78,7 @@ class MessagePayload(BotResponseModel):
     confidence: Optional[float] = None
     extracted_entities: Dict[str, Any] = Field(default_factory=dict)
     reasons: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class MessageRecord(MessagePayload):
@@ -102,6 +113,9 @@ class BotReply(BotResponseModel):
     state: ConversationState
     extracted_entities: Dict[str, Any] = Field(default_factory=dict)
     reasons: List[str] = Field(default_factory=list)
+    quick_replies: List[str] = Field(default_factory=list)
+    progress: Optional[Dict[str, int]] = None
+    summary: Dict[str, Any] = Field(default_factory=dict)
 
 
 class MessageResponse(BotResponseModel):

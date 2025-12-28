@@ -85,6 +85,7 @@ class InMemoryBotStore(BotStore):
                 confidence=payload.confidence,
                 extracted_entities=payload.extracted_entities,
                 reasons=payload.reasons,
+                metadata=payload.metadata,
                 created_at=time.time(),
             )
             self._messages.setdefault(conversation_id, []).append(record)
