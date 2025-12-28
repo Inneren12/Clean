@@ -2,7 +2,6 @@ import logging
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.routes_admin import AdminIdentity, require_admin, verify_admin_or_dispatcher
@@ -14,15 +13,6 @@ from app.domain.reason_logs import service as reason_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-security = HTTPBasic(auto_error=False)
-
-
-async def optional_identity(
-    credentials: HTTPBasicCredentials | None = Depends(security),
-) -> AdminIdentity | None:
-    if credentials is None:
-        return None
-    return await verify_admin_or_dispatcher(credentials)
 
 
 @router.post(
@@ -79,7 +69,7 @@ async def update_photo_consent(
     order_id: str,
     payload: booking_schemas.ConsentPhotosUpdateRequest,
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity | None = Depends(optional_identity),
+    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
 ) -> booking_schemas.ConsentPhotosResponse:
     order = await photos_service.update_consent(session, order_id, payload.consent_photos)
     return booking_schemas.ConsentPhotosResponse(
@@ -98,12 +88,12 @@ async def upload_order_photo(
     admin_override: bool = Form(False),
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_db_session),
-    identity: AdminIdentity | None = Depends(optional_identity),
+    identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
 ) -> booking_schemas.OrderPhotoResponse:
     order = await photos_service.fetch_order(session, order_id)
     parsed_phase = booking_schemas.PhotoPhase.from_any_case(phase)
 
-    if admin_override and (identity is None or identity.role != "admin"):
+    if admin_override and identity.role != "admin":
         logger.info(
             "order_photo_denied",
             extra={"extra": {"order_id": order_id, "reason": "admin_override_required"}},
@@ -117,7 +107,7 @@ async def upload_order_photo(
         )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Photo consent not granted")
 
-    uploaded_by = "admin" if identity else "client"
+    uploaded_by = identity.role or identity.username
     photo = await photos_service.save_photo(session, order, file, parsed_phase, uploaded_by)
     return booking_schemas.OrderPhotoResponse(
         photo_id=photo.photo_id,
@@ -140,10 +130,10 @@ async def upload_order_photo(
 async def list_order_photos(
     order_id: str,
     session: AsyncSession = Depends(get_db_session),
-    identity: AdminIdentity | None = Depends(optional_identity),
+    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
 ) -> booking_schemas.OrderPhotoListResponse:
     order = await photos_service.fetch_order(session, order_id)
-    if not order.consent_photos and identity is None:
+    if not order.consent_photos:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Photo consent not granted")
 
     photos = await photos_service.list_photos(session, order_id)

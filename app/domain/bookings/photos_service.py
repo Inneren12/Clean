@@ -94,6 +94,44 @@ async def save_photo(
                     raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large")
                 hasher.update(chunk)
                 buffer.write(chunk)
+
+        photo = OrderPhoto(
+            order_id=order.booking_id,
+            phase=phase.value,
+            filename=target.name,
+            original_filename=upload.filename,
+            content_type=content_type,
+            size_bytes=size,
+            sha256=hasher.hexdigest(),
+            uploaded_by=uploaded_by,
+        )
+        session.add(photo)
+
+        try:
+            await session.commit()
+            await session.refresh(photo)
+        except Exception as exc:  # noqa: BLE001
+            await session.rollback()
+            if target.exists():
+                target.unlink(missing_ok=True)
+            logger.exception(
+                "order_photo_save_failed_db", extra={"extra": {"order_id": order.booking_id}}
+            )
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Upload failed") from exc
+
+        logger.info(
+            "order_photo_upload",
+            extra={
+                "extra": {
+                    "order_id": order.booking_id,
+                    "photo_id": photo.photo_id,
+                    "size_bytes": size,
+                    "phase": phase.value,
+                    "uploaded_by": uploaded_by,
+                }
+            },
+        )
+        return photo
     except HTTPException:
         if target.exists():
             target.unlink(missing_ok=True)
@@ -103,34 +141,14 @@ async def save_photo(
             target.unlink(missing_ok=True)
         logger.exception("order_photo_save_failed", extra={"extra": {"order_id": order.booking_id}})
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Upload failed")
-
-    photo = OrderPhoto(
-        order_id=order.booking_id,
-        phase=phase.value,
-        filename=target.name,
-        original_filename=upload.filename,
-        content_type=content_type,
-        size_bytes=size,
-        sha256=hasher.hexdigest(),
-        uploaded_by=uploaded_by,
-    )
-    session.add(photo)
-    await session.commit()
-    await session.refresh(photo)
-
-    logger.info(
-        "order_photo_upload",
-        extra={
-            "extra": {
-                "order_id": order.booking_id,
-                "photo_id": photo.photo_id,
-                "size_bytes": size,
-                "phase": phase.value,
-                "uploaded_by": uploaded_by,
-            }
-        },
-    )
-    return photo
+    finally:
+        try:
+            await upload.close()
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "order_photo_upload_close_failed",
+                extra={"extra": {"order_id": order.booking_id}},
+            )
 
 
 async def list_photos(session: AsyncSession, order_id: str) -> list[OrderPhoto]:

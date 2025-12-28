@@ -63,17 +63,35 @@ def upload_root(tmp_path) -> Path:
 
 @pytest.fixture()
 def admin_headers():
+    original_admin_username = settings.admin_basic_username
+    original_admin_password = settings.admin_basic_password
     settings.admin_basic_username = "admin"
     settings.admin_basic_password = "secret"
-    return _basic_auth_header("admin", "secret")
+    yield _basic_auth_header("admin", "secret")
+    settings.admin_basic_username = original_admin_username
+    settings.admin_basic_password = original_admin_password
 
 
-def test_upload_requires_consent(client, async_session_maker, upload_root):
+@pytest.fixture()
+def dispatcher_headers():
+    original_dispatcher_username = settings.dispatcher_basic_username
+    original_dispatcher_password = settings.dispatcher_basic_password
+    settings.dispatcher_basic_username = "dispatcher"
+    settings.dispatcher_basic_password = "secret"
+    yield _basic_auth_header("dispatcher", "secret")
+    settings.dispatcher_basic_username = original_dispatcher_username
+    settings.dispatcher_basic_password = original_dispatcher_password
+
+
+def test_upload_requires_consent(client, async_session_maker, upload_root, admin_headers):
     booking_id = asyncio.run(_create_booking(async_session_maker, consent=False))
     files = {"file": ("before.jpg", b"abc", "image/jpeg")}
 
     response = client.post(
-        f"/v1/orders/{booking_id}/photos", data={"phase": "before"}, files=files
+        f"/v1/orders/{booking_id}/photos",
+        data={"phase": "before"},
+        files=files,
+        headers=admin_headers,
     )
 
     assert response.status_code == 403
@@ -83,18 +101,22 @@ def test_upload_with_consent_and_download_auth(client, async_session_maker, uplo
     booking_id = asyncio.run(_create_booking(async_session_maker, consent=False))
 
     consent = client.patch(
-        f"/v1/orders/{booking_id}/consent_photos", json={"consent_photos": True}
+        f"/v1/orders/{booking_id}/consent_photos",
+        json={"consent_photos": True},
+        headers=admin_headers,
     )
     assert consent.status_code == 200
     assert consent.json()["consent_photos"] is True
 
     payload = {"phase": "AFTER"}
     files = {"file": ("after.jpg", b"hello-image", "image/jpeg")}
-    upload = client.post(f"/v1/orders/{booking_id}/photos", data=payload, files=files)
+    upload = client.post(
+        f"/v1/orders/{booking_id}/photos", data=payload, files=files, headers=admin_headers
+    )
     assert upload.status_code == 201
     photo_id = upload.json()["photo_id"]
 
-    listing = client.get(f"/v1/orders/{booking_id}/photos")
+    listing = client.get(f"/v1/orders/{booking_id}/photos", headers=admin_headers)
     assert listing.status_code == 200
     assert len(listing.json()["photos"]) == 1
 
@@ -108,3 +130,31 @@ def test_upload_with_consent_and_download_auth(client, async_session_maker, uplo
 
     stored_files = list(Path(upload_root / booking_id).glob("*"))
     assert stored_files, "uploaded file should be written to disk"
+
+
+def test_admin_override_uploads_without_consent(client, async_session_maker, upload_root, admin_headers):
+    booking_id = asyncio.run(_create_booking(async_session_maker, consent=False))
+    files = {"file": ("before.jpg", b"abc", "image/jpeg")}
+
+    response = client.post(
+        f"/v1/orders/{booking_id}/photos",
+        data={"phase": "before", "admin_override": "true"},
+        files=files,
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 201
+
+
+def test_dispatcher_cannot_admin_override(client, async_session_maker, upload_root, dispatcher_headers):
+    booking_id = asyncio.run(_create_booking(async_session_maker, consent=False))
+    files = {"file": ("before.jpg", b"abc", "image/jpeg")}
+
+    response = client.post(
+        f"/v1/orders/{booking_id}/photos",
+        data={"phase": "before", "admin_override": "true"},
+        files=files,
+        headers=dispatcher_headers,
+    )
+
+    assert response.status_code == 403
