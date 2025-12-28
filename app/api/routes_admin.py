@@ -1,6 +1,7 @@
 import html
 import logging
 import secrets
+from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from typing import Iterable, List, Optional
 
@@ -30,6 +31,7 @@ from app.domain.export_events.db_models import ExportEvent
 from app.domain.export_events.schemas import ExportEventResponse
 from app.domain.invoices import schemas as invoice_schemas
 from app.domain.invoices import service as invoice_service
+from app.domain.invoices import statuses as invoice_statuses
 from app.domain.invoices.db_models import Invoice
 from app.domain.leads import statuses as lead_statuses
 from app.domain.leads.db_models import Lead, ReferralCredit
@@ -47,6 +49,12 @@ logger = logging.getLogger(__name__)
 security = HTTPBasic(auto_error=False)
 
 
+@dataclass
+class AdminIdentity:
+    username: str
+    role: str
+
+
 def _format_dt(value: datetime | None) -> str:
     if value is None:
         return "-"
@@ -60,7 +68,7 @@ def _format_ts(value: float | None) -> str:
     return _format_dt(dt)
 
 
-async def verify_admin_or_dispatcher(credentials: HTTPBasicCredentials | None = Depends(security)) -> str:
+async def verify_admin_or_dispatcher(credentials: HTTPBasicCredentials | None = Depends(security)) -> AdminIdentity:
     admin_username = settings.admin_basic_username
     admin_password = settings.admin_basic_password
     dispatcher_username = settings.dispatcher_basic_username
@@ -80,9 +88,9 @@ async def verify_admin_or_dispatcher(credentials: HTTPBasicCredentials | None = 
         )
 
     if admin_username and admin_password and secrets.compare_digest(credentials.username, admin_username) and secrets.compare_digest(credentials.password, admin_password):
-        return "admin"
+        return AdminIdentity(username=credentials.username, role="admin")
     if dispatcher_username and dispatcher_password and secrets.compare_digest(credentials.username, dispatcher_username) and secrets.compare_digest(credentials.password, dispatcher_password):
-        return "dispatcher"
+        return AdminIdentity(username=credentials.username, role="dispatcher")
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -91,10 +99,10 @@ async def verify_admin_or_dispatcher(credentials: HTTPBasicCredentials | None = 
     )
 
 
-async def require_admin(role: str = Depends(verify_admin_or_dispatcher)) -> str:
-    if role != "admin":
+async def require_admin(identity: AdminIdentity = Depends(verify_admin_or_dispatcher)) -> AdminIdentity:
+    if identity.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
-    return role
+    return identity
 
 
 def _filter_badge(filter_key: str, active_filters: set[str]) -> str:
@@ -373,7 +381,7 @@ async def resend_last_email(
 async def list_export_dead_letter(
     limit: int = Query(default=100, ge=1, le=500),
     session: AsyncSession = Depends(get_db_session),
-    role: str = Depends(verify_admin_or_dispatcher),
+    _principal: AdminIdentity = Depends(verify_admin_or_dispatcher),
 ) -> List[ExportEventResponse]:
     result = await session.execute(
         select(ExportEvent).order_by(ExportEvent.created_at.desc()).limit(limit)
@@ -396,7 +404,7 @@ async def list_export_dead_letter(
 @router.post("/v1/admin/retention/cleanup")
 async def run_retention_cleanup(
     session: AsyncSession = Depends(get_db_session),
-    role: str = Depends(require_admin),
+    _admin: AdminIdentity = Depends(require_admin),
 ) -> dict[str, int]:
     return await cleanup_retention(session)
 
@@ -430,7 +438,7 @@ async def get_admin_metrics(
     to_ts: datetime | None = Query(default=None, alias="to"),
     format: str | None = Query(default=None, pattern="^(json|csv)$"),
     session: AsyncSession = Depends(get_db_session),
-    role: str = Depends(require_admin),
+    _admin: AdminIdentity = Depends(require_admin),
 ):
     start, end = _normalize_range(from_ts, to_ts)
     conversions = await conversion_counts(session, start, end)
@@ -477,7 +485,7 @@ async def get_admin_metrics(
 
 
 @router.post("/v1/admin/pricing/reload", status_code=status.HTTP_202_ACCEPTED)
-async def reload_pricing(role: str = Depends(require_admin)) -> dict[str, str]:
+async def reload_pricing(_admin: AdminIdentity = Depends(require_admin)) -> dict[str, str]:
     load_pricing_config(settings.pricing_config_path)
     return {"status": "reloaded"}
 
@@ -842,24 +850,8 @@ def _invoice_response(invoice: Invoice) -> invoice_schemas.InvoiceResponse:
 
 
 def _invoice_list_item(invoice: Invoice) -> invoice_schemas.InvoiceListItem:
-    data = invoice_service.build_invoice_response(invoice)
-    return invoice_schemas.InvoiceListItem(
-        invoice_id=data["invoice_id"],
-        invoice_number=data["invoice_number"],
-        order_id=data["order_id"],
-        customer_id=data["customer_id"],
-        status=data["status"],
-        issue_date=data["issue_date"],
-        due_date=data["due_date"],
-        currency=data["currency"],
-        subtotal_cents=data["subtotal_cents"],
-        tax_cents=data["tax_cents"],
-        total_cents=data["total_cents"],
-        paid_cents=data["paid_cents"],
-        balance_due_cents=data["balance_due_cents"],
-        created_at=data["created_at"],
-        updated_at=data["updated_at"],
-    )
+    data = invoice_service.build_invoice_list_item(invoice)
+    return invoice_schemas.InvoiceListItem(**data)
 
 
 @router.get("/v1/admin/invoices", response_model=invoice_schemas.InvoiceListResponse)
@@ -870,12 +862,16 @@ async def list_invoices(
     q: str | None = None,
     page: int = Query(default=1, ge=1),
     session: AsyncSession = Depends(get_db_session),
-    role: str = Depends(require_admin),
+    _admin: AdminIdentity = Depends(require_admin),
 ) -> invoice_schemas.InvoiceListResponse:
     page_size = 50
     filters = []
     if status_filter:
-        filters.append(Invoice.status == status_filter.upper())
+        try:
+            normalized_status = invoice_statuses.normalize_status(status_filter)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        filters.append(Invoice.status == normalized_status)
     if customer_id:
         filters.append(Invoice.customer_id == customer_id)
     if order_id:
@@ -888,10 +884,7 @@ async def list_invoices(
     total = int((await session.scalar(count_stmt)) or 0)
 
     stmt = (
-        base_query.options(
-            selectinload(Invoice.items),
-            selectinload(Invoice.payments),
-        )
+        base_query.options(selectinload(Invoice.payments))
         .order_by(Invoice.created_at.desc())
         .limit(page_size)
         .offset((page - 1) * page_size)
@@ -910,7 +903,7 @@ async def list_invoices(
 async def get_invoice(
     invoice_id: str,
     session: AsyncSession = Depends(get_db_session),
-    role: str = Depends(require_admin),
+    _admin: AdminIdentity = Depends(require_admin),
 ) -> invoice_schemas.InvoiceResponse:
     invoice = await session.get(
         Invoice,
@@ -932,7 +925,7 @@ async def create_invoice_from_order(
     order_id: str,
     request: invoice_schemas.InvoiceCreateRequest,
     session: AsyncSession = Depends(get_db_session),
-    role: str = Depends(require_admin),
+    admin: AdminIdentity = Depends(require_admin),
 ) -> invoice_schemas.InvoiceResponse:
     order = await session.get(Booking, order_id)
     if order is None:
@@ -947,7 +940,7 @@ async def create_invoice_from_order(
             due_date=request.due_date,
             currency=request.currency,
             notes=request.notes,
-            created_by=role,
+            created_by=admin.username or admin.role,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -971,7 +964,29 @@ async def mark_invoice_paid(
     invoice_id: str,
     request: invoice_schemas.ManualPaymentRequest,
     session: AsyncSession = Depends(get_db_session),
-    role: str = Depends(require_admin),
+    _admin: AdminIdentity = Depends(require_admin),
+) -> invoice_schemas.ManualPaymentResult:
+    return await _record_manual_invoice_payment(invoice_id, request, session)
+
+
+@router.post(
+    "/v1/admin/invoices/{invoice_id}/record-payment",
+    response_model=invoice_schemas.ManualPaymentResult,
+    status_code=status.HTTP_201_CREATED,
+)
+async def record_manual_invoice_payment(
+    invoice_id: str,
+    request: invoice_schemas.ManualPaymentRequest,
+    session: AsyncSession = Depends(get_db_session),
+    _admin: AdminIdentity = Depends(require_admin),
+) -> invoice_schemas.ManualPaymentResult:
+    return await _record_manual_invoice_payment(invoice_id, request, session)
+
+
+async def _record_manual_invoice_payment(
+    invoice_id: str,
+    request: invoice_schemas.ManualPaymentRequest,
+    session: AsyncSession,
 ) -> invoice_schemas.ManualPaymentResult:
     invoice = await session.get(
         Invoice,

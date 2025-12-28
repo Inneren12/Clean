@@ -69,7 +69,7 @@ def upgrade() -> None:
     op.create_index("ix_invoice_items_invoice_id", "invoice_items", ["invoice_id"], unique=False)
 
     op.create_table(
-        "payments",
+        "invoice_payments",
         sa.Column("payment_id", sa.String(length=36), primary_key=True),
         sa.Column("invoice_id", sa.String(length=36), nullable=False),
         sa.Column("provider", sa.String(length=32), nullable=False),
@@ -80,14 +80,19 @@ def upgrade() -> None:
         sa.Column("received_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("reference", sa.String(length=255), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.ForeignKeyConstraint(["invoice_id"], ["invoices.invoice_id"], name="fk_payments_invoice"),
+        sa.ForeignKeyConstraint(["invoice_id"], ["invoices.invoice_id"], name="fk_invoice_payments_invoice"),
     )
-    op.create_index("ix_payments_invoice_status", "payments", ["invoice_id", "status"], unique=False)
+    op.create_index(
+        "ix_invoice_payments_invoice_status",
+        "invoice_payments",
+        ["invoice_id", "status"],
+        unique=False,
+    )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_payments_invoice_status", table_name="payments")
-    op.drop_table("payments")
+    op.drop_index("ix_invoice_payments_invoice_status", table_name="invoice_payments")
+    op.drop_table("invoice_payments")
     op.drop_index("ix_invoice_items_invoice_id", table_name="invoice_items")
     op.drop_table("invoice_items")
     op.drop_index("ix_invoices_customer_id", table_name="invoices")
