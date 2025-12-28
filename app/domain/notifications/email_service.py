@@ -17,6 +17,7 @@ EMAIL_TYPE_BOOKING_PENDING = "booking_pending"
 EMAIL_TYPE_BOOKING_CONFIRMED = "booking_confirmed"
 EMAIL_TYPE_BOOKING_REMINDER = "booking_reminder_24h"
 EMAIL_TYPE_BOOKING_COMPLETED = "booking_completed"
+EMAIL_TYPE_NPS_SURVEY = "nps_survey"
 REMINDER_STATUSES = {"CONFIRMED", "PENDING"}
 
 
@@ -67,6 +68,18 @@ def _render_booking_completed(booking: Booking, lead: Lead) -> tuple[str, str]:
         "Thanks for letting us clean your place. If you have a moment, we'd love a quick review.\n\n"
         "Review link: https://example.com/review-placeholder\n\n"
         "If anything was missed, reply so we can make it right."
+    )
+    return subject, body
+
+
+def _render_nps_survey(lead: Lead, survey_link: str) -> tuple[str, str]:
+    subject = "How did we do? Quick 1-question check-in"
+    body = (
+        f"Hi {lead.name},\n\n"
+        "Thanks again for choosing us. Could you rate your last cleaning?"
+        " It only takes a few seconds.\n\n"
+        f"Share your score: {survey_link}\n\n"
+        "If anything was off, reply and we'll make it right."
     )
     return subject, body
 
@@ -188,6 +201,26 @@ async def send_booking_completed_email(
         lead=lead,
         email_type=EMAIL_TYPE_BOOKING_COMPLETED,
         render=_render_booking_completed,
+        dedupe=dedupe,
+    )
+
+
+async def send_nps_survey_email(
+    session: AsyncSession,
+    adapter: EmailAdapter | None,
+    booking: Booking,
+    lead: Lead,
+    survey_link: str,
+    *,
+    dedupe: bool = True,
+) -> bool:
+    return await _send_with_record(
+        session=session,
+        adapter=adapter,
+        booking=booking,
+        lead=lead,
+        email_type=EMAIL_TYPE_NPS_SURVEY,
+        render=lambda _booking, _lead: _render_nps_survey(_lead, survey_link),
         dedupe=dedupe,
     )
 
