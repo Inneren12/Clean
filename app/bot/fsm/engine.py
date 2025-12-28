@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 import re
 from typing import Any, Dict, List, Optional
 
@@ -20,11 +21,12 @@ class FsmReply:
 
     @property
     def metadata(self) -> Dict[str, Any]:
+        step_value = self.step.value if isinstance(self.step, Enum) else self.step
         return {
             "quickReplies": self.quick_replies,
             "progress": self.progress,
             "summary": self.summary,
-            "fsmStep": self.step.value if self.step else None,
+            "fsmStep": step_value if self.step else None,
             "estimate": self.estimate.model_dump() if self.estimate else None,
         }
 
@@ -37,13 +39,9 @@ EXTRA_REPLIES = ["oven", "fridge", "windows", "carpet", "pets"]
 TIME_REPLIES = ["morning", "afternoon", "evening", "specific time"]
 CONTACT_REPLIES = ["share email", "share phone", "skip"]
 
-NON_FLOW_STEPS: Dict[Intent, FsmStep] = {
-    Intent.cancel: FsmStep.routing,
-    Intent.status: FsmStep.routing,
-    Intent.human: FsmStep.handoff_check,
-    Intent.complaint: FsmStep.handoff_check,
-    Intent.faq: FsmStep.routing,
-}
+FLOW_INTENTS = {Intent.booking, Intent.price, Intent.scope, Intent.reschedule}
+HARD_INTERRUPTS = {Intent.human, Intent.complaint}
+SOFT_INTERRUPTS = {Intent.status, Intent.faq}
 
 
 STEP_SEQUENCE: list[FsmStep] = [
@@ -78,6 +76,8 @@ def _format_time_window(entities: Entities) -> Optional[str]:
         parts.append(start)
     elif end and not start and not label:
         parts.append(f"by {end}")
+    elif start and label:
+        parts.append(start)
 
     return " ".join([p for p in parts if p]) or None
 
@@ -238,35 +238,79 @@ class BotFsm:
     def handle(self, message_text: str, intent_result: IntentResult) -> FsmReply:
         filled = _update_fields(self.state.filled_fields, message_text, intent_result.entities)
 
-        active_intent = intent_result.intent
-        ongoing = self.state.current_intent in {Intent.booking, Intent.price, Intent.scope, Intent.reschedule}
-        if intent_result.intent in NON_FLOW_STEPS and ongoing:
-            active_intent = self.state.current_intent or intent_result.intent
+        incoming_intent = intent_result.intent
+        ongoing = self.state.current_intent in FLOW_INTENTS
+        has_entities = bool(intent_result.entities.model_dump(exclude_none=True, by_alias=True))
 
-        if intent_result.intent in NON_FLOW_STEPS and active_intent == intent_result.intent:
-            step = NON_FLOW_STEPS[intent_result.intent]
+        if incoming_intent in HARD_INTERRUPTS:
+            step = FsmStep.handoff_check
             self.state = ConversationState(
-                current_intent=active_intent,
+                current_intent=incoming_intent,
                 fsm_step=step,
                 filled_fields=filled,
                 confidence=intent_result.confidence,
-                last_estimate=filled.get("last_estimate"),
+                last_estimate=self.state.last_estimate,
             )
             return FsmReply(
-                text="Thanks! I'll route this to the right place.",
+                text="I'll connect you to a human right away to help with this.",
                 quick_replies=[],
                 progress=None,
                 summary=_summary(filled),
                 step=step,
                 estimate=None,
             )
+
+        if incoming_intent == Intent.cancel:
+            step = FsmStep.routing
+            self.state = ConversationState(
+                current_intent=Intent.cancel,
+                fsm_step=step,
+                filled_fields=filled,
+                confidence=intent_result.confidence,
+                last_estimate=self.state.last_estimate,
+            )
+            return FsmReply(
+                text="Understood, I've canceled the request. If you'd like to start again, let me know.",
+                quick_replies=[],
+                progress=None,
+                summary=_summary(filled),
+                step=step,
+                estimate=None,
+            )
+
+        if incoming_intent in SOFT_INTERRUPTS and not (ongoing and has_entities):
+            active_intent = self.state.current_intent if ongoing else self.state.current_intent or incoming_intent
+            current_step = self.state.fsm_step or FsmStep.routing
+            self.state = ConversationState(
+                current_intent=active_intent,
+                fsm_step=current_step,
+                filled_fields=filled,
+                confidence=intent_result.confidence,
+                last_estimate=self.state.last_estimate,
+            )
+            status_text = (
+                "We're still on your request. I'll keep the flow ready for when you're ready to continue."
+                if incoming_intent == Intent.status
+                else "Here's some info. We can continue your request whenever you're ready."
+            )
+            return FsmReply(
+                text=status_text,
+                quick_replies=[],
+                progress=None,
+                summary=_summary(filled),
+                step=current_step,
+                estimate=None,
+            )
+
+        active_intent = self.state.current_intent if ongoing else incoming_intent
         steps = self._steps_for_intent(active_intent)
         missing_steps = [step for step in steps if not _has_field(filled, step)]
         active_step = missing_steps[0] if missing_steps else (steps[-1] if steps else None)
         question, quick_replies = _question_for_step(active_step) if active_step else ("", [])
 
         estimate = self._estimate(filled)
-        filled["last_estimate"] = estimate.model_dump() if estimate else None
+
+        last_estimate = estimate.model_dump() if estimate else self.state.last_estimate
 
         text_parts: List[str] = []
         if estimate:
@@ -287,7 +331,7 @@ class BotFsm:
             fsm_step=active_step,
             filled_fields=filled,
             confidence=intent_result.confidence,
-            last_estimate=filled.get("last_estimate"),
+            last_estimate=last_estimate,
         )
 
         return FsmReply(

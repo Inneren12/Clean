@@ -154,18 +154,27 @@ async def post_message(
             metrics.record_handoff(decision.reason or "handoff", str(fsm_step_value))
 
     request_id = getattr(http_request.state, "request_id", None) if http_request else None
+    estimate = fsm_reply.estimate
     logger.info(
         "intent_detected",
         extra={
+            "request_id": request_id,
             "conversation_id": request.conversation_id,
             "intent": nlu_result.intent.value,
             "confidence": nlu_result.confidence,
             "fsm_step": fsm_step_value,
+
+            # NLU explainability (keep small enough)
             "reasons": nlu_result.reasons,
             "entities": nlu_result.entities.model_dump(exclude_none=True, by_alias=True),
-            "request_id": request_id,
+
+            # Pricing summary (flat, safe)
+            "estimate_min": estimate.price_range_min if estimate else None,
+            "estimate_max": estimate.price_range_max if estimate else None,
+            "estimate_duration": estimate.duration_minutes if estimate else None,
         },
     )
+
 
     return MessageResponse(
         conversation_id=request.conversation_id,

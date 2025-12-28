@@ -26,7 +26,7 @@ def test_post_message_updates_state(client):
     assert response.status_code == 200
     body = response.json()
     assert body["reply"]["intent"] == "price"
-    assert body["reply"]["state"]["fsmStep"] == "AskServiceType"
+    assert body["reply"]["state"]["fsmStep"] == "ask_service_type"
 
     messages = anyio.run(app.state.bot_store.list_messages, conversation_id)
     assert len(messages) == 2
@@ -53,7 +53,7 @@ def test_message_normalizes_entities_into_state(client):
     assert filled["service_type"] == "deep_clean"
     assert set(filled.get("extras", [])) == {"oven", "carpet"}
     assert filled.get("area") == "Brooklyn"
-    assert filled.get("preferred_time_window") == "tomorrow evening"
+    assert filled.get("preferred_time_window") == "tomorrow evening 17:00"
 
 
 def test_create_lead_and_case(client):
