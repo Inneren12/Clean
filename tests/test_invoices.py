@@ -139,6 +139,13 @@ def test_admin_invoice_flow(client, async_session_maker):
     order_id = asyncio.run(seed_order())
     headers = _auth_headers("admin", "secret")
 
+    reason_resp = client.post(
+        f"/v1/orders/{order_id}/reasons",
+        headers=headers,
+        json={"kind": "PRICE_ADJUST", "code": "EXTRA_SERVICE", "note": "Custom pricing"},
+    )
+    assert reason_resp.status_code == 201
+
     create_resp = client.post(
         f"/v1/admin/orders/{order_id}/invoice",
         headers=headers,

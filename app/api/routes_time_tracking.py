@@ -7,8 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.routes_admin import require_admin, verify_admin_or_dispatcher
 from app.dependencies import get_db_session
 from app.domain.bookings.db_models import Booking
+from app.domain.reason_logs import schemas as reason_schemas
+from app.domain.reason_logs import service as reason_logs_service
 from app.domain.time_tracking import schemas as time_schemas
 from app.domain.time_tracking import service as time_service
+from app.settings import settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -101,10 +104,22 @@ async def finish_order_time_tracking(
     identity=Depends(verify_admin_or_dispatcher),
 ) -> time_schemas.TimeTrackingResponse:
     await _ensure_booking(session, booking_id)
+    entry = await time_service.fetch_time_entry(session, booking_id)
+    reason_provided = await reason_logs_service.has_reason(
+        session,
+        booking_id,
+        kind=reason_schemas.ReasonKind.TIME_OVERRUN,
+        time_entry_id=getattr(entry, "entry_id", None),
+    )
     try:
-        entry = await time_service.finish_time_tracking(session, booking_id=booking_id)
+        entry = await time_service.finish_time_tracking(
+            session,
+            booking_id=booking_id,
+            reason_provided=reason_provided,
+            threshold=settings.time_overrun_reason_threshold,
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if entry is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
     summary = await time_service.fetch_time_tracking_summary(session, booking_id)
