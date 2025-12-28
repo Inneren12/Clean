@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from app.bot.nlu.models import Entities, Intent, IntentResult
 from app.bot.pricing.engine import PriceEstimate, PricingEngine, PricingInput
+from app.bot.rules.engine import RulesEngine
 from app.domain.bot.schemas import ConversationState, FsmStep
 
 
@@ -42,19 +43,6 @@ CONTACT_REPLIES = ["share email", "share phone", "skip"]
 FLOW_INTENTS = {Intent.booking, Intent.price, Intent.scope, Intent.reschedule}
 HARD_INTERRUPTS = {Intent.human, Intent.complaint}
 SOFT_INTERRUPTS = {Intent.status, Intent.faq}
-
-
-STEP_SEQUENCE: list[FsmStep] = [
-    FsmStep.ask_service_type,
-    FsmStep.ask_property_type,
-    FsmStep.ask_size,
-    FsmStep.ask_condition,
-    FsmStep.ask_extras,
-    FsmStep.ask_area,
-    FsmStep.ask_preferred_time,
-    FsmStep.ask_contact,
-    FsmStep.confirm_lead,
-]
 
 
 def _format_time_window(entities: Entities) -> Optional[str]:
@@ -213,12 +201,10 @@ class BotFsm:
         self.state = state or ConversationState()
         self.locale = locale
         self.pricing_engine = PricingEngine()
+        self.rules_engine = RulesEngine()
 
-    def _steps_for_intent(self, intent: Intent) -> List[FsmStep]:
-        steps = list(STEP_SEQUENCE)
-        if _should_skip_contact(intent):
-            steps = [step for step in steps if step not in {FsmStep.ask_contact, FsmStep.confirm_lead}]
-        return steps
+    def _steps_for_intent(self, intent: Intent, filled: Dict[str, Any], fast_path: bool) -> List[FsmStep]:
+        return self.rules_engine.steps_for_intent(intent=intent, filled_fields=filled, fast_path=fast_path)
 
     def _estimate(self, filled: Dict[str, Any]) -> Optional[PriceEstimate]:
         if not filled.get("service_type"):
@@ -238,10 +224,13 @@ class BotFsm:
 
     def handle(self, message_text: str, intent_result: IntentResult) -> FsmReply:
         filled = _update_fields(self.state.filled_fields, message_text, intent_result.entities)
+        upsell = self.rules_engine.apply_upsells(message_text, filled)
+        filled = upsell.filled_fields
 
         incoming_intent = intent_result.intent
         ongoing = self.state.current_intent in FLOW_INTENTS
         has_entities = bool(intent_result.entities.model_dump(exclude_none=True, by_alias=True))
+        fast_path = self.rules_engine.is_fast_path(intent_result.entities)
 
         if incoming_intent in HARD_INTERRUPTS:
             step = FsmStep.handoff_check
@@ -285,7 +274,7 @@ class BotFsm:
         if incoming_intent in SOFT_INTERRUPTS and ongoing and not has_entities:
             active_intent = self.state.current_intent
             current_step = self.state.fsm_step or FsmStep.routing
-            steps = self._steps_for_intent(active_intent)
+            steps = self._steps_for_intent(active_intent, filled, fast_path)
             question, quick_replies = _question_for_step(current_step) if current_step else ("", [])
 
             self.state = ConversationState(
@@ -310,7 +299,7 @@ class BotFsm:
             )
 
         active_intent = self.state.current_intent if ongoing else incoming_intent
-        steps = self._steps_for_intent(active_intent)
+        steps = self._steps_for_intent(active_intent, filled, fast_path)
         missing_steps = [step for step in steps if not _has_field(filled, step)]
         active_step = missing_steps[0] if missing_steps else (steps[-1] if steps else None)
         question, quick_replies = _question_for_step(active_step) if active_step else ("", [])
@@ -325,13 +314,22 @@ class BotFsm:
                 f"Estimate: ${estimate.price_range_min}-${estimate.price_range_max} • ~{estimate.duration_minutes} min."
             )
             if estimate.explanation:
-                text_parts.append("; ".join(estimate.explanation[:3]))
+                explanation = list(estimate.explanation)
+                if upsell.reasons:
+                    explanation.extend([f"Upsell: {reason}" for reason in upsell.reasons])
+                text_parts.append("; ".join(explanation[:3]))
 
         if active_step == FsmStep.confirm_lead and active_intent not in {Intent.price, Intent.scope}:
             filled["confirmation_ready"] = True
             text_parts.append("All details captured. Ready to confirm the booking.")
         elif question:
             text_parts.append(question)
+
+        prep_instructions = list(self.rules_engine.prep_instructions(filled))
+        summary = _summary(filled)
+        if prep_instructions:
+            summary["prep_instructions"] = prep_instructions
+            text_parts.append("Prep tips:\n- " + "\n- ".join(prep_instructions[:3]))
 
         self.state = ConversationState(
             current_intent=active_intent,
@@ -345,7 +343,7 @@ class BotFsm:
             text="\n".join(text_parts).strip(),
             quick_replies=quick_replies,
             progress=_progress(steps, filled) if steps else None,
-            summary=_summary(filled),
+            summary=summary,
             step=active_step,
             estimate=estimate,
         )

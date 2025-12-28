@@ -4,6 +4,7 @@ from typing import List
 
 from app.bot.fsm.engine import FsmReply
 from app.bot.handoff.decision import HandoffDecision
+from app.bot.handoff.reasons import HandoffReason
 from app.bot.nlu.models import IntentResult
 from app.domain.bot.schemas import CasePayload, ConversationRecord, MessageRecord, FsmStep
 
@@ -41,7 +42,7 @@ def build_case_payload(
         "messages": _serialize_messages(messages[-10:]),
         "entities": intent_result.entities.model_dump(exclude_none=True, by_alias=True),
         "handoff": {
-            "reason": decision.reason,
+            "reason": HandoffReason.stable_reason(decision.reason.value if decision.reason else None),
             "summary": decision.summary,
             "suggested_action": decision.suggested_action,
         },
@@ -53,7 +54,7 @@ def build_case_payload(
     }
 
     return CasePayload(
-        reason=decision.reason or "handoff",
+        reason=HandoffReason.stable_reason(decision.reason.value if decision.reason else None),
         summary=decision.summary or "Escalated to human agent",
         payload=payload,
         source_conversation_id=conversation.conversation_id,
