@@ -17,6 +17,7 @@ from app.api.routes_bot import router as bot_router
 from app.api.routes_checklists import router as checklists_router
 from app.api.routes_health import router as health_router
 from app.api.routes_payments import router as payments_router
+from app.api.routes_orders import router as orders_router
 from app.api.routes_time_tracking import router as time_tracking_router
 from app.api.routes_public import router as public_router
 from app.api.routes_leads import router as leads_router
@@ -207,6 +208,7 @@ def create_app(app_settings) -> FastAPI:
     app.include_router(estimate_router)
     app.include_router(chat_router)
     app.include_router(payments_router)
+    app.include_router(orders_router)
     app.include_router(checklists_router)
     app.include_router(time_tracking_router)
     app.include_router(bookings_router)

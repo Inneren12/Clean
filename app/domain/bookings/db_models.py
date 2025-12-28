@@ -50,6 +50,7 @@ class Booking(Base):
     deposit_status: Mapped[str | None] = mapped_column(String(32))
     stripe_checkout_session_id: Mapped[str | None] = mapped_column(String(255))
     stripe_payment_intent_id: Mapped[str | None] = mapped_column(String(255))
+    consent_photos: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -64,6 +65,11 @@ class Booking(Base):
 
     team: Mapped[Team] = relationship("Team", back_populates="bookings")
     lead = relationship("Lead", backref="bookings")
+    photos: Mapped[list["OrderPhoto"]] = relationship(
+        "OrderPhoto",
+        back_populates="order",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         Index("ix_bookings_starts_status", "starts_at", "status"),
@@ -96,3 +102,26 @@ class EmailEvent(Base):
     __table_args__ = (
         Index("ix_email_events_booking_type", "booking_id", "email_type"),
     )
+
+
+class OrderPhoto(Base):
+    __tablename__ = "order_photos"
+
+    photo_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    order_id: Mapped[str] = mapped_column(
+        ForeignKey("bookings.booking_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    phase: Mapped[str] = mapped_column(String(16), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    original_filename: Mapped[str | None] = mapped_column(String(255))
+    content_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    uploaded_by: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    order: Mapped[Booking] = relationship("Booking", back_populates="photos")
