@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.bot.nlu.models import Entities, Intent
+
 
 def to_camel(string: str) -> str:
     parts = string.split("_")
@@ -28,18 +30,12 @@ class MessageRole(str, Enum):
     system = "system"
 
 
-class Intent(str, Enum):
-    quote = "quote"
-    book = "book"
-    complaint = "complaint"
-    faq = "faq"
-
-
 class FsmStep(str, Enum):
     collecting_requirements = "collecting_requirements"
     handoff_check = "handoff_check"
     scheduling = "scheduling"
     routing = "routing"
+    support = "support"
 
 
 class ConversationState(BotBaseModel):
@@ -69,6 +65,7 @@ class MessagePayload(BotBaseModel):
     intent: Optional[Intent] = None
     confidence: Optional[float] = None
     extracted_entities: Dict[str, Any] = Field(default_factory=dict)
+    reasons: List[str] = Field(default_factory=list)
 
 
 class MessageRecord(MessagePayload):
@@ -101,6 +98,8 @@ class BotReply(BotBaseModel):
     intent: Intent
     confidence: float
     state: ConversationState
+    extracted_entities: Dict[str, Any] = Field(default_factory=dict)
+    reasons: List[str] = Field(default_factory=list)
 
 
 class MessageResponse(BotBaseModel):
@@ -139,4 +138,3 @@ class CasePayload(BotBaseModel):
 class CaseRecord(CasePayload):
     case_id: str
     created_at: float
-

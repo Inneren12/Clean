@@ -2,6 +2,8 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.bot.nlu.engine import analyze_message
+from app.bot.nlu.models import Intent
 from app.dependencies import get_bot_store
 from app.domain.bot.schemas import (
     BotReply,
@@ -11,7 +13,6 @@ from app.domain.bot.schemas import (
     ConversationRecord,
     ConversationState,
     FsmStep,
-    Intent,
     LeadPayload,
     LeadRecord,
     MessageRecord,
@@ -29,15 +30,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 
-def _detect_intent(text: str) -> tuple[Intent, float, FsmStep]:
-    normalized = text.lower()
-    if "price" in normalized or "quote" in normalized:
-        return Intent.quote, 0.82, FsmStep.collecting_requirements
-    if "complaint" in normalized or "issue" in normalized:
-        return Intent.complaint, 0.72, FsmStep.handoff_check
-    if "book" in normalized:
-        return Intent.book, 0.78, FsmStep.scheduling
-    return Intent.faq, 0.55, FsmStep.routing
+def _fsm_step_for_intent(intent: Intent) -> FsmStep:
+    match intent:
+        case Intent.booking | Intent.reschedule:
+            return FsmStep.scheduling
+        case Intent.price | Intent.scope:
+            return FsmStep.collecting_requirements
+        case Intent.cancel | Intent.status:
+            return FsmStep.routing
+        case Intent.human | Intent.complaint:
+            return FsmStep.handoff_check
+        case _:
+            return FsmStep.routing
 
 
 @router.post("/bot/session", response_model=SessionCreateResponse, status_code=201)
@@ -68,12 +72,17 @@ async def post_message(
     user_message = MessagePayload(role=MessageRole.user, text=request.text)
     await store.append_message(request.conversation_id, user_message)
 
-    intent, confidence, fsm_step = _detect_intent(request.text)
+    nlu_result = analyze_message(request.text)
+    fsm_step = _fsm_step_for_intent(nlu_result.intent)
     updated_state = ConversationState(
-        current_intent=intent,
+        current_intent=nlu_result.intent,
         fsm_step=fsm_step,
-        filled_fields={**conversation.state.filled_fields, "last_message": request.text},
-        confidence=confidence,
+        filled_fields={
+            **conversation.state.filled_fields,
+            "last_message": request.text,
+            "entities": nlu_result.entities.model_dump(exclude_none=True, by_alias=True),
+        },
+        confidence=nlu_result.confidence,
     )
     await store.update_state(request.conversation_id, updated_state)
 
@@ -84,9 +93,10 @@ async def post_message(
     bot_payload = MessagePayload(
         role=MessageRole.bot,
         text=bot_text,
-        intent=intent,
-        confidence=confidence,
-        extracted_entities={},
+        intent=nlu_result.intent,
+        confidence=nlu_result.confidence,
+        extracted_entities=nlu_result.entities.model_dump(exclude_none=True, by_alias=True),
+        reasons=nlu_result.reasons,
     )
     await store.append_message(request.conversation_id, bot_payload)
 
@@ -94,16 +104,25 @@ async def post_message(
         "intent_detected",
         extra={
             "conversation_id": request.conversation_id,
-            "intent": intent.value,
-            "confidence": confidence,
+            "intent": nlu_result.intent.value,
+            "confidence": nlu_result.confidence,
             "fsm_step": fsm_step.value,
+            "reasons": nlu_result.reasons,
+            "entities": nlu_result.entities.model_dump(exclude_none=True, by_alias=True),
             "request_id": getattr(http_request.state, "request_id", None) if http_request else None,
         },
     )
 
     return MessageResponse(
         conversation_id=request.conversation_id,
-        reply=BotReply(text=bot_text, intent=intent, confidence=confidence, state=updated_state),
+        reply=BotReply(
+            text=bot_text,
+            intent=nlu_result.intent,
+            confidence=nlu_result.confidence,
+            state=updated_state,
+            extracted_entities=nlu_result.entities.model_dump(exclude_none=True, by_alias=True),
+            reasons=nlu_result.reasons,
+        ),
     )
 
 

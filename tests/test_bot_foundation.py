@@ -25,7 +25,7 @@ def test_post_message_updates_state(client):
 
     assert response.status_code == 200
     body = response.json()
-    assert body["reply"]["intent"] == "quote"
+    assert body["reply"]["intent"] == "price"
     assert body["reply"]["state"]["fsmStep"] == "collecting_requirements"
 
     messages = anyio.run(app.state.bot_store.list_messages, conversation_id)
