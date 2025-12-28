@@ -1,8 +1,8 @@
 """
 Add client users and attach to bookings
 
-Revision ID: 0011_client_portal
-Revises: 0010_invoices
+Revision ID: 0017_client_portal_linear
+Revises: 0016_reason_logs
 Create Date: 2025-05-01 00:00:00
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from sqlalchemy.sql import func
 
 
-revision = "0011_client_portal"
-down_revision = "0010_invoices"
+revision = "0017_client_portal_linear"
+down_revision = "0016_reason_logs"
 branch_labels = None
 depends_on = None
 
