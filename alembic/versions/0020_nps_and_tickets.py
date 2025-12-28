@@ -42,8 +42,8 @@ def upgrade() -> None:
         sa.Column("id", sa.String(length=36), primary_key=True),
         sa.Column("order_id", sa.String(length=36), nullable=False),
         sa.Column("client_id", sa.String(length=36), nullable=True),
-        sa.Column("status", sa.String(length=32), nullable=False, server_default="OPEN"),
-        sa.Column("priority", sa.String(length=32), nullable=False, server_default="normal"),
+        sa.Column("status", sa.String(length=32), nullable=False, server_default=sa.text("'OPEN'")),
+        sa.Column("priority", sa.String(length=32), nullable=False, server_default=sa.text("'normal'")),
         sa.Column("subject", sa.String(length=255), nullable=False),
         sa.Column("body", sa.String(length=4000), nullable=False),
         sa.Column(

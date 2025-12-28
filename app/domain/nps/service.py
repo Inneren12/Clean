@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.bookings.db_models import Booking
@@ -108,7 +109,14 @@ async def record_response(
         comment=comment,
     )
     session.add(response)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError:
+        await session.rollback()
+        existing = await get_existing_response(session, booking.booking_id)
+        if existing:
+            return existing
+        raise
     logger.info(
         "nps_submitted",
         extra={
@@ -160,7 +168,14 @@ async def ensure_ticket_for_low_score(
         body=body,
     )
     session.add(ticket)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError:
+        await session.rollback()
+        existing_ticket = await get_existing_ticket(session, booking.booking_id)
+        if existing_ticket:
+            return existing_ticket
+        raise
     logger.info(
         "ticket_created_from_nps",
         extra={

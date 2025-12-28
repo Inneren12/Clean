@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy import and_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.bookings import service as booking_service
@@ -149,30 +150,40 @@ async def generate_due_orders(
 
         starts_at = _start_of_day_utc(scheduled_date)
 
-        booking = await booking_service.create_booking(
-            starts_at=starts_at,
-            duration_minutes=120,
-            lead_id=None,
-            session=session,
-            manage_transaction=False,
-            client_id=subscription.client_id,
-            subscription_id=subscription.subscription_id,
-            scheduled_date=scheduled_date,
-        )
+        try:
+            booking = await booking_service.create_booking(
+                starts_at=starts_at,
+                duration_minutes=120,
+                lead_id=None,
+                session=session,
+                manage_transaction=False,
+                client_id=subscription.client_id,
+                subscription_id=subscription.subscription_id,
+                scheduled_date=scheduled_date,
+            )
 
-        invoice_item = InvoiceItemCreate(
-            description=f"{subscription.base_service_type} cleaning",
-            qty=1,
-            unit_price_cents=subscription.base_price,
-        )
-        addon_items = await addon_service.addon_invoice_items_for_order(
-            session, booking.booking_id
-        )
-        await create_invoice_from_order(session, booking, [invoice_item, *addon_items])
+            invoice_item = InvoiceItemCreate(
+                description=f"{subscription.base_service_type} cleaning",
+                qty=1,
+                unit_price_cents=subscription.base_price,
+            )
+            addon_items = await addon_service.addon_invoice_items_for_order(
+                session, booking.booking_id
+            )
+            await create_invoice_from_order(session, booking, [invoice_item, *addon_items])
 
-        await _notify_client(session, email_adapter, subscription, booking)
-        subscription.next_run_at = _start_of_day_utc(_next_date(subscription, scheduled_date))
-        created += 1
+            await _notify_client(session, email_adapter, subscription, booking)
+            created += 1
+        except IntegrityError:
+            await session.rollback()
+            subscription = await session.get(Subscription, subscription.subscription_id)
+            if subscription is None:
+                continue
+
+        subscription.next_run_at = _start_of_day_utc(
+            _next_date(subscription, scheduled_date)
+        )
+        await session.commit()
 
     return GenerationResult(processed=len(subscriptions), created_orders=created)
 

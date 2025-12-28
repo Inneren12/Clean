@@ -23,8 +23,8 @@ def upgrade() -> None:
         sa.Column("addon_id", sa.Integer(), primary_key=True, autoincrement=True),
         sa.Column("code", sa.String(length=100), nullable=False, unique=True),
         sa.Column("name", sa.String(length=255), nullable=False),
-        sa.Column("price_cents", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("default_minutes", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("price_cents", sa.Integer(), nullable=False, server_default=sa.text("0")),
+        sa.Column("default_minutes", sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column(
             "created_at",
@@ -45,7 +45,7 @@ def upgrade() -> None:
         sa.Column("order_addon_id", sa.Integer(), primary_key=True, autoincrement=True),
         sa.Column("order_id", sa.String(length=36), nullable=False),
         sa.Column("addon_id", sa.Integer(), nullable=False),
-        sa.Column("qty", sa.Integer(), nullable=False, server_default="1"),
+        sa.Column("qty", sa.Integer(), nullable=False, server_default=sa.text("1")),
         sa.Column("unit_price_cents_snapshot", sa.Integer(), nullable=False),
         sa.Column("minutes_snapshot", sa.Integer(), nullable=False),
         sa.Column(
