@@ -12,7 +12,7 @@ from app.domain.pricing.config_loader import load_pricing_config
 @pytest.fixture
 def pricing_config():
     """Load pricing configuration."""
-    return load_pricing_config()
+    return load_pricing_config("pricing/economy_v1.json")
 
 
 @pytest.fixture
