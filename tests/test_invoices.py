@@ -9,8 +9,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.domain.bookings.db_models import Booking
 from app.domain.invoices import service as invoice_service
 from app.domain.invoices import statuses
-from app.domain.invoices.db_models import Invoice, Payment
+from app.domain.invoices.schemas import InvoiceItemCreate
+from app.domain.invoices.db_models import Invoice, InvoicePublicToken, Payment
 from app.domain.leads.db_models import Lead
+from app.infra.email import EmailAdapter
 from app.settings import settings
 from app.infra.db import Base
 
@@ -212,3 +214,126 @@ def test_admin_invoice_flow(client, async_session_maker):
         params={"status": "invalid"},
     )
     assert bad_status.status_code == 422
+
+
+class StubEmailAdapter(EmailAdapter):
+    def __init__(self):
+        super().__init__()
+        self.sent: list[tuple[str, str, str]] = []
+
+    async def send_email(self, recipient: str, subject: str, body: str) -> bool:  # type: ignore[override]
+        self.sent.append((recipient, subject, body))
+        return True
+
+
+async def _seed_invoice_with_token(async_session_maker) -> tuple[str, str]:
+    async with async_session_maker() as session:
+        lead = Lead(**_lead_payload())
+        session.add(lead)
+        await session.commit()
+        await session.refresh(lead)
+        booking = Booking(
+            team_id=1,
+            lead_id=lead.lead_id,
+            starts_at=datetime.now(tz=timezone.utc),
+            duration_minutes=90,
+            status="PENDING",
+        )
+        session.add(booking)
+        await session.flush()
+        invoice = await invoice_service.create_invoice_from_order(
+            session=session,
+            order=booking,
+            items=[InvoiceItemCreate(description="Service", qty=1, unit_price_cents=10000)],
+            currency="CAD",
+        )
+        token = await invoice_service.upsert_public_token(session, invoice)
+        await session.commit()
+        return invoice.invoice_id, token
+
+
+def test_public_invoice_view_and_pdf(client, async_session_maker):
+    invoice_id, token = asyncio.run(_seed_invoice_with_token(async_session_maker))
+
+    ok = client.get(f"/i/{token}")
+    assert ok.status_code == 200
+    assert "Invoice #" in ok.text
+
+    pdf = client.get(f"/i/{token}.pdf")
+    assert pdf.status_code == 200
+    assert pdf.headers["content-type"].startswith("application/pdf")
+    assert len(pdf.content) > 100
+
+    missing = client.get("/i/not-a-token")
+    assert missing.status_code == 404
+
+    async def _count_tokens() -> int:
+        async with async_session_maker() as session:
+            result = await session.execute(sa.select(sa.func.count()).select_from(InvoicePublicToken))
+            return int(result.scalar_one())
+
+    assert asyncio.run(_count_tokens()) == 1
+
+
+def test_admin_send_invoice_sets_status_and_token(client, async_session_maker):
+    settings.admin_basic_username = "admin"
+    settings.admin_basic_password = "secret"
+    adapter = StubEmailAdapter()
+    from app.main import app
+
+    original_adapter = getattr(app.state, "email_adapter", None)
+    app.state.email_adapter = adapter
+
+    async def _seed_invoice() -> str:
+        async with async_session_maker() as session:
+            lead = Lead(**_lead_payload())
+            session.add(lead)
+            await session.commit()
+            await session.refresh(lead)
+            booking = Booking(
+                team_id=1,
+                lead_id=lead.lead_id,
+                starts_at=datetime.now(tz=timezone.utc),
+                duration_minutes=90,
+                status="PENDING",
+            )
+            session.add(booking)
+            await session.flush()
+            invoice = await invoice_service.create_invoice_from_order(
+                session=session,
+                order=booking,
+                items=[
+                    InvoiceItemCreate(description="Service", qty=1, unit_price_cents=15000),
+                    InvoiceItemCreate(description="Supplies", qty=2, unit_price_cents=2500),
+                ],
+                currency="CAD",
+            )
+            await session.commit()
+            return invoice.invoice_id
+
+    invoice_id = asyncio.run(_seed_invoice())
+    headers = _auth_headers("admin", "secret")
+
+    try:
+        resp = client.post(f"/v1/admin/invoices/{invoice_id}/send", headers=headers)
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["invoice"]["status"] == statuses.INVOICE_STATUS_SENT
+        assert payload["email_sent"] is True
+        assert "/i/" in payload["public_link"]
+        assert adapter.sent
+        assert payload["public_link"] in adapter.sent[0][2]
+
+        async def _reload() -> tuple[str, int]:
+            async with async_session_maker() as session:
+                invoice = await session.get(Invoice, invoice_id)
+                token_count = await session.scalar(
+                    sa.select(sa.func.count()).select_from(InvoicePublicToken)
+                )
+                return invoice.status if invoice else "", int(token_count or 0)
+
+        status_value, token_count = asyncio.run(_reload())
+        assert status_value == statuses.INVOICE_STATUS_SENT
+        assert token_count == 1
+    finally:
+        app.state.email_adapter = original_adapter

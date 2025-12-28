@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
@@ -75,6 +77,12 @@ class Invoice(Base):
         back_populates="invoice",
         cascade="all, delete-orphan",
     )
+    public_token: Mapped[InvoicePublicToken | None] = relationship(
+        "InvoicePublicToken",
+        back_populates="invoice",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
 
 class InvoiceItem(Base):
@@ -118,3 +126,25 @@ class Payment(Base):
     __table_args__ = (
         Index("ix_invoice_payments_invoice_status", "invoice_id", "status"),
     )
+
+
+class InvoicePublicToken(Base):
+    __tablename__ = "invoice_public_tokens"
+
+    token_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    invoice_id: Mapped[str] = mapped_column(
+        ForeignKey("invoices.invoice_id"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    token_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    invoice: Mapped[Invoice] = relationship("Invoice", back_populates="public_token")

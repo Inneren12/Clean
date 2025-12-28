@@ -21,6 +21,7 @@
 ## Listing and viewing
 - `GET /v1/admin/invoices` supports filters: `status`, `customer_id`, `order_id`, `q` (invoice number search), and `page`.
 - `GET /v1/admin/invoices/{invoice_id}` returns full items + payment history with balances.
+- Public links: invoices can be viewed without authentication via `/i/{token}`. Tokens are long, random, and only hashes are stored in the database. Rotating a token invalidates older links. PDF downloads use `/i/{token}.pdf`.
 
 ## Manual payments
 - Endpoint: `POST /v1/admin/invoices/{invoice_id}/record-payment` (preferred)
@@ -28,3 +29,10 @@
 - Body: `amount_cents`, `method` (`cash`, `etransfer`, `other`), optional `reference` and `received_at`.
 - Creates a manual payment record and updates invoice status to `PARTIAL` or `PAID` based on remaining balance.
 - Manual payments record the admin username in `created_by` on the invoice.
+
+## Sending invoices
+- Endpoint: `POST /v1/admin/invoices/{invoice_id}/send`
+- Generates/rotates a 48-byte public token, stores only the SHA-256 hash, and emails the customer a link to `/i/{token}` (PDF link included).
+- If the invoice is still `DRAFT`, sending transitions it to `SENT`.
+- Token metadata tracks the last send time; rotate by re-sending.
+- Public links intentionally avoid exposing customer or invoice IDs; do not include PII in URLs.
