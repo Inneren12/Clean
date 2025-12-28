@@ -126,3 +126,115 @@ def test_paused_subscription_blocks_generation(client, async_session_maker):
             return result.scalar_one()
 
     assert asyncio.run(_bookings()) == 0
+
+
+def test_monthly_subscription_day_31_to_february(async_session_maker):
+    """Regression test: Jan 31 should schedule to Feb 28 (or 29 in leap year), not crash."""
+    async def _test():
+        async with async_session_maker() as session:
+            client_user = await client_service.get_or_create_client(session, "jan31@example.com", commit=False)
+
+            # Create subscription on Jan 31 with no preferred_day_of_month
+            payload = subscription_schemas.SubscriptionCreateRequest(
+                frequency="MONTHLY",
+                start_date=date(2024, 1, 31),
+                base_service_type="standard",
+                base_price=10000,
+            )
+            sub = await subscription_service.create_subscription(session, client_user.client_id, payload)
+            await session.commit()
+            await session.refresh(sub)
+
+            # Verify preferred_day_of_month was set to 31
+            assert sub.preferred_day_of_month == 31
+            assert sub.next_run_at.date() == date(2024, 1, 31)
+
+            # Generate order for Jan 31
+            await subscription_service.generate_due_orders(session, now=datetime(2024, 2, 1, 23, tzinfo=timezone.utc))
+            await session.commit()
+            await session.refresh(sub)
+
+            # Next run should be Feb 29, 2024 (leap year), clamped from 31
+            assert sub.next_run_at.date() == date(2024, 2, 29)
+
+            # Generate order for Feb 29
+            await subscription_service.generate_due_orders(session, now=datetime(2024, 3, 1, 23, tzinfo=timezone.utc))
+            await session.commit()
+            await session.refresh(sub)
+
+            # Next run should be Mar 31 (31 days available, back to preferred day)
+            assert sub.next_run_at.date() == date(2024, 3, 31)
+
+            # Verify bookings were created with correct dates
+            result = await session.execute(
+                select(Booking).where(Booking.subscription_id == sub.subscription_id).order_by(Booking.scheduled_date)
+            )
+            bookings = [row.scheduled_date for row in result.scalars().all()]
+            # Should have Jan 31 and Feb 29, demonstrating no crash on short month
+            assert bookings == [date(2024, 1, 31), date(2024, 2, 29)]
+
+    asyncio.run(_test())
+
+
+def test_monthly_subscription_day_31_to_april(async_session_maker):
+    """Regression test: Mar 31 should schedule to Apr 30, not crash."""
+    async def _test():
+        async with async_session_maker() as session:
+            client_user = await client_service.get_or_create_client(session, "mar31@example.com", commit=False)
+
+            # Create subscription on Mar 31 with no preferred_day_of_month
+            payload = subscription_schemas.SubscriptionCreateRequest(
+                frequency="MONTHLY",
+                start_date=date(2024, 3, 31),
+                base_service_type="standard",
+                base_price=10000,
+            )
+            sub = await subscription_service.create_subscription(session, client_user.client_id, payload)
+            await session.commit()
+            await session.refresh(sub)
+
+            # Generate order for Mar 31
+            await subscription_service.generate_due_orders(session, now=datetime(2024, 4, 1, 23, tzinfo=timezone.utc))
+            await session.commit()
+            await session.refresh(sub)
+
+            # Next run should be Apr 30, clamped from 31
+            assert sub.next_run_at.date() == date(2024, 4, 30)
+
+            # Generate order for Apr 30
+            await subscription_service.generate_due_orders(session, now=datetime(2024, 5, 1, 23, tzinfo=timezone.utc))
+            await session.commit()
+            await session.refresh(sub)
+
+            # Next run should be May 31 (31 days available)
+            assert sub.next_run_at.date() == date(2024, 5, 31)
+
+    asyncio.run(_test())
+
+
+def test_monthly_subscription_non_leap_year_february(async_session_maker):
+    """Regression test: Jan 31 in non-leap year should schedule to Feb 28."""
+    async def _test():
+        async with async_session_maker() as session:
+            client_user = await client_service.get_or_create_client(session, "jan31-2023@example.com", commit=False)
+
+            # Create subscription on Jan 31, 2023 (non-leap year)
+            payload = subscription_schemas.SubscriptionCreateRequest(
+                frequency="MONTHLY",
+                start_date=date(2023, 1, 31),
+                base_service_type="standard",
+                base_price=10000,
+            )
+            sub = await subscription_service.create_subscription(session, client_user.client_id, payload)
+            await session.commit()
+            await session.refresh(sub)
+
+            # Generate order for Jan 31
+            await subscription_service.generate_due_orders(session, now=datetime(2023, 2, 1, 23, tzinfo=timezone.utc))
+            await session.commit()
+            await session.refresh(sub)
+
+            # Next run should be Feb 28, 2023 (non-leap year), clamped from 31
+            assert sub.next_run_at.date() == date(2023, 2, 28)
+
+    asyncio.run(_test())
