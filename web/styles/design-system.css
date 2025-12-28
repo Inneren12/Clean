@@ -1,0 +1,296 @@
+/**
+ * Design System - UI Kit Components
+ * Provides consistent spacing, typography, and component styles
+ */
+
+/* ============================================================================
+   SPACING SYSTEM
+   ============================================================================ */
+:root {
+  /* Base spacing unit: 4px */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+  --space-3xl: 48px;
+
+  /* Component-specific spacing */
+  --chip-padding-x: 16px;
+  --chip-padding-y: 8px;
+  --chip-gap: 8px;
+
+  --card-padding: 20px;
+  --card-gap: 16px;
+}
+
+/* ============================================================================
+   TYPOGRAPHY SYSTEM
+   ============================================================================ */
+:root {
+  /* Font families (inherit from globals.css) */
+  --font-body: var(--font-sans);
+  --font-heading: var(--font-sans);
+
+  /* Font sizes */
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-lg: 18px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+
+  /* Font weights */
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* Line heights */
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.75;
+}
+
+/* ============================================================================
+   COMPONENT STYLES - CHIPS
+   ============================================================================ */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--chip-padding-y) var(--chip-padding-x);
+  background: var(--surface);
+  border: 2px solid var(--primary-soft);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.chip:hover {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+}
+
+.chip.chip-selected {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+
+.chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--chip-gap);
+}
+
+/* ============================================================================
+   COMPONENT STYLES - SUMMARY CARD
+   ============================================================================ */
+.summary-card {
+  background: var(--surface);
+  border: 1px solid #e2e8f0;
+  border-radius: var(--radius);
+  padding: var(--card-padding);
+  box-shadow: var(--shadow);
+}
+
+.summary-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-lg);
+  padding-bottom: var(--space-md);
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.summary-card-title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+  margin: 0;
+}
+
+.summary-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--card-gap);
+}
+
+.summary-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.summary-field-label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  opacity: 0.7;
+}
+
+.summary-field-value {
+  font-size: var(--text-base);
+  color: var(--text);
+}
+
+.summary-field-input {
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid #e2e8f0;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-base);
+  font-family: var(--font-body);
+  transition: border-color 0.2s ease;
+}
+
+.summary-field-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.summary-card-footer {
+  display: flex;
+  gap: var(--space-md);
+  margin-top: var(--space-lg);
+  padding-top: var(--space-md);
+  border-top: 1px solid #e2e8f0;
+}
+
+/* ============================================================================
+   COMPONENT STYLES - STEP PROGRESS
+   ============================================================================ */
+.step-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  background: var(--primary-soft);
+  border-radius: var(--radius-sm);
+}
+
+.step-progress-text {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--primary-strong);
+}
+
+.step-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: white;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.step-progress-fill {
+  height: 100%;
+  background: var(--primary);
+  transition: width 0.3s ease;
+}
+
+.step-progress-remaining {
+  font-size: var(--text-xs);
+  color: var(--primary-strong);
+  opacity: 0.8;
+}
+
+/* ============================================================================
+   COMPONENT STYLES - PRIMARY CTA
+   ============================================================================ */
+.btn-primary-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  padding: var(--space-lg) var(--space-2xl);
+  background: var(--primary);
+  color: white;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
+}
+
+.btn-primary-cta:hover:not(:disabled) {
+  background: var(--primary-strong);
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.3);
+  transform: translateY(-1px);
+}
+
+.btn-primary-cta:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn-primary-cta:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ============================================================================
+   COMPONENT STYLES - HANDOFF BUTTON
+   ============================================================================ */
+.handoff-container {
+  position: fixed;
+  bottom: var(--space-2xl);
+  right: var(--space-2xl);
+  z-index: 1000;
+}
+
+.handoff-button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-xl);
+  background: white;
+  color: var(--text);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  border: 2px solid var(--primary);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.handoff-button:hover {
+  background: var(--primary);
+  color: white;
+  box-shadow: 0 6px 20px rgba(37, 99, 235, 0.3);
+  transform: translateY(-2px);
+}
+
+.handoff-button:active {
+  transform: translateY(0);
+}
+
+.handoff-icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* Mobile responsiveness */
+@media (max-width: 720px) {
+  .handoff-container {
+    bottom: var(--space-lg);
+    right: var(--space-lg);
+  }
+
+  .handoff-button {
+    padding: var(--space-sm) var(--space-lg);
+    font-size: var(--text-sm);
+  }
+}

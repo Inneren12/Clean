@@ -1,6 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  QuickChips,
+  type ChipOption,
+  SummaryCard,
+  type SummaryFieldData,
+  StepProgress,
+  PrimaryCTA,
+  AlwaysVisibleHandoff,
+} from '@/components';
 
 type ChatMessage = {
   role: 'user' | 'bot';
@@ -713,61 +722,43 @@ export default function HomePage() {
                   </button>
                 </form>
 
-                {/* UI Contract Extension: Step Progress Indicator (S2-A) */}
+                {/* UI Contract Extension: Step Progress Indicator (S2-A) - Using StepProgress component */}
                 {stepInfo && (uiHint?.show_progress ?? true) ? (
-                  <div className="step-progress">
-                    <div className="step-progress-header">
-                      <p className="label">
-                        {stepInfo.step_label ?? `Step ${stepInfo.current_step} of ${stepInfo.total_steps}`}
-                      </p>
-                      {stepInfo.remaining_questions !== null && stepInfo.remaining_questions !== undefined ? (
-                        <p className="muted">{stepInfo.remaining_questions} question{stepInfo.remaining_questions !== 1 ? 's' : ''} remaining</p>
-                      ) : null}
-                    </div>
-                    <div className="progress-bar">
-                      <div
-                        className="progress-fill"
-                        style={{ width: `${Math.min(100, Math.max(0, (stepInfo.current_step / Math.max(1, stepInfo.total_steps)) * 100))}%` }}
-                      />
-                    </div>
-                  </div>
+                  <StepProgress
+                    currentStep={stepInfo.current_step}
+                    totalSteps={stepInfo.total_steps}
+                    remaining={stepInfo.remaining_questions ?? undefined}
+                  />
                 ) : null}
 
-                {/* UI Contract Extension: Choices (S2-A) */}
+                {/* UI Contract Extension: Choices (S2-A) - Using QuickChips component */}
                 {choices && (uiHint?.show_choices ?? true) ? (
                   <div className="choices-section">
                     <div className="choices-header">
                       <p className="label">Select {choices.multi_select ? 'options' : 'an option'}</p>
                     </div>
-                    <div className={`choices-list ${choices.selection_type === 'button' ? 'choices-buttons' : 'choices-chips'}`}>
-                      {choices.items.map((choice) => {
-                        const isSelected = selectedChoices.includes(choice.id);
-                        return (
-                          <button
-                            key={choice.id}
-                            type="button"
-                            className={`btn ${choices.selection_type === 'button' ? 'btn-secondary' : 'btn-ghost'} choice-item ${isSelected ? 'choice-selected' : ''}`}
-                            onClick={() => {
-                              if (choices.multi_select) {
-                                setSelectedChoices((prev) =>
-                                  isSelected ? prev.filter((id) => id !== choice.id) : [...prev, choice.id]
-                                );
-                              } else {
-                                setSelectedChoices([choice.id]);
-                                void submitMessage(choice.value ?? choice.label);
-                              }
-                            }}
-                            disabled={loading}
-                          >
-                            {choice.label}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    <QuickChips
+                      options={choices.items.map((choice) => ({
+                        id: choice.id,
+                        label: choice.label,
+                        disabled: loading,
+                      }))}
+                      mode={choices.multi_select ? 'multi' : 'single'}
+                      selected={selectedChoices}
+                      onChange={(selected) => {
+                        setSelectedChoices(selected);
+                        // For single-select, submit immediately
+                        if (!choices.multi_select && selected.length > 0) {
+                          const choice = choices.items.find((c) => c.id === selected[0]);
+                          if (choice) {
+                            void submitMessage(choice.value ?? choice.label);
+                          }
+                        }
+                      }}
+                    />
                     {choices.multi_select && selectedChoices.length > 0 ? (
-                      <button
-                        type="button"
-                        className="btn btn-primary"
+                      <PrimaryCTA
+                        label="Confirm Selection"
                         onClick={() => {
                           const selected = choices.items
                             .filter((c) => selectedChoices.includes(c.id))
@@ -776,9 +767,7 @@ export default function HomePage() {
                           void submitMessage(selected);
                         }}
                         disabled={loading}
-                      >
-                        Confirm Selection
-                      </button>
+                      />
                     ) : null}
                   </div>
                 ) : null}
@@ -875,77 +864,40 @@ export default function HomePage() {
                 )}
               </div>
 
-              {/* UI Contract Extension: Summary Patch (S2-A) */}
+              {/* UI Contract Extension: Summary Patch (S2-A) - Using SummaryCard component */}
               {summaryPatch && (uiHint?.show_summary ?? true) ? (
-                <div className="card summary-card">
-                  <div className="card-header">
-                    <div>
-                      <p className="eyebrow">Conversation Summary</p>
-                      <h3>{summaryPatch.title ?? 'Review Your Details'}</h3>
-                    </div>
-                  </div>
-                  <div className="card-body">
-                    <div className="summary-fields">
-                      {summaryPatch.fields.map((field) => (
-                        <div key={field.key} className="summary-field">
-                          <p className="label">{field.label}</p>
-                          {field.editable && field.field_type === 'select' && field.options ? (
-                            <select
-                              className="summary-input"
-                              value={formatSummaryValue(field.value)}
-                              onChange={(e) => {
-                                // Update summary and send message
-                                void submitMessage(`Update ${field.key} to ${e.target.value}`);
-                              }}
-                              disabled={loading}
-                            >
-                              {field.options.map((opt) => (
-                                <option key={opt.id} value={opt.value ?? opt.label}>
-                                  {opt.label}
-                                </option>
-                              ))}
-                            </select>
-                          ) : field.editable && field.field_type === 'boolean' ? (
-                            <label className="summary-checkbox">
-                              <input
-                                type="checkbox"
-                                checked={Boolean(field.value)}
-                                onChange={(e) => {
-                                  void submitMessage(`Set ${field.key} to ${e.target.checked}`);
-                                }}
-                                disabled={loading}
-                              />
-                              <span>{field.value ? 'Yes' : 'No'}</span>
-                            </label>
-                          ) : field.editable ? (
-                            <input
-                              type={field.field_type === 'number' ? 'number' : 'text'}
-                              className="summary-input"
-                              defaultValue={formatSummaryValue(field.value)}
-                              onBlur={(e) => {
-                                if (e.target.value !== formatSummaryValue(field.value)) {
-                                  void submitMessage(`Update ${field.key} to ${e.target.value}`);
-                                }
-                              }}
-                              disabled={loading}
-                            />
-                          ) : (
-                            <p className="value">{formatSummaryValue(field.value)}</p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                    {uiHint?.show_confirm ? (
-                      <button
-                        type="button"
-                        className="btn btn-primary"
+                <div style={{ marginBottom: '20px' }}>
+                  <SummaryCard
+                    title={summaryPatch.title ?? 'Review Your Details'}
+                    fields={summaryPatch.fields.map((field): SummaryFieldData => ({
+                      id: field.key,
+                      label: field.label,
+                      value: field.value ?? '',
+                      type: field.field_type ?? 'text',
+                      options: field.options?.map((opt) => ({
+                        value: opt.value ?? opt.label,
+                        label: opt.label,
+                      })),
+                      editable: field.editable ?? false,
+                    }))}
+                    onSave={(updates) => {
+                      // Send all updates as a batch message
+                      const updateMessages = Object.entries(updates)
+                        .map(([key, value]) => `${key}: ${value}`)
+                        .join(', ');
+                      void submitMessage(`Update details: ${updateMessages}`);
+                    }}
+                    showActions={true}
+                  />
+                  {uiHint?.show_confirm ? (
+                    <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'center' }}>
+                      <PrimaryCTA
+                        label="Confirm Details"
                         onClick={() => void submitMessage('Confirm details')}
                         disabled={loading}
-                      >
-                        Confirm Details
-                      </button>
-                    ) : null}
-                  </div>
+                      />
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -1199,6 +1151,15 @@ export default function HomePage() {
           </a>
         </section>
       </main>
+
+      {/* Always-visible handoff button */}
+      <AlwaysVisibleHandoff
+        onHandoff={() => {
+          // Handle human handoff - could send a message to the bot or open a contact form
+          void submitMessage('I would like to speak with a human');
+        }}
+        label="Call a human"
+      />
     </div>
   );
 }
