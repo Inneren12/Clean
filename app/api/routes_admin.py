@@ -690,8 +690,12 @@ async def admin_case_detail(
         if value:
             quick_actions.append(
                 """
-                <button class="btn" onclick="navigator.clipboard.writeText({value})">Copy {label}</button>
-                """.format(value=json.dumps(str(value)), label=field.title())
+                <button class="btn" onclick='navigator.clipboard.writeText({value})'>Copy {label}</button>
+                """.format(
+                    # Use single quotes for the attribute so the JSON double-quoted string stays valid.
+                    value=json.dumps(str(value)),
+                    label=field.title(),
+                )
             )
     quick_actions.append("<button class=\"btn\" onclick=\"alert('Mark contacted placeholder')\">Mark contacted</button>")
 
