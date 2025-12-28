@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { formatBooleanLabel, normalizeBooleanValue } from './booleanUtils';
 
 export interface SummaryFieldData {
   id: string;
@@ -53,7 +54,11 @@ export default function SummaryCard({
       const initialValues: Record<string, any> = {};
       fields.forEach(field => {
         if (field.editable) {
-          initialValues[field.id] = field.value;
+          if (field.type === 'boolean') {
+            initialValues[field.id] = normalizeBooleanValue(field.value);
+          } else {
+            initialValues[field.id] = field.value;
+          }
         }
       });
       setEditedValues(initialValues);
@@ -132,11 +137,11 @@ export default function SummaryCard({
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <input
                 type="checkbox"
-                checked={(currentValue ?? false) as boolean}
+                checked={normalizeBooleanValue(currentValue)}
                 onChange={(e) => handleFieldChange(field.id, e.target.checked)}
               />
               <span className="summary-field-value">
-                {currentValue ? 'Yes' : 'No'}
+                {formatBooleanLabel(currentValue)}
               </span>
             </label>
           );
@@ -152,7 +157,7 @@ export default function SummaryCard({
     }
 
     if (field.type === 'boolean') {
-      return <span className="summary-field-value">{currentValue ? 'Yes' : 'No'}</span>;
+      return <span className="summary-field-value">{formatBooleanLabel(currentValue)}</span>;
     }
 
     return <span className="summary-field-value">{String(currentValue)}</span>;
