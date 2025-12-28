@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     )
     deposit_percent: float = Field(0.25, env="DEPOSIT_PERCENT")
     deposit_currency: str = Field("cad", env="DEPOSIT_CURRENCY")
+    order_upload_root: str = Field("var/uploads/orders", env="ORDER_UPLOAD_ROOT")
+    order_photo_max_bytes: int = Field(10 * 1024 * 1024, env="ORDER_PHOTO_MAX_BYTES")
+    order_photo_allowed_mimes_raw: str = Field(
+        "image/jpeg,image/png,image/webp", env="ORDER_PHOTO_ALLOWED_MIMES"
+    )
 
     model_config = SettingsConfigDict(env_file=".env", enable_decoding=False)
 
@@ -84,6 +89,7 @@ class Settings(BaseSettings):
         "trusted_proxy_ips_raw",
         "trusted_proxy_cidrs_raw",
         "export_webhook_allowed_hosts_raw",
+        "order_photo_allowed_mimes_raw",
         mode="before",
     )
     @classmethod
@@ -161,6 +167,13 @@ class Settings(BaseSettings):
             return [str(parsed).strip()] if str(parsed).strip() else []
         entries = [entry.strip() for entry in stripped.split(",")]
         return [entry for entry in entries if entry]
+
+    @property
+    def order_photo_allowed_mimes(self) -> list[str]:
+        parsed = self._parse_list(self.order_photo_allowed_mimes_raw)
+        if parsed:
+            return parsed
+        return ["image/jpeg", "image/png", "image/webp"]
 
 
 settings = Settings()

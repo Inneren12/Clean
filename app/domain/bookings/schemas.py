@@ -1,4 +1,5 @@
 from datetime import date, datetime, timezone
+from enum import Enum
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -102,3 +103,41 @@ class AdminBookingListItem(BaseModel):
     status: str
     lead_name: str | None = None
     lead_email: str | None = None
+
+
+class PhotoPhase(str, Enum):
+    BEFORE = "BEFORE"
+    AFTER = "AFTER"
+
+    @classmethod
+    def from_any_case(cls, value: str) -> "PhotoPhase":
+        try:
+            return cls(value.upper())
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError("phase must be BEFORE or AFTER") from exc
+
+
+class OrderPhotoResponse(BaseModel):
+    photo_id: str
+    order_id: str
+    phase: PhotoPhase
+    filename: str
+    original_filename: str | None = None
+    content_type: str
+    size_bytes: int
+    sha256: str
+    uploaded_by: str
+    created_at: datetime
+
+
+class OrderPhotoListResponse(BaseModel):
+    photos: list[OrderPhotoResponse]
+
+
+class ConsentPhotosUpdateRequest(BaseModel):
+    consent_photos: bool
+
+
+class ConsentPhotosResponse(BaseModel):
+    order_id: str
+    consent_photos: bool
