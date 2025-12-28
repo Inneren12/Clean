@@ -18,6 +18,7 @@ from app.domain.analytics import db_models as analytics_db_models  # noqa: F401
 from app.domain.bookings import db_models as booking_db_models  # noqa: F401
 from app.domain.export_events import db_models as export_events_db_models  # noqa: F401
 from app.domain.leads import db_models  # noqa: F401
+from app.infra.bot_store import InMemoryBotStore
 from app.infra.db import Base, get_db_session
 from app.main import app
 from app.settings import settings
@@ -90,6 +91,7 @@ def client(async_session_maker):
             yield session
 
     app.dependency_overrides[get_db_session] = override_db_session
+    app.state.bot_store = InMemoryBotStore()
     app.state.db_session_factory = async_session_maker
     with TestClient(app) as test_client:
         yield test_client

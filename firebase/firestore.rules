@@ -1,0 +1,63 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.role == 'admin';
+    }
+
+    function ownsResource(ownerField) {
+      return isSignedIn() && request.auth.uid == ownerField;
+    }
+
+    function anonWriteMatchesExisting(doc) {
+      return request.auth == null
+             && request.resource != null
+             && ((doc.data.anonId != null && request.resource.data.anonId == doc.data.anonId)
+                  || (doc.data.anon_id != null && request.resource.data.anon_id == doc.data.anon_id));
+    }
+
+    function docUserId(doc) {
+      return doc.data.userId != null ? doc.data.userId : doc.data.user_id;
+    }
+
+    function docAnonId(doc) {
+      return doc.data.anonId != null ? doc.data.anonId : doc.data.anon_id;
+    }
+
+    match /conversations/{conversationId} {
+      allow create: if isSignedIn() || (request.resource.data.anonId != null) || (request.resource.data.anon_id != null);
+      allow read: if ownsResource(docUserId(resource));
+      allow update: if ownsResource(docUserId(resource)) || anonWriteMatchesExisting(resource);
+
+      match /messages/{messageId} {
+        allow create: if ownsResource(docUserId(get(/databases/$(database)/documents/conversations/$(conversationId))))
+                      || anonWriteMatchesExisting(get(/databases/$(database)/documents/conversations/$(conversationId)));
+        allow read: if ownsResource(docUserId(get(/databases/$(database)/documents/conversations/$(conversationId))));
+      }
+    }
+
+    match /leads/{leadId} {
+      allow create: if isSignedIn() || (request.resource.data.sourceConversationId != null);
+      allow read, update: if ownsResource(resource.data.userId) || isAdmin();
+    }
+
+    match /cases/{caseId} {
+      allow read: if isAdmin();
+      allow create, update: if isAdmin();
+    }
+
+    match /pricing_rules/{ruleId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    match /faq/{faqId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}
