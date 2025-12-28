@@ -872,7 +872,7 @@ export default function HomePage() {
                     fields={summaryPatch.fields.map((field): SummaryFieldData => ({
                       id: field.key,
                       label: field.label,
-                      value: field.value ?? '',
+                      value: field.value,
                       type: field.field_type ?? 'text',
                       options: field.options?.map((opt) => ({
                         value: opt.value ?? opt.label,
