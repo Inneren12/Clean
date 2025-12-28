@@ -297,7 +297,7 @@ async def list_leads(
     status_filter: Optional[str] = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     session: AsyncSession = Depends(get_db_session),
-    role: str = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
 ) -> List[AdminLeadResponse]:
     stmt = (
         select(Lead)
@@ -326,7 +326,7 @@ async def update_lead_status(
     lead_id: str,
     request: AdminLeadStatusUpdateRequest,
     session: AsyncSession = Depends(get_db_session),
-    role: str = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
 ) -> AdminLeadResponse:
     lead = await session.get(Lead, lead_id)
     if lead is None:
@@ -350,7 +350,7 @@ async def update_lead_status(
 async def email_scan(
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
-    role: str = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
 ) -> dict[str, int]:
     adapter = getattr(http_request.app.state, "email_adapter", None)
     result = await email_service.scan_and_send_reminders(session, adapter)
@@ -362,7 +362,7 @@ async def resend_last_email(
     booking_id: str,
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
-    role: str = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
 ) -> dict[str, str]:
     booking = await session.get(Booking, booking_id)
     if booking is None:
@@ -496,7 +496,7 @@ async def list_bookings(
     to_date: date | None = Query(default=None, alias="to"),
     status_filter: str | None = Query(default=None, alias="status"),
     session: AsyncSession = Depends(get_db_session),
-    role: str = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
 ):
     today = datetime.now(tz=booking_service.LOCAL_TZ).date()
     start_date = from_date or today
@@ -532,7 +532,7 @@ async def list_bookings(
 async def confirm_booking(
     booking_id: str,
     session: AsyncSession = Depends(get_db_session),
-    role: str = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
 ):
     booking = await session.get(Booking, booking_id)
     if booking is None:
@@ -603,7 +603,7 @@ async def admin_observability(
     filters: list[str] = Query(default=[]),
     session: AsyncSession = Depends(get_db_session),
     store: BotStore = Depends(get_bot_store),
-    role: str = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
 ) -> HTMLResponse:
     active_filters = {value.lower() for value in filters if value}
     lead_stmt = (
@@ -636,7 +636,7 @@ async def admin_observability(
 async def admin_case_detail(
     case_id: str,
     store: BotStore = Depends(get_bot_store),
-    role: str = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
 ) -> HTMLResponse:
     cases = await store.list_cases()
     case = next((item for item in cases if getattr(item, "case_id", None) == case_id), None)
@@ -746,7 +746,7 @@ async def admin_case_detail(
 async def cancel_booking(
     booking_id: str,
     session: AsyncSession = Depends(get_db_session),
-    role: str = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
 ):
     booking = await session.get(Booking, booking_id)
     if booking is None:
@@ -779,7 +779,7 @@ async def reschedule_booking(
     booking_id: str,
     request: booking_schemas.BookingRescheduleRequest,
     session: AsyncSession = Depends(get_db_session),
-    role: str = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
 ):
     booking = await session.get(Booking, booking_id)
     if booking is None:
@@ -819,7 +819,7 @@ async def complete_booking(
     booking_id: str,
     request: booking_schemas.BookingCompletionRequest,
     session: AsyncSession = Depends(get_db_session),
-    role: str = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
 ):
     try:
         booking = await booking_service.mark_booking_completed(
@@ -943,7 +943,13 @@ async def send_invoice(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invoice missing customer email")
 
     token = await invoice_service.upsert_public_token(session, invoice, mark_sent=True)
-    public_link = str(http_request.url_for("public_invoice_view", token=token))
+    base_url = settings.public_base_url.rstrip("/") if settings.public_base_url else None
+    if base_url:
+        public_link = f"{base_url}/i/{token}"
+        public_link_pdf = f"{base_url}/i/{token}.pdf"
+    else:
+        public_link = str(http_request.url_for("public_invoice_view", token=token))
+        public_link_pdf = str(http_request.url_for("public_invoice_pdf", token=token))
 
     adapter = getattr(http_request.app.state, "email_adapter", None)
     if adapter is None:
@@ -953,7 +959,8 @@ async def send_invoice(
     body = (
         f"Hi {lead.name},\n\n"
         f"Here's your invoice ({invoice.invoice_number}).\n"
-        f"View online or download a PDF: {public_link}\n"
+        f"View online: {public_link}\n"
+        f"Download PDF: {public_link_pdf}\n"
         f"Total due: {_format_money(invoice.total_cents, invoice.currency)}\n\n"
         "If you have questions, reply to this email."
     )

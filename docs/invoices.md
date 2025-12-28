@@ -28,11 +28,17 @@
 - Legacy endpoint (still supported): `POST /v1/admin/invoices/{invoice_id}/mark-paid`
 - Body: `amount_cents`, `method` (`cash`, `etransfer`, `other`), optional `reference` and `received_at`.
 - Creates a manual payment record and updates invoice status to `PARTIAL` or `PAID` based on remaining balance.
-- Manual payments record the admin username in `created_by` on the invoice.
+- Invoices record the admin username in `created_by` when they are created; manual payments do not change `created_by`.
 
 ## Sending invoices
 - Endpoint: `POST /v1/admin/invoices/{invoice_id}/send`
-- Generates/rotates a 48-byte public token, stores only the SHA-256 hash, and emails the customer a link to `/i/{token}` (PDF link included).
+- Generates/rotates a long URL-safe public token and emails the customer a link to `/i/{token}` (PDF link `/i/{token}.pdf`).
+- The database stores only an HMAC-SHA256 hash of the token, keyed by a secret (`INVOICE_PUBLIC_TOKEN_SECRET`); the raw token only appears in the emailed URL/response.
 - If the invoice is still `DRAFT`, sending transitions it to `SENT`.
 - Token metadata tracks the last send time; rotate by re-sending.
 - Public links intentionally avoid exposing customer or invoice IDs; do not include PII in URLs.
+
+## Public access endpoints
+- `GET /i/{token}` renders a minimal HTML invoice view and includes a “Download PDF” link.
+- `GET /i/{token}.pdf` returns a lightweight PDF (latin-1 text only; non-Latin characters may be replaced).
+- `PUBLIC_BASE_URL` can be set to ensure links in emails work correctly behind proxies/CDNs.

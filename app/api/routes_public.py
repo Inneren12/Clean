@@ -20,6 +20,7 @@ def _format_currency(cents: int, currency: str) -> str:
 def _render_invoice_html(context: dict) -> str:
     invoice = context["invoice"]
     customer = context["customer"]
+    token = context.get("token")
     rows = []
     rows.append("<h1>Invoice</h1>")
     rows.append(f"<p><strong>Invoice #:</strong> {escape(invoice['invoice_number'])}</p>")
@@ -27,6 +28,8 @@ def _render_invoice_html(context: dict) -> str:
     rows.append(f"<p><strong>Issue Date:</strong> {escape(str(invoice['issue_date']))}</p>")
     if invoice.get("due_date"):
         rows.append(f"<p><strong>Due Date:</strong> {escape(str(invoice['due_date']))}</p>")
+    if token:
+        rows.append(f"<p><a href=\"/i/{escape(token)}.pdf\">Download PDF</a></p>")
 
     rows.append("<h2>Bill To</h2>")
     if customer.get("name"):
@@ -184,5 +187,6 @@ async def view_invoice(
         raise HTTPException(status_code=404, detail="Invoice not found")
     lead = await invoice_service.fetch_customer(session, invoice)
     context = invoice_service.build_public_invoice_view(invoice, lead)
+    context["token"] = token
     html = _render_invoice_html(context)
     return HTMLResponse(content=html)

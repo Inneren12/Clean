@@ -253,11 +253,13 @@ async def _seed_invoice_with_token(async_session_maker) -> tuple[str, str]:
 
 
 def test_public_invoice_view_and_pdf(client, async_session_maker):
+    settings.invoice_public_token_secret = "test-secret"
     invoice_id, token = asyncio.run(_seed_invoice_with_token(async_session_maker))
 
     ok = client.get(f"/i/{token}")
     assert ok.status_code == 200
     assert "Invoice #" in ok.text
+    assert "Download PDF" in ok.text
 
     pdf = client.get(f"/i/{token}.pdf")
     assert pdf.status_code == 200
@@ -269,8 +271,11 @@ def test_public_invoice_view_and_pdf(client, async_session_maker):
 
     async def _count_tokens() -> int:
         async with async_session_maker() as session:
-            result = await session.execute(sa.select(sa.func.count()).select_from(InvoicePublicToken))
-            return int(result.scalar_one())
+            result = await session.execute(sa.select(InvoicePublicToken))
+            rows = result.scalars().all()
+            assert all(len(row.token_hash) == 64 for row in rows)
+            assert all(row.token_hash != token for row in rows)
+            return len(rows)
 
     assert asyncio.run(_count_tokens()) == 1
 
@@ -278,6 +283,10 @@ def test_public_invoice_view_and_pdf(client, async_session_maker):
 def test_admin_send_invoice_sets_status_and_token(client, async_session_maker):
     settings.admin_basic_username = "admin"
     settings.admin_basic_password = "secret"
+    previous_public_base_url = settings.public_base_url
+    previous_token_secret = settings.invoice_public_token_secret
+    settings.public_base_url = "https://example.com"
+    settings.invoice_public_token_secret = "test-secret"
     adapter = StubEmailAdapter()
     from app.main import app
 
@@ -320,20 +329,24 @@ def test_admin_send_invoice_sets_status_and_token(client, async_session_maker):
         payload = resp.json()
         assert payload["invoice"]["status"] == statuses.INVOICE_STATUS_SENT
         assert payload["email_sent"] is True
-        assert "/i/" in payload["public_link"]
+        assert payload["public_link"].startswith("https://example.com/i/")
+        token = payload["public_link"].rsplit("/", 1)[-1]
         assert adapter.sent
         assert payload["public_link"] in adapter.sent[0][2]
+        assert f"/i/{token}.pdf" in adapter.sent[0][2]
 
-        async def _reload() -> tuple[str, int]:
+        async def _reload() -> tuple[str, int, str | None]:
             async with async_session_maker() as session:
                 invoice = await session.get(Invoice, invoice_id)
-                token_count = await session.scalar(
-                    sa.select(sa.func.count()).select_from(InvoicePublicToken)
-                )
-                return invoice.status if invoice else "", int(token_count or 0)
+                token_row = await session.scalar(sa.select(InvoicePublicToken))
+                token_hash = getattr(token_row, "token_hash", None)
+                return invoice.status if invoice else "", 1 if token_row else 0, token_hash
 
-        status_value, token_count = asyncio.run(_reload())
+        status_value, token_count, token_hash = asyncio.run(_reload())
         assert status_value == statuses.INVOICE_STATUS_SENT
         assert token_count == 1
+        assert token_hash and token_hash != token
     finally:
         app.state.email_adapter = original_adapter
+        settings.public_base_url = previous_public_base_url
+        settings.invoice_public_token_secret = previous_token_secret
