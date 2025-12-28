@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -36,6 +36,27 @@ from app.infra.bot_store import BotStore
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
+
+
+# FAQ/Handoff stub functions (to be implemented in future iterations)
+def match_faq(text: str) -> List[Dict[str, str]]:
+    """Stub: Match user text against FAQ knowledge base. Returns list of matched FAQ entries."""
+    return []
+
+
+def evaluate_handoff(
+    intent: Intent,
+    confidence: float,
+    faq_matches: Optional[List[Dict[str, str]]],
+    fsm_is_flow: bool,
+) -> Dict[str, bool]:
+    """Stub: Evaluate whether conversation should be handed off to human.
+
+    Returns dict with keys:
+        - should_handoff: bool
+        - suggested_action: str (e.g., "clarify", "handoff", "continue")
+    """
+    return {"should_handoff": False, "suggested_action": "continue"}
 
 
 def _fsm_step_for_intent(intent: Intent) -> FsmStep:
@@ -91,30 +112,52 @@ async def post_message(
     faq_requested = nlu_result.intent == Intent.faq or request.text.lower().startswith(("faq:", "faq "))
     faq_matches = match_faq(request.text) if faq_requested else []
 
-    bot_text = fsm_reply.text or (
-        "Thanks! I noted your request. "
-        "I'll keep gathering details so we can prepare the right follow-up."
+    # A1: Compute fsm_is_flow to safeguard against FAQ/clarification overlays
+    # When fsm_is_flow is True, NEVER override FSM reply with FAQ/clarify prompts
+    step_str = str(fsm_step_value) if fsm_step_value else ""
+    fsm_is_flow = step_str.startswith("ask_") or step_str == "confirm_lead"
+
+    # A2: Detect explicit FAQ requests (faq:, "faq", or "faq ")
+    text_lower = request.text.lower().strip()
+    faq_requested = (
+        text_lower.startswith("faq:")
+        or text_lower.startswith("faq ")
+        or text_lower == "faq"
     )
+
+    # A3: Only compute faq_matches when FAQ explicitly requested AND not in active flow
+    faq_matches = match_faq(request.text) if (faq_requested and not fsm_is_flow) else []
+
+    # Base reply from FSM
+    bot_text = fsm_reply.text
     quick_replies = list(fsm_reply.quick_replies)
 
+    # FAQ overlay is allowed ONLY if explicitly requested AND not in active flow
     if faq_requested and not fsm_is_flow:
         if faq_matches:
             bot_text = format_matches(faq_matches)
+            quick_replies = []
         else:
             bot_text, quick_replies = clarification_prompt()
 
-    decision = evaluate_handoff(nlu_result, fsm_reply, request.text, faq_matches=faq_matches)
+    # Handoff decision (real implementation returns HandoffDecision)
+    decision = evaluate_handoff(
+        nlu_result,
+        fsm_reply,
+        request.text,
+        faq_matches=faq_matches,
+    )
 
+    # Optional clarification overlay from decision, but NEVER mid-flow and never when FAQ explicitly requested
     if (
         decision.suggested_action == "clarify"
         and not faq_requested
         and not decision.should_handoff
         and not fsm_is_flow
     ):
-        clarification_text, quick_reply_options = clarification_prompt()
-        bot_text = clarification_text
-        quick_replies = quick_reply_options
+        bot_text, quick_replies = clarification_prompt()
 
+    # Move to handoff_check step when decision says handoff (unless already there)
     if decision.should_handoff and updated_state.fsm_step != FsmStep.handoff_check:
         updated_state = ConversationState(
             current_intent=nlu_result.intent,
@@ -124,21 +167,29 @@ async def post_message(
             last_estimate=fsm.state.last_estimate,
         )
 
+    # If handing off, override bot text and remove quick replies
     if decision.should_handoff:
         bot_text = "I'll connect you to a human right away to help with this."
         quick_replies = []
 
+    # Persist updated FSM state + status
     fsm_step = updated_state.fsm_step or _fsm_step_for_intent(nlu_result.intent)
     fsm_step_value = fsm_step.value if hasattr(fsm_step, "value") else fsm_step
+
     await store.update_state(
         request.conversation_id,
         updated_state,
         status=ConversationStatus.handed_off if decision.should_handoff else None,
     )
 
+    # Build metadata for frontend
     metadata = {**fsm_reply.metadata, "quickReplies": quick_replies}
     if decision.should_handoff:
         metadata["handoff"] = {"reason": decision.reason, "summary": decision.summary}
+
+    # Ensure bot_text always exists
+    if not bot_text:
+        bot_text = "Thanks! One moment while I continue."
 
     bot_payload = MessagePayload(
         role=MessageRole.bot,

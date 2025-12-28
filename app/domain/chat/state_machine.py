@@ -5,6 +5,7 @@ from app.domain.chat.models import ChatTurnResponse, ChatTurnRequest, ParsedFiel
 from app.domain.chat.intents import detect_intent
 from app.domain.chat.parser import parse_message
 from app.domain.chat.responder import build_reply
+from app.domain.chat.flow_orchestrator import orchestrate_flow
 from app.domain.pricing.estimator import estimate
 from app.domain.pricing.models import CleaningType, EstimateRequest, Frequency
 from app.domain.pricing.config_loader import PricingConfig
@@ -135,7 +136,14 @@ def handle_turn(
     awaiting_field = missing[0] if missing else None
     merged = merged.model_copy(update={"awaiting_field": awaiting_field})
 
-    reply_text, proposed_questions = build_reply(merged, missing, estimate_response)
+    # S2-C Flow Orchestration: Build UI contract components
+    reply_text, proposed_questions, choices, step_info, summary_patch, ui_hint = orchestrate_flow(
+        fields=merged,
+        missing_fields=missing,
+        estimate=estimate_response,
+        confidence=confidence,
+        user_message=request.message,
+    )
 
     response = ChatTurnResponse(
         session_id=request.session_id,
@@ -148,5 +156,10 @@ def handle_turn(
         handoff_required=False,
         estimate=estimate_response,
         confidence=confidence,
+        # S2-C UI Contract
+        choices=choices,
+        step_info=step_info,
+        summary_patch=summary_patch,
+        ui_hint=ui_hint,
     )
     return response, merged

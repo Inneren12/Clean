@@ -1,6 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  QuickChips,
+  type ChipOption,
+  SummaryCard,
+  type SummaryFieldData,
+  StepProgress,
+  PrimaryCTA,
+  AlwaysVisibleHandoff,
+} from '@/components';
 
 type ChatMessage = {
   role: 'user' | 'bot';
@@ -40,11 +49,58 @@ type EstimateResponse = {
   breakdown?: EstimateBreakdown | null;
 };
 
+// UI Contract Extension Types (S2-A)
+type Choice = {
+  id: string;
+  label: string;
+  value?: string | null;
+};
+
+type ChoicesConfig = {
+  items: Choice[];
+  multi_select?: boolean;
+  selection_type?: 'button' | 'chip';
+};
+
+type StepInfo = {
+  current_step: number;
+  total_steps: number;
+  step_label?: string | null;
+  remaining_questions?: number | null;
+};
+
+type SummaryField = {
+  key: string;
+  label: string;
+  value: string | number | boolean | null;
+  editable?: boolean;
+  field_type?: 'text' | 'number' | 'select' | 'boolean';
+  options?: Choice[] | null;
+};
+
+type SummaryPatch = {
+  title?: string | null;
+  fields: SummaryField[];
+};
+
+type UIHint = {
+  show_summary?: boolean | null;
+  show_confirm?: boolean | null;
+  show_choices?: boolean | null;
+  show_progress?: boolean | null;
+  minimize_text?: boolean | null;
+};
+
 type ChatTurnResponse = {
   reply_text: string;
-  proposed_questions: string[];
+  proposed_questions?: string[] | null;
   estimate: EstimateResponse | null;
   state: Record<string, unknown>;
+  // UI Contract Extension (S2-A) - all optional for backward compatibility
+  choices?: ChoicesConfig | null;
+  step_info?: StepInfo | null;
+  summary_patch?: SummaryPatch | null;
+  ui_hint?: UIHint | null;
 };
 
 type SlotAvailability = {
@@ -128,6 +184,14 @@ const faqs = [
   }
 ];
 
+function formatSummaryValue(value: string | number | boolean | null): string {
+  if (value === null || value === undefined) return '—';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'string') return value;
+  return '—';
+}
+
 export default function HomePage() {
   const [sessionId, setSessionId] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -166,6 +230,13 @@ export default function HomePage() {
   const [bookingSubmitting, setBookingSubmitting] = useState(false);
   const [bookingSuccess, setBookingSuccess] = useState<string | null>(null);
   const [bookingError, setBookingError] = useState<string | null>(null);
+
+  // UI Contract Extension State (S2-A)
+  const [choices, setChoices] = useState<ChoicesConfig | null>(null);
+  const [stepInfo, setStepInfo] = useState<StepInfo | null>(null);
+  const [summaryPatch, setSummaryPatch] = useState<SummaryPatch | null>(null);
+  const [uiHint, setUIHint] = useState<UIHint | null>(null);
+  const [selectedChoices, setSelectedChoices] = useState<string[]>([]);
 
   const apiBaseUrl = useMemo(
     () => process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000',
@@ -325,6 +396,14 @@ export default function HomePage() {
         setProposedQuestions(data.proposed_questions ?? []);
         setEstimate(data.estimate ?? null);
         setStructuredInputs(data.state ?? {});
+
+        // UI Contract Extension (S2-A) - handle new optional fields
+        setChoices(data.choices ?? null);
+        setStepInfo(data.step_info ?? null);
+        setSummaryPatch(data.summary_patch ?? null);
+        setUIHint(data.ui_hint ?? null);
+        setSelectedChoices([]); // Reset selections on new message
+
         if (data.estimate) {
           setShowLeadForm(false);
           setLeadSuccess(false);
@@ -643,7 +722,58 @@ export default function HomePage() {
                   </button>
                 </form>
 
-                {proposedQuestions.length > 0 ? (
+                {/* UI Contract Extension: Step Progress Indicator (S2-A) - Using StepProgress component */}
+                {stepInfo && (uiHint?.show_progress ?? true) ? (
+                  <StepProgress
+                    currentStep={stepInfo.current_step}
+                    totalSteps={stepInfo.total_steps}
+                    remaining={stepInfo.remaining_questions ?? undefined}
+                  />
+                ) : null}
+
+                {/* UI Contract Extension: Choices (S2-A) - Using QuickChips component */}
+                {choices && (uiHint?.show_choices ?? true) ? (
+                  <div className="choices-section">
+                    <div className="choices-header">
+                      <p className="label">Select {choices.multi_select ? 'options' : 'an option'}</p>
+                    </div>
+                    <QuickChips
+                      options={choices.items.map((choice) => ({
+                        id: choice.id,
+                        label: choice.label,
+                        disabled: loading,
+                      }))}
+                      mode={choices.multi_select ? 'multi' : 'single'}
+                      selected={selectedChoices}
+                      onChange={(selected) => {
+                        setSelectedChoices(selected);
+                        // For single-select, submit immediately
+                        if (!choices.multi_select && selected.length > 0) {
+                          const choice = choices.items.find((c) => c.id === selected[0]);
+                          if (choice) {
+                            void submitMessage(choice.value ?? choice.label);
+                          }
+                        }
+                      }}
+                    />
+                    {choices.multi_select && selectedChoices.length > 0 ? (
+                      <PrimaryCTA
+                        label="Confirm Selection"
+                        onClick={() => {
+                          const selected = choices.items
+                            .filter((c) => selectedChoices.includes(c.id))
+                            .map((c) => c.value ?? c.label)
+                            .join(', ');
+                          void submitMessage(selected);
+                        }}
+                        disabled={loading}
+                      />
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {/* Proposed questions - only shown if choices are not rendered (choices takes precedence) */}
+                {proposedQuestions.length > 0 && !(choices && (uiHint?.show_choices ?? true)) ? (
                   <div className="quick-replies">
                     <div className="quick-reply-heading">
                       <p className="label">Quick replies</p>
@@ -733,6 +863,43 @@ export default function HomePage() {
                   </div>
                 )}
               </div>
+
+              {/* UI Contract Extension: Summary Patch (S2-A) - Using SummaryCard component */}
+              {summaryPatch && (uiHint?.show_summary ?? true) ? (
+                <div style={{ marginBottom: '20px' }}>
+                  <SummaryCard
+                    title={summaryPatch.title ?? 'Review Your Details'}
+                    fields={summaryPatch.fields.map((field): SummaryFieldData => ({
+                      id: field.key,
+                      label: field.label,
+                      value: field.value,
+                      type: field.field_type ?? 'text',
+                      options: field.options?.map((opt) => ({
+                        value: opt.value ?? opt.label,
+                        label: opt.label,
+                      })),
+                      editable: field.editable ?? false,
+                    }))}
+                    onSave={(updates) => {
+                      // Send all updates as a batch message
+                      const updateMessages = Object.entries(updates)
+                        .map(([key, value]) => `${key}: ${value}`)
+                        .join(', ');
+                      void submitMessage(`Update details: ${updateMessages}`);
+                    }}
+                    showActions={true}
+                  />
+                  {uiHint?.show_confirm ? (
+                    <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'center' }}>
+                      <PrimaryCTA
+                        label="Confirm Details"
+                        onClick={() => void submitMessage('Confirm details')}
+                        disabled={loading}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
 
               <div className="card slots-card">
                 <div className="slots-header">
@@ -984,6 +1151,15 @@ export default function HomePage() {
           </a>
         </section>
       </main>
+
+      {/* Always-visible handoff button */}
+      <AlwaysVisibleHandoff
+        onHandoff={() => {
+          // Handle human handoff - could send a message to the bot or open a contact form
+          void submitMessage('I would like to speak with a human');
+        }}
+        label="Call a human"
+      />
     </div>
   );
 }
