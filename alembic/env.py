@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.domain.bookings import db_models as booking_db_models  # noqa: F401
+from app.domain.checklists import db_models as checklist_db_models  # noqa: F401
 from app.domain.export_events import db_models as export_events_db_models  # noqa: F401
 from app.domain.leads import db_models  # noqa: F401
 from app.domain.invoices import db_models as invoice_db_models  # noqa: F401

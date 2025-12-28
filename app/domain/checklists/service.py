@@ -173,6 +173,17 @@ async def delete_template(session: AsyncSession, template_id: int) -> bool:
     template = await session.get(ChecklistTemplate, template_id)
     if template is None:
         return False
+
+    # Check if any checklist runs reference this template
+    runs_count_stmt = select(func.count()).select_from(ChecklistRun).where(
+        ChecklistRun.template_id == template_id
+    )
+    runs_count = await session.scalar(runs_count_stmt)
+
+    if runs_count and runs_count > 0:
+        # Template is in use, cannot delete
+        raise ValueError("Cannot delete template that is referenced by checklist runs")
+
     await session.delete(template)
     await session.commit()
     logger.info(

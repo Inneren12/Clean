@@ -130,3 +130,82 @@ def test_template_version_selection(client):
     )
     assert init_two.status_code == 201
     assert init_two.json()["template_version"] == 1
+
+
+def test_update_used_template_creates_new_version(client):
+    """Regression test: updating template items after it has been used should not cause FK breakage."""
+    # Create template with initial items
+    template_payload = {
+        "name": "Move checklist",
+        "service_type": "move",
+        "items": [
+            {"label": "Check inventory", "phase": "BEFORE", "required": True},
+            {"label": "Load truck", "phase": "BEFORE", "required": True},
+        ],
+    }
+    create_resp = client.post(
+        "/v1/admin/checklists/templates",
+        json=template_payload,
+        auth=_admin_auth(),
+    )
+    assert create_resp.status_code == 201
+    original_template = create_resp.json()
+    original_template_id = original_template["template_id"]
+    original_version = original_template["version"]
+
+    # Create booking and init checklist (this creates a run referencing the template)
+    booking_id = _create_booking(client, datetime(2024, 7, 10, 15, 0, tzinfo=timezone.utc))
+    init_resp = client.post(
+        f"/v1/orders/{booking_id}/checklist/init",
+        json={"service_type": "move"},
+        auth=_admin_auth(),
+    )
+    assert init_resp.status_code == 201
+    run = init_resp.json()
+    assert run["template_id"] == original_template_id
+    assert run["template_version"] == original_version
+
+    # Now update the template items - this should create a NEW version instead of mutating
+    update_payload = {
+        "items": [
+            {"label": "Check inventory v2", "phase": "BEFORE", "required": True},
+            {"label": "Load truck v2", "phase": "BEFORE", "required": False},
+            {"label": "Secure items", "phase": "AFTER", "required": True},
+        ],
+    }
+    update_resp = client.put(
+        f"/v1/admin/checklists/templates/{original_template_id}",
+        json=update_payload,
+        auth=_admin_auth(),
+    )
+    assert update_resp.status_code == 200
+    new_template = update_resp.json()
+
+    # Verify new version was created
+    assert new_template["template_id"] != original_template_id
+    assert new_template["version"] > original_version
+    assert len(new_template["items"]) == 3
+    assert new_template["items"][0]["label"] == "Check inventory v2"
+
+    # Verify old template was deactivated
+    templates_resp = client.get(
+        "/v1/admin/checklists/templates",
+        auth=_admin_auth(),
+    )
+    assert templates_resp.status_code == 200
+    templates = templates_resp.json()
+    old_template = next(t for t in templates if t["template_id"] == original_template_id)
+    assert old_template["is_active"] is False
+
+    # CRITICAL: Verify existing run still works and references old template/items correctly
+    get_checklist_resp = client.get(
+        f"/v1/orders/{booking_id}/checklist",
+        auth=_admin_auth(),
+    )
+    assert get_checklist_resp.status_code == 200
+    checklist = get_checklist_resp.json()
+    assert checklist["template_id"] == original_template_id
+    assert checklist["template_version"] == original_version
+    assert len(checklist["items"]) == 2  # Still has original 2 items
+    assert checklist["items"][0]["label"] == "Check inventory"
+    assert checklist["items"][1]["label"] == "Load truck"
