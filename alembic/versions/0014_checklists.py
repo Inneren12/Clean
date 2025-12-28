@@ -22,7 +22,7 @@ def upgrade() -> None:
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("service_type", sa.String(length=64), nullable=True),
         sa.Column("version", sa.Integer(), nullable=False, server_default=sa.text("1")),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -51,7 +51,7 @@ def upgrade() -> None:
         sa.Column("position", sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column("label", sa.String(length=255), nullable=False),
         sa.Column("phase", sa.String(length=16), nullable=False),
-        sa.Column("required", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("required", sa.Boolean(), nullable=False, server_default=sa.false()),
     )
 
     op.create_table(
@@ -77,7 +77,7 @@ def upgrade() -> None:
         sa.Column(
             "template_item_id", sa.Integer(), sa.ForeignKey("checklist_template_items.item_id"), nullable=False
         ),
-        sa.Column("checked", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("checked", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("checked_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("note", sa.String(length=500), nullable=True),
     )
