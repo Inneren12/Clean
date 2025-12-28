@@ -14,7 +14,10 @@ GOLDENS = json.loads(GOLDEN_PATH.read_text())
 
 @pytest.fixture(scope="session")
 def pricing_config():
-    pricing_path = Path(__file__).resolve().parents[1] / "pricing" / "economy_v1.json"
+    repo_root = Path(__file__).resolve().parents[1]
+    pricing_path = repo_root / "pricing" / "economy_v1.json"
+    if not pricing_path.exists():
+        raise RuntimeError(f"Pricing config not found at {pricing_path}")
     return load_pricing_config(str(pricing_path))
 
 STEP_LABEL_TO_STAGE = {
@@ -55,6 +58,10 @@ def _derive_stage(response) -> str | None:
     if step_info:
         if step_info.remaining_questions:
             return "collect"
+        step_label = (step_info.step_label or "").strip().lower()
+        for label, stage in STEP_LABEL_TO_STAGE.items():
+            if step_label.startswith(label.lower()):
+                return stage
         if step_info.current_step and step_info.total_steps:
             if step_info.current_step >= step_info.total_steps:
                 return "created"
@@ -62,10 +69,6 @@ def _derive_stage(response) -> str | None:
                 return "contact"
             if step_info.current_step == step_info.total_steps - 2:
                 return "price"
-        step_label = (step_info.step_label or "").strip().lower()
-        for label, stage in STEP_LABEL_TO_STAGE.items():
-            if step_label.startswith(label.lower()):
-                return stage
     if response.estimate:
         return "price"
     return None
