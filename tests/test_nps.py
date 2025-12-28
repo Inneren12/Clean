@@ -1,6 +1,8 @@
 import base64
 from datetime import datetime, timezone
 
+import pytest
+
 from app.domain.bookings.db_models import Booking
 from app.domain.clients.db_models import ClientUser
 from app.domain.leads.db_models import Lead
@@ -13,6 +15,23 @@ from app.settings import settings
 def _auth_headers(username: str, password: str) -> dict[str, str]:
     token = base64.b64encode(f"{username}:{password}".encode()).decode()
     return {"Authorization": f"Basic {token}"}
+
+
+@pytest.fixture()
+def admin_auth_headers():
+    original_username = settings.admin_basic_username
+    original_password = settings.admin_basic_password
+
+    def _apply(username: str = "admin", password: str = "secret") -> dict[str, str]:
+        settings.admin_basic_username = username
+        settings.admin_basic_password = password
+        return _auth_headers(username, password)
+
+    try:
+        yield _apply
+    finally:
+        settings.admin_basic_username = original_username
+        settings.admin_basic_password = original_password
 
 
 def _lead_payload(name: str = "Survey Lead") -> dict:
@@ -114,7 +133,7 @@ def test_nps_token_validation_and_single_response(client):
     assert saved.order_id == order_id
 
 
-def test_low_score_creates_ticket_and_admin_api(client):
+def test_low_score_creates_ticket_and_admin_api(client, admin_auth_headers):
     order_id, client_id, _ = _seed_order(app.state.db_session_factory, "order-nps-2")
     token = nps_service.issue_nps_token(
         order_id,
@@ -143,11 +162,10 @@ def test_low_score_creates_ticket_and_admin_api(client):
     assert ticket is not None
     assert ticket.status == "OPEN"
 
-    settings.admin_basic_username = "admin"
-    settings.admin_basic_password = "secret"
+    headers = admin_auth_headers()
     list_resp = client.get(
         "/api/admin/tickets",
-        headers=_auth_headers(settings.admin_basic_username, settings.admin_basic_password),
+        headers=headers,
     )
     assert list_resp.status_code == 200
     body = list_resp.json()
@@ -157,7 +175,7 @@ def test_low_score_creates_ticket_and_admin_api(client):
     update = client.patch(
         f"/api/admin/tickets/{first_ticket_id}",
         json={"status": "IN_PROGRESS"},
-        headers=_auth_headers(settings.admin_basic_username, settings.admin_basic_password),
+        headers=headers,
     )
     assert update.status_code == 200
     assert update.json()["status"] == "IN_PROGRESS"
