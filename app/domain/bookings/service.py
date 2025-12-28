@@ -359,6 +359,7 @@ async def create_booking(
     session: AsyncSession,
     deposit_decision: DepositDecision | None = None,
     manage_transaction: bool = True,
+    client_id: str | None = None,
 ) -> Booking:
     normalized = _normalize_datetime(starts_at)
     decision = deposit_decision or DepositDecision(required=False, reasons=[], deposit_cents=None)
@@ -370,6 +371,7 @@ async def create_booking(
         booking = Booking(
             team_id=team.team_id,
             lead_id=lead_id,
+            client_id=client_id,
             starts_at=normalized,
             duration_minutes=duration_minutes,
             planned_minutes=duration_minutes,

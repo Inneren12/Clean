@@ -6,6 +6,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
 from app.infra.db import Base
+from app.domain.clients.db_models import ClientUser
 
 
 class Team(Base):
@@ -36,6 +37,9 @@ class Booking(Base):
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
     )
+    client_id: Mapped[str | None] = mapped_column(
+        ForeignKey("client_users.client_id"), nullable=True, index=True
+    )
     team_id: Mapped[int] = mapped_column(ForeignKey("teams.team_id"), nullable=False)
     lead_id: Mapped[str | None] = mapped_column(ForeignKey("leads.lead_id"), nullable=True)
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -64,6 +68,7 @@ class Booking(Base):
     )
 
     team: Mapped[Team] = relationship("Team", back_populates="bookings")
+    client: Mapped[ClientUser | None] = relationship("ClientUser")
     lead = relationship("Lead", backref="bookings")
     photos: Mapped[list["OrderPhoto"]] = relationship(
         "OrderPhoto",

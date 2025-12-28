@@ -16,6 +16,7 @@ from app.api.routes_estimate import router as estimate_router
 from app.api.routes_bot import router as bot_router
 from app.api.routes_checklists import router as checklists_router
 from app.api.routes_health import router as health_router
+from app.api.routes_client import router as client_router
 from app.api.routes_payments import router as payments_router
 from app.api.routes_orders import router as orders_router
 from app.api.routes_time_tracking import router as time_tracking_router
@@ -124,6 +125,7 @@ def create_app(app_settings) -> FastAPI:
 
     rate_limiter = create_rate_limiter(app_settings)
     app.state.rate_limiter = rate_limiter
+    app.state.app_settings = app_settings
     app.state.db_session_factory = get_session_factory()
     app.state.export_transport = None
     app.state.export_resolver = None
@@ -207,6 +209,7 @@ def create_app(app_settings) -> FastAPI:
     app.include_router(bot_router)
     app.include_router(estimate_router)
     app.include_router(chat_router)
+    app.include_router(client_router)
     app.include_router(payments_router)
     app.include_router(orders_router)
     app.include_router(checklists_router)

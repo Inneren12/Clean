@@ -75,6 +75,9 @@ class Settings(BaseSettings):
         "http://localhost:3000/invoice-cancelled",
         env="STRIPE_INVOICE_CANCEL_URL",
     )
+    client_portal_secret: str = Field("dev-client-portal-secret", env="CLIENT_PORTAL_SECRET")
+    client_portal_token_ttl_minutes: int = Field(30, env="CLIENT_PORTAL_TOKEN_TTL_MINUTES")
+    client_portal_base_url: str | None = Field(None, env="CLIENT_PORTAL_BASE_URL")
     deposit_percent: float = Field(0.25, env="DEPOSIT_PERCENT")
     deposit_currency: str = Field("cad", env="DEPOSIT_CURRENCY")
     order_upload_root: str = Field("var/uploads/orders", env="ORDER_UPLOAD_ROOT")
