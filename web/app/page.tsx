@@ -63,7 +63,7 @@ type StepInfo = {
 type SummaryField = {
   key: string;
   label: string;
-  value: unknown;
+  value: string | number | boolean | null;
   editable?: boolean;
   field_type?: 'text' | 'number' | 'select' | 'boolean';
   options?: Choice[] | null;
@@ -75,16 +75,16 @@ type SummaryPatch = {
 };
 
 type UIHint = {
-  show_summary?: boolean;
-  show_confirm?: boolean;
-  show_choices?: boolean;
-  show_progress?: boolean;
-  minimize_text?: boolean;
+  show_summary?: boolean | null;
+  show_confirm?: boolean | null;
+  show_choices?: boolean | null;
+  show_progress?: boolean | null;
+  minimize_text?: boolean | null;
 };
 
 type ChatTurnResponse = {
   reply_text: string;
-  proposed_questions: string[];
+  proposed_questions?: string[] | null;
   estimate: EstimateResponse | null;
   state: Record<string, unknown>;
   // UI Contract Extension (S2-A) - all optional for backward compatibility
@@ -174,6 +174,14 @@ const faqs = [
     a: 'Weekly and biweekly schedules qualify for labor-only discounts. One-time and monthly stays at standard rates.'
   }
 ];
+
+function formatSummaryValue(value: string | number | boolean | null): string {
+  if (value === null || value === undefined) return '—';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'string') return value;
+  return '—';
+}
 
 export default function HomePage() {
   const [sessionId, setSessionId] = useState('');
@@ -719,7 +727,7 @@ export default function HomePage() {
                     <div className="progress-bar">
                       <div
                         className="progress-fill"
-                        style={{ width: `${(stepInfo.current_step / stepInfo.total_steps) * 100}%` }}
+                        style={{ width: `${Math.min(100, Math.max(0, (stepInfo.current_step / Math.max(1, stepInfo.total_steps)) * 100))}%` }}
                       />
                     </div>
                   </div>
@@ -775,7 +783,8 @@ export default function HomePage() {
                   </div>
                 ) : null}
 
-                {proposedQuestions.length > 0 ? (
+                {/* Proposed questions - only shown if choices are not rendered (choices takes precedence) */}
+                {proposedQuestions.length > 0 && !(choices && (uiHint?.show_choices ?? true)) ? (
                   <div className="quick-replies">
                     <div className="quick-reply-heading">
                       <p className="label">Quick replies</p>
@@ -883,7 +892,7 @@ export default function HomePage() {
                           {field.editable && field.field_type === 'select' && field.options ? (
                             <select
                               className="summary-input"
-                              value={String(field.value ?? '')}
+                              value={formatSummaryValue(field.value)}
                               onChange={(e) => {
                                 // Update summary and send message
                                 void submitMessage(`Update ${field.key} to ${e.target.value}`);
@@ -912,16 +921,16 @@ export default function HomePage() {
                             <input
                               type={field.field_type === 'number' ? 'number' : 'text'}
                               className="summary-input"
-                              value={String(field.value ?? '')}
+                              defaultValue={formatSummaryValue(field.value)}
                               onBlur={(e) => {
-                                if (e.target.value !== String(field.value)) {
+                                if (e.target.value !== formatSummaryValue(field.value)) {
                                   void submitMessage(`Update ${field.key} to ${e.target.value}`);
                                 }
                               }}
                               disabled={loading}
                             />
                           ) : (
-                            <p className="value">{String(field.value ?? '—')}</p>
+                            <p className="value">{formatSummaryValue(field.value)}</p>
                           )}
                         </div>
                       ))}
