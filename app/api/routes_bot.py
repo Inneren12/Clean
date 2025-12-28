@@ -1,9 +1,12 @@
 import logging
-from typing import Dict, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from app.bot.analytics.metrics import BotMetrics
+from app.bot.faq.engine import format_matches, match_faq
 from app.bot.fsm import BotFsm
+from app.bot.handoff.engine import build_case_payload, evaluate_handoff
 from app.bot.nlu.engine import analyze_message
 from app.bot.nlu.models import Intent
 from app.dependencies import get_bot_store
@@ -73,17 +76,56 @@ async def post_message(
     await store.append_message(request.conversation_id, user_message)
 
     nlu_result = analyze_message(request.text)
+    if "faq" in request.text.lower() and nlu_result.intent != Intent.complaint:
+        nlu_result = nlu_result.model_copy(
+            update={"intent": Intent.faq, "reasons": [*nlu_result.reasons, "explicit faq keyword"]}
+        )
     fsm = BotFsm(conversation.state)
     fsm_reply = fsm.handle(request.text, nlu_result)
     updated_state = fsm.state
     fsm_step = updated_state.fsm_step or _fsm_step_for_intent(nlu_result.intent)
-    fsm_step_value = fsm_step.value if hasattr(fsm_step, "value") else fsm_step
-    await store.update_state(request.conversation_id, updated_state)
 
+    faq_matches = match_faq(request.text) if nlu_result.intent == Intent.faq else None
     bot_text = fsm_reply.text or (
         "Thanks! I noted your request. "
         "I'll keep gathering details so we can prepare the right follow-up."
     )
+    quick_replies = list(fsm_reply.quick_replies)
+    progress = fsm_reply.progress
+    summary = fsm_reply.summary
+
+    decision = evaluate_handoff(
+        intent_result=nlu_result,
+        fsm_reply=fsm_reply,
+        message_text=request.text,
+        faq_matches=faq_matches,
+    )
+
+    if nlu_result.intent == Intent.faq:
+        if faq_matches:
+            bot_text = format_matches(faq_matches)
+            quick_replies = ["Book a cleaning", "Talk to a human"]
+            progress = None
+        elif decision.should_handoff:
+            bot_text = (
+                "I want to make sure you get the right answer. "
+                "I'm connecting you to a human teammate."
+            )
+
+    if decision.should_handoff:
+        fsm_step = FsmStep.handoff_check
+        updated_state.fsm_step = fsm_step
+        handoff_note = (
+            "I'm looping in a human specialist now. "
+            "They will review this conversation and follow up."
+        )
+        bot_text = f"{bot_text}\n\n{handoff_note}" if bot_text else handoff_note
+        quick_replies = []
+
+    fsm_step_value = fsm_step.value if hasattr(fsm_step, "value") else fsm_step
+    await store.update_state(request.conversation_id, updated_state)
+
+    metadata = {**fsm_reply.metadata, "quickReplies": quick_replies, "progress": progress, "summary": summary}
     bot_payload = MessagePayload(
         role=MessageRole.bot,
         text=bot_text,
@@ -91,21 +133,37 @@ async def post_message(
         confidence=nlu_result.confidence,
         extracted_entities=nlu_result.entities.model_dump(exclude_none=True, by_alias=True),
         reasons=nlu_result.reasons,
-        metadata=fsm_reply.metadata,
+        metadata=metadata,
     )
     await store.append_message(request.conversation_id, bot_payload)
+
+    if decision.should_handoff:
+        await store.mark_handed_off(request.conversation_id)
+        messages = await store.list_messages(request.conversation_id)
+        case_payload = build_case_payload(
+            reason=decision.reason or "handoff",
+            decision=decision,
+            conversation_id=request.conversation_id,
+            messages=messages,
+            intent_result=nlu_result,
+            fsm_reply=fsm_reply,
+        )
+        await store.create_case(case_payload)
+        metrics: Optional[BotMetrics] = getattr(http_request.app.state, "bot_metrics", None)
+        if metrics:
+            metrics.record_handoff(decision.reason or "handoff", str(fsm_step_value))
 
     request_id = getattr(http_request.state, "request_id", None) if http_request else None
     logger.info(
         "intent_detected",
-            extra={
-                "conversation_id": request.conversation_id,
-                "intent": nlu_result.intent.value,
-                "confidence": nlu_result.confidence,
-                "fsm_step": fsm_step_value,
-                "reasons": nlu_result.reasons,
-                "entities": nlu_result.entities.model_dump(exclude_none=True, by_alias=True),
-                "request_id": request_id,
+        extra={
+            "conversation_id": request.conversation_id,
+            "intent": nlu_result.intent.value,
+            "confidence": nlu_result.confidence,
+            "fsm_step": fsm_step_value,
+            "reasons": nlu_result.reasons,
+            "entities": nlu_result.entities.model_dump(exclude_none=True, by_alias=True),
+            "request_id": request_id,
         },
     )
 
@@ -118,9 +176,9 @@ async def post_message(
             state=updated_state,
             extracted_entities=nlu_result.entities.model_dump(exclude_none=True, by_alias=True),
             reasons=nlu_result.reasons,
-            quick_replies=fsm_reply.quick_replies,
-            progress=fsm_reply.progress,
-            summary=fsm_reply.summary,
+            quick_replies=quick_replies,
+            progress=progress,
+            summary=summary,
         ),
     )
 

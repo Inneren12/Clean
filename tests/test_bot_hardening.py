@@ -58,7 +58,7 @@ def test_intents_use_enums_and_messages_list(client):
     assert response.status_code == 200
     body = response.json()
     assert body["reply"]["intent"] == "faq"
-    assert body["reply"]["state"]["fsmStep"] == "routing"
+    assert body["reply"]["state"]["fsmStep"] == "handoff_check"
 
     session_response = client.get(f"/api/bot/session/{conversation_id}")
     assert session_response.status_code == 200
@@ -71,6 +71,8 @@ def test_intents_use_enums_and_messages_list(client):
     assert len(messages) == 2
     assert messages[0]["role"] == "user"
     assert messages[1]["role"] == "bot"
+    cases = anyio.run(app.state.bot_store.list_cases)
+    assert len(cases) == 1
 
 
 def test_list_messages_accepts_legacy_conversation_id(client):
