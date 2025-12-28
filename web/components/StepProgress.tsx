@@ -30,7 +30,11 @@ export default function StepProgress({
   remaining,
   className = '',
 }: StepProgressProps) {
-  const progressPercent = (currentStep / totalSteps) * 100;
+  // Guard against division by zero and negative values
+  const safeTotal = Math.max(1, totalSteps);
+  const safeStep = Math.max(0, currentStep);
+  // Clamp progress percent to 0-100 range
+  const progressPercent = Math.min(100, Math.max(0, (safeStep / safeTotal) * 100));
 
   return (
     <div className={`step-progress ${className}`}>
