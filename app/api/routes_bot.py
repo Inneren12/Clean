@@ -106,9 +106,6 @@ async def post_message(
     fsm_is_flow = updated_state.current_intent in FLOW_INTENTS and (
         step_str.startswith("ask_") or step_str == "confirm_lead"
     )
-    faq_requested = nlu_result.intent == Intent.faq or normalized_text.startswith(("faq:", "faq "))
-    faq_matches = match_faq(request.text) if faq_requested else []
-
     # A2: Detect explicit FAQ requests (faq:, "faq", or "faq ")
     text_lower = request.text.lower().strip()
     faq_requested = (
@@ -134,9 +131,9 @@ async def post_message(
 
     # Handoff decision (real implementation returns HandoffDecision)
     decision = evaluate_handoff(
-        nlu_result,
-        fsm_reply,
-        request.text,
+        intent_result=nlu_result,
+        fsm_reply=fsm_reply,
+        message_text=request.text,
         faq_matches=faq_matches,
         current_intent=updated_state.current_intent,
     )
