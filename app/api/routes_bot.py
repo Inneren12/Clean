@@ -36,27 +36,7 @@ from app.infra.bot_store import BotStore
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
-
-
-# FAQ/Handoff stub functions (to be implemented in future iterations)
-def match_faq(text: str) -> List[Dict[str, str]]:
-    """Stub: Match user text against FAQ knowledge base. Returns list of matched FAQ entries."""
-    return []
-
-
-def evaluate_handoff(
-    intent: Intent,
-    confidence: float,
-    faq_matches: Optional[List[Dict[str, str]]],
-    fsm_is_flow: bool,
-) -> Dict[str, bool]:
-    """Stub: Evaluate whether conversation should be handed off to human.
-
-    Returns dict with keys:
-        - should_handoff: bool
-        - suggested_action: str (e.g., "clarify", "handoff", "continue")
-    """
-    return {"should_handoff": False, "suggested_action": "continue"}
+FLOW_INTENTS = {Intent.booking, Intent.price, Intent.scope, Intent.reschedule}
 
 
 def _fsm_step_for_intent(intent: Intent) -> FsmStep:
@@ -103,19 +83,31 @@ async def post_message(
     fsm = BotFsm(conversation.state)
     fsm_reply = fsm.handle(request.text, nlu_result)
     updated_state = fsm.state
+    normalized_text = request.text.strip().lower()
+    word_count = len([w for w in normalized_text.split(" ") if w])
+    is_trivial_message = len(normalized_text) <= 6 or word_count <= 2
+
+    if updated_state.current_intent not in FLOW_INTENTS and is_trivial_message:
+        fallback_step = _fsm_step_for_intent(nlu_result.intent)
+        updated_state = ConversationState(
+            current_intent=updated_state.current_intent or nlu_result.intent,
+            fsm_step=fallback_step,
+            filled_fields=fsm.state.filled_fields,
+            confidence=nlu_result.confidence,
+            last_estimate=fsm.state.last_estimate,
+        )
+
     fsm_step_value = (
         updated_state.fsm_step.value
         if hasattr(updated_state.fsm_step, "value")
         else updated_state.fsm_step
     )
-    fsm_is_flow = bool(fsm_step_value and (fsm_step_value.startswith("ask_") or fsm_step_value == "confirm_lead"))
-    faq_requested = nlu_result.intent == Intent.faq or request.text.lower().startswith(("faq:", "faq "))
-    faq_matches = match_faq(request.text) if faq_requested else []
-
-    # A1: Compute fsm_is_flow to safeguard against FAQ/clarification overlays
-    # When fsm_is_flow is True, NEVER override FSM reply with FAQ/clarify prompts
     step_str = str(fsm_step_value) if fsm_step_value else ""
-    fsm_is_flow = step_str.startswith("ask_") or step_str == "confirm_lead"
+    fsm_is_flow = updated_state.current_intent in FLOW_INTENTS and (
+        step_str.startswith("ask_") or step_str == "confirm_lead"
+    )
+    faq_requested = nlu_result.intent == Intent.faq or normalized_text.startswith(("faq:", "faq "))
+    faq_matches = match_faq(request.text) if faq_requested else []
 
     # A2: Detect explicit FAQ requests (faq:, "faq", or "faq ")
     text_lower = request.text.lower().strip()
@@ -146,6 +138,7 @@ async def post_message(
         fsm_reply,
         request.text,
         faq_matches=faq_matches,
+        current_intent=updated_state.current_intent,
     )
 
     # Optional clarification overlay from decision, but NEVER mid-flow and never when FAQ explicitly requested
