@@ -5,7 +5,7 @@ import React, { useState, useEffect } from 'react';
 export interface SummaryFieldData {
   id: string;
   label: string;
-  value: string | number | boolean;
+  value: string | number | boolean | null;
   type: 'text' | 'number' | 'select' | 'boolean';
   options?: Array<{ value: string; label: string }>;
   editable?: boolean;
@@ -97,7 +97,7 @@ export default function SummaryCard({
             <input
               type="text"
               className="summary-field-input"
-              value={currentValue as string}
+              value={(currentValue ?? '') as string}
               onChange={(e) => handleFieldChange(field.id, e.target.value)}
             />
           );
@@ -107,7 +107,7 @@ export default function SummaryCard({
             <input
               type="number"
               className="summary-field-input"
-              value={currentValue as number}
+              value={(currentValue ?? 0) as number}
               onChange={(e) => handleFieldChange(field.id, parseFloat(e.target.value))}
             />
           );
@@ -116,7 +116,7 @@ export default function SummaryCard({
           return (
             <select
               className="summary-field-input"
-              value={currentValue as string}
+              value={(currentValue ?? '') as string}
               onChange={(e) => handleFieldChange(field.id, e.target.value)}
             >
               {field.options?.map(opt => (
@@ -132,7 +132,7 @@ export default function SummaryCard({
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <input
                 type="checkbox"
-                checked={currentValue as boolean}
+                checked={(currentValue ?? false) as boolean}
                 onChange={(e) => handleFieldChange(field.id, e.target.checked)}
               />
               <span className="summary-field-value">
@@ -142,11 +142,15 @@ export default function SummaryCard({
           );
 
         default:
-          return <span className="summary-field-value">{String(currentValue)}</span>;
+          return <span className="summary-field-value">{String(currentValue ?? '—')}</span>;
       }
     }
 
-    // Display mode
+    // Display mode - handle null/undefined
+    if (currentValue === null || currentValue === undefined) {
+      return <span className="summary-field-value">—</span>;
+    }
+
     if (field.type === 'boolean') {
       return <span className="summary-field-value">{currentValue ? 'Yes' : 'No'}</span>;
     }
