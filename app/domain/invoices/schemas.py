@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from decimal import Decimal
 from typing import List
 
 from pydantic import BaseModel, Field, field_validator
@@ -10,7 +11,7 @@ class InvoiceItemCreate(BaseModel):
     description: str = Field(min_length=1, max_length=255)
     qty: int = Field(gt=0)
     unit_price_cents: int = Field(ge=0)
-    tax_rate: float | None = Field(default=None, ge=0)
+    tax_rate: Decimal | None = Field(default=None, ge=0)
 
 
 class InvoiceCreateRequest(BaseModel):
@@ -98,7 +99,10 @@ class ManualPaymentRequest(BaseModel):
     @field_validator("method")
     @classmethod
     def normalize_method(cls, value: str) -> str:
-        return value.lower()
+        normalized = value.lower()
+        if normalized not in statuses.PAYMENT_METHODS:
+            raise ValueError("Invalid payment method")
+        return normalized
 
 
 class InvoiceStatusUpdate(BaseModel):

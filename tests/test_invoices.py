@@ -1,6 +1,6 @@
 import asyncio
-from datetime import date, datetime, timezone
 import base64
+from datetime import date, datetime, timezone
 
 import pytest
 import sqlalchemy as sa
@@ -151,6 +151,7 @@ def test_admin_invoice_flow(client, async_session_maker):
     )
     assert create_resp.status_code == 201
     invoice_data = create_resp.json()
+    assert invoice_data["created_by"] == "admin"
     assert invoice_data["subtotal_cents"] == 20000
     assert invoice_data["tax_cents"] == 250
     assert invoice_data["total_cents"] == 20250
@@ -163,23 +164,39 @@ def test_admin_invoice_flow(client, async_session_maker):
     assert payload["total"] >= 1
     assert any(item["invoice_id"] == invoice_id for item in payload["invoices"])
 
+    alias_amount = invoice_data["total_cents"] // 2
+    alias_resp = client.post(
+        f"/v1/admin/invoices/{invoice_id}/record-payment",
+        headers=headers,
+        json={"amount_cents": alias_amount, "method": "cash", "reference": "receipt-1"},
+    )
+    assert alias_resp.status_code == 201
+    alias_payload = alias_resp.json()
+    assert alias_payload["invoice"]["status"] == statuses.INVOICE_STATUS_PARTIAL
+    assert alias_payload["payment"]["amount_cents"] == alias_amount
+
     mark_resp = client.post(
         f"/v1/admin/invoices/{invoice_id}/mark-paid",
         headers=headers,
-        json={"amount_cents": invoice_data["total_cents"], "method": "cash", "reference": "receipt-1"},
+        json={
+            "amount_cents": invoice_data["total_cents"] - alias_amount,
+            "method": "cash",
+            "reference": "receipt-2",
+        },
     )
     assert mark_resp.status_code == 201
     paid_payload = mark_resp.json()
     assert paid_payload["invoice"]["status"] == statuses.INVOICE_STATUS_PAID
     assert paid_payload["invoice"]["paid_cents"] == invoice_data["total_cents"]
-    assert paid_payload["payment"]["amount_cents"] == invoice_data["total_cents"]
+    assert paid_payload["payment"]["amount_cents"] == invoice_data["total_cents"] - alias_amount
 
     detail_resp = client.get(f"/v1/admin/invoices/{invoice_id}", headers=headers)
     assert detail_resp.status_code == 200
     detail = detail_resp.json()
     assert detail["status"] == statuses.INVOICE_STATUS_PAID
     assert detail["balance_due_cents"] == 0
-    assert len(detail["payments"]) == 1
+    assert len(detail["payments"]) == 2
+    assert detail["created_by"] == "admin"
 
     filtered = client.get(
         "/v1/admin/invoices",
@@ -188,3 +205,10 @@ def test_admin_invoice_flow(client, async_session_maker):
     )
     assert filtered.status_code == 200
     assert filtered.json()["total"] == 1
+
+    bad_status = client.get(
+        "/v1/admin/invoices",
+        headers=headers,
+        params={"status": "invalid"},
+    )
+    assert bad_status.status_code == 422

@@ -1,5 +1,6 @@
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Date,
@@ -85,13 +86,13 @@ class InvoiceItem(Base):
     qty: Mapped[int] = mapped_column(Integer, nullable=False)
     unit_price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     line_total_cents: Mapped[int] = mapped_column(Integer, nullable=False)
-    tax_rate: Mapped[float | None] = mapped_column(Numeric(5, 4))
+    tax_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
 
     invoice: Mapped[Invoice] = relationship("Invoice", back_populates="items")
 
 
 class Payment(Base):
-    __tablename__ = "payments"
+    __tablename__ = "invoice_payments"
 
     payment_id: Mapped[str] = mapped_column(
         String(36),
@@ -115,5 +116,5 @@ class Payment(Base):
     invoice: Mapped[Invoice] = relationship("Invoice", back_populates="payments")
 
     __table_args__ = (
-        Index("ix_payments_invoice_status", "invoice_id", "status"),
+        Index("ix_invoice_payments_invoice_status", "invoice_id", "status"),
     )

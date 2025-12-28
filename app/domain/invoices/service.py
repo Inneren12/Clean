@@ -14,10 +14,11 @@ from app.domain.invoices.db_models import Invoice, InvoiceItem, InvoiceNumberSeq
 from app.domain.invoices.schemas import InvoiceItemCreate
 
 
-def _calculate_tax(line_total_cents: int, tax_rate: float | None) -> int:
-    if not tax_rate:
+def _calculate_tax(line_total_cents: int, tax_rate: Decimal | float | None) -> int:
+    if tax_rate is None:
         return 0
-    quantized = (Decimal(line_total_cents) * Decimal(tax_rate)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    rate_decimal = Decimal(str(tax_rate))
+    quantized = (Decimal(line_total_cents) * rate_decimal).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     return int(quantized)
 
 
@@ -29,9 +30,21 @@ async def generate_invoice_number(session: AsyncSession, issue_date: date) -> st
     upsert = stmt.on_conflict_do_update(
         index_elements=[InvoiceNumberSequence.year],
         set_={"last_number": InvoiceNumberSequence.last_number + 1},
-    ).returning(InvoiceNumberSequence.last_number)
-    result = await session.execute(upsert)
-    number = int(result.scalar_one())
+    )
+
+    number: int
+    if dialect == "postgresql":
+        result = await session.execute(upsert.returning(InvoiceNumberSequence.last_number))
+        number = int(result.scalar_one())
+    else:
+        try:
+            result = await session.execute(upsert.returning(InvoiceNumberSequence.last_number))
+            number = int(result.scalar_one())
+        except Exception:  # noqa: BLE001
+            await session.execute(upsert)
+            seq_stmt = select(InvoiceNumberSequence.last_number).where(InvoiceNumberSequence.year == issue_date.year)
+            result = await session.execute(seq_stmt)
+            number = int(result.scalar_one())
     return f"INV-{issue_date.year}-{number:06d}"
 
 
@@ -109,11 +122,14 @@ async def record_manual_payment(
         raise ValueError("Cannot record payments on a void invoice")
     if amount_cents <= 0:
         raise ValueError("Payment amount must be positive")
+    normalized_method = method.lower()
+    if normalized_method not in statuses.PAYMENT_METHODS:
+        raise ValueError("Invalid payment method")
 
     payment = Payment(
         invoice_id=invoice.invoice_id,
         provider="manual",
-        method=method.lower(),
+        method=normalized_method,
         amount_cents=amount_cents,
         currency=invoice.currency,
         status=statuses.PAYMENT_STATUS_SUCCEEDED,
@@ -183,4 +199,25 @@ def build_invoice_response(invoice: Invoice) -> dict:
             }
             for payment in invoice.payments
         ],
+    }
+
+
+def build_invoice_list_item(invoice: Invoice) -> dict:
+    paid_cents = _paid_cents(invoice)
+    return {
+        "invoice_id": invoice.invoice_id,
+        "invoice_number": invoice.invoice_number,
+        "order_id": invoice.order_id,
+        "customer_id": invoice.customer_id,
+        "status": invoice.status,
+        "issue_date": invoice.issue_date,
+        "due_date": invoice.due_date,
+        "currency": invoice.currency,
+        "subtotal_cents": invoice.subtotal_cents,
+        "tax_cents": invoice.tax_cents,
+        "total_cents": invoice.total_cents,
+        "paid_cents": paid_cents,
+        "balance_due_cents": max(invoice.total_cents - paid_cents, 0),
+        "created_at": invoice.created_at,
+        "updated_at": invoice.updated_at,
     }

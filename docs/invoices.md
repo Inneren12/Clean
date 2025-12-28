@@ -11,6 +11,7 @@
 - `PAID`: balance cleared
 - `OVERDUE`: due date passed without full payment
 - `VOID`: cancelled/invalid invoice
+- Only the above values are accepted. Invalid statuses are rejected with HTTP 422.
 
 ## Creating invoices
 - Endpoint: `POST /v1/admin/orders/{order_id}/invoice`
@@ -22,6 +23,8 @@
 - `GET /v1/admin/invoices/{invoice_id}` returns full items + payment history with balances.
 
 ## Manual payments
-- Endpoint: `POST /v1/admin/invoices/{invoice_id}/mark-paid`
+- Endpoint: `POST /v1/admin/invoices/{invoice_id}/record-payment` (preferred)
+- Legacy endpoint (still supported): `POST /v1/admin/invoices/{invoice_id}/mark-paid`
 - Body: `amount_cents`, `method` (`cash`, `etransfer`, `other`), optional `reference` and `received_at`.
 - Creates a manual payment record and updates invoice status to `PARTIAL` or `PAID` based on remaining balance.
+- Manual payments record the admin username in `created_by` on the invoice.
