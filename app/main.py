@@ -69,13 +69,11 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         logger.info(
             "request",
             extra={
-                "extra": {
-                    "request_id": request.state.request_id,
-                    "method": request.method,
-                    "path": request.url.path,
-                    "status_code": response.status_code,
-                    "latency_ms": latency_ms,
-                }
+                "request_id": request.state.request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "latency_ms": latency_ms,
             },
         )
         return response
@@ -188,7 +186,7 @@ def create_app(app_settings) -> FastAPI:
     async def unhandled_exception_handler(request: Request, exc: Exception):
         logger.exception(
             "unhandled_exception",
-            extra={"extra": {"request_id": getattr(request.state, "request_id", None), "path": request.url.path}},
+            extra={"request_id": getattr(request.state, "request_id", None), "path": request.url.path},
         )
         return problem_details(
             request=request,

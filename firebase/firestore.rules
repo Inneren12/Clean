@@ -1,3 +1,4 @@
+// DRAFT — not wired to production yet. Finalized rules will accompany the Firestore-backed BotStore.
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
