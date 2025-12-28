@@ -1,7 +1,10 @@
-// DRAFT — not wired to production yet. Finalized rules will accompany the Firestore-backed BotStore.
+// DRAFT — not wired to production yet. Placeholder rules until FirestoreBotStore is implemented.
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false; // deny-by-default baseline
+    }
     function isSignedIn() {
       return request.auth != null;
     }
@@ -30,19 +33,20 @@ service cloud.firestore {
     }
 
     match /conversations/{conversationId} {
+      // Placeholder allowances for anon bot sessions; not security-reviewed for production.
       allow create: if isSignedIn() || (request.resource.data.anonId != null) || (request.resource.data.anon_id != null);
-      allow read: if ownsResource(docUserId(resource));
+      allow read: if ownsResource(docUserId(resource)) || isAdmin();
       allow update: if ownsResource(docUserId(resource)) || anonWriteMatchesExisting(resource);
 
       match /messages/{messageId} {
         allow create: if ownsResource(docUserId(get(/databases/$(database)/documents/conversations/$(conversationId))))
                       || anonWriteMatchesExisting(get(/databases/$(database)/documents/conversations/$(conversationId)));
-        allow read: if ownsResource(docUserId(get(/databases/$(database)/documents/conversations/$(conversationId))));
+        allow read: if ownsResource(docUserId(get(/databases/$(database)/documents/conversations/$(conversationId)))) || isAdmin();
       }
     }
 
     match /leads/{leadId} {
-      allow create: if isSignedIn() || (request.resource.data.sourceConversationId != null);
+      allow create: if isSignedIn() || isAdmin();
       allow read, update: if ownsResource(resource.data.userId) || isAdmin();
     }
 

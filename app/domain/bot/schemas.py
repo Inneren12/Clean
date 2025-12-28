@@ -4,15 +4,17 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.bot.nlu.models import Entities, Intent
+from app.bot.nlu.models import Intent
+from app.shared.naming import to_camel
 
 
-def to_camel(string: str) -> str:
-    parts = string.split("_")
-    return parts[0] + "".join(word.capitalize() for word in parts[1:])
+class BotRequestModel(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True, alias_generator=to_camel, extra="forbid", use_enum_values=True
+    )
 
 
-class BotBaseModel(BaseModel):
+class BotResponseModel(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True, alias_generator=to_camel, extra="ignore", use_enum_values=True
     )
@@ -38,14 +40,14 @@ class FsmStep(str, Enum):
     support = "support"
 
 
-class ConversationState(BotBaseModel):
+class ConversationState(BotResponseModel):
     current_intent: Optional[Intent] = None
     fsm_step: Optional[FsmStep] = None
     filled_fields: Dict[str, Any] = Field(default_factory=dict)
     confidence: Optional[float] = None
 
 
-class ConversationCreate(BotBaseModel):
+class ConversationCreate(BotResponseModel):
     channel: str
     user_id: Optional[str] = None
     anon_id: Optional[str] = None
@@ -59,7 +61,7 @@ class ConversationRecord(ConversationCreate):
     updated_at: float
 
 
-class MessagePayload(BotBaseModel):
+class MessagePayload(BotResponseModel):
     role: MessageRole
     text: str
     intent: Optional[Intent] = None
@@ -74,26 +76,26 @@ class MessageRecord(MessagePayload):
     created_at: float
 
 
-class SessionCreateRequest(BotBaseModel):
+class SessionCreateRequest(BotRequestModel):
     channel: str = "web"
     user_id: Optional[str] = None
     anon_id: Optional[str] = None
 
 
-class SessionCreateResponse(BotBaseModel):
+class SessionCreateResponse(BotResponseModel):
     conversation_id: str
     status: ConversationStatus
     state: ConversationState
 
 
-class MessageRequest(BotBaseModel):
+class MessageRequest(BotRequestModel):
     conversation_id: str
     text: str
     user_id: Optional[str] = None
     anon_id: Optional[str] = None
 
 
-class BotReply(BotBaseModel):
+class BotReply(BotResponseModel):
     text: str
     intent: Intent
     confidence: float
@@ -102,12 +104,12 @@ class BotReply(BotBaseModel):
     reasons: List[str] = Field(default_factory=list)
 
 
-class MessageResponse(BotBaseModel):
+class MessageResponse(BotResponseModel):
     conversation_id: str
     reply: BotReply
 
 
-class LeadPayload(BotBaseModel):
+class LeadPayload(BotRequestModel):
     service_type: Optional[str] = None
     property_type: Optional[str] = None
     size: Optional[str] = None
@@ -122,12 +124,14 @@ class LeadPayload(BotBaseModel):
     status: str = "new"
 
 
-class LeadRecord(LeadPayload):
+class LeadRecord(LeadPayload, BotResponseModel):
+    model_config = BotResponseModel.model_config
+
     lead_id: str
     created_at: float
 
 
-class CasePayload(BotBaseModel):
+class CasePayload(BotRequestModel):
     reason: str
     summary: str
     payload: Dict[str, Any] = Field(default_factory=dict)
@@ -135,6 +139,8 @@ class CasePayload(BotBaseModel):
     status: str = "open"
 
 
-class CaseRecord(CasePayload):
+class CaseRecord(CasePayload, BotResponseModel):
+    model_config = BotResponseModel.model_config
+
     case_id: str
     created_at: float

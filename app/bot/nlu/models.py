@@ -3,7 +3,9 @@ from __future__ import annotations
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.shared.naming import to_camel
 
 
 class Intent(str, Enum):
@@ -22,6 +24,7 @@ class TimeWindow(BaseModel):
     start: Optional[str] = None
     end: Optional[str] = None
     label: Optional[str] = None
+    day: Optional[str] = None
 
 
 class Entities(BaseModel):
@@ -34,10 +37,7 @@ class Entities(BaseModel):
     time_window: Optional[TimeWindow] = Field(default=None, alias="timeWindow")
     area: Optional[str] = None
 
-    model_config = {
-        "populate_by_name": True,
-        "alias_generator": lambda s: s[0].lower() + "".join(word.capitalize() for word in s.split("_")[1:]),
-    }
+    model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 
 
 class IntentResult(BaseModel):
@@ -46,6 +46,4 @@ class IntentResult(BaseModel):
     reasons: List[str] = Field(default_factory=list)
     entities: Entities = Field(default_factory=Entities)
 
-    model_config = {
-        "populate_by_name": True,
-    }
+    model_config = ConfigDict(populate_by_name=True)

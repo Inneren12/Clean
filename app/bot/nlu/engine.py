@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from app.bot.nlu.models import Entities, Intent, IntentResult, TimeWindow
 
@@ -86,6 +86,9 @@ INTENT_KEYWORDS: Dict[Intent, List[str]] = {
     ],
 }
 
+CANCEL_LEXEMES = ["cancel", "call off", "отменить"]
+
+
 INTENT_PATTERNS: Dict[Intent, List[re.Pattern[str]]] = {
     Intent.booking: [re.compile(r"\b(book|schedule) (a|the)? ?(clean|service)")],
     Intent.price: [re.compile(r"\bhow (much|many)\b"), re.compile(r"\bprice (quote)?\b")],
@@ -112,14 +115,16 @@ DAY_WORDS = [
     "friday",
     "saturday",
     "sunday",
+    "today",
+    "tomorrow",
 ]
 
 TIME_LABELS = {
     "morning": TimeWindow(start="08:00", end="12:00", label="morning"),
     "afternoon": TimeWindow(start="12:00", end="17:00", label="afternoon"),
     "evening": TimeWindow(start="17:00", end="21:00", label="evening"),
-    "today": TimeWindow(label="today"),
-    "tomorrow": TimeWindow(label="tomorrow"),
+    "today": TimeWindow(label="today", day="today"),
+    "tomorrow": TimeWindow(label="tomorrow", day="tomorrow"),
 }
 
 
@@ -224,7 +229,7 @@ EXTRA_KEYWORDS = {
     "fridge": ["fridge", "refrigerator"],
     "windows": ["window", "windows"],
     "carpet": ["carpet", "rug"],
-    "pets": ["pet", "pets", "dog", "cat"],
+    "pets": ["pet", "pets", "dog", "dogs", "cat", "cats"],
 }
 
 
@@ -237,7 +242,7 @@ def _extract_service(normalized: str, entities: Entities, reasons: List[str]) ->
 
     extras: List[str] = []
     for extra, keywords in EXTRA_KEYWORDS.items():
-        if any(keyword in normalized for keyword in keywords):
+        if any(re.search(rf"\b{re.escape(keyword)}\b", normalized) for keyword in keywords):
             extras.append(extra)
     if extras:
         entities.extras = sorted(set(extras))
@@ -257,16 +262,16 @@ def _normalize_time(hour: int, minute: int, meridiem: str | None) -> str:
     return f"{hour:02d}:{minute:02d}"
 
 
+def _extract_day(normalized: str) -> Optional[str]:
+    return next((day for day in DAY_WORDS if day in normalized), None)
+
+
 def _extract_time_window(normalized: str, entities: Entities, reasons: List[str]) -> None:
-    for key, window in TIME_LABELS.items():
-        if key in normalized:
-            entities.time_window = window
-            reasons.append(f"time window label: {key}")
-            return
+    day_match = _extract_day(normalized)
 
-    day_match = next((day for day in DAY_WORDS if day in normalized), None)
-
+    label_match = next((key for key in TIME_LABELS if key in normalized), None)
     time_match = TIME_PATTERN.search(normalized)
+
     if time_match:
         qualifier, hour_str, minute_str, meridiem = time_match.groups()
         start_time = _normalize_time(int(hour_str), int(minute_str or 0), meridiem)
@@ -276,28 +281,67 @@ def _extract_time_window(normalized: str, entities: Entities, reasons: List[str]
             window.start = None
         elif qualifier == "by":
             window.end = start_time
+        if day_match:
+            window.day = day_match
+            reasons.append(f"day detected: {day_match}")
         entities.time_window = window
         reasons.append(f"time qualifier: {qualifier} {start_time}")
 
+    if label_match:
+        label_window = TIME_LABELS[label_match]
+        window = TimeWindow(
+            start=label_window.start,
+            end=label_window.end,
+            label=label_window.label,
+            day=label_window.day or day_match,
+        )
+        entities.time_window = window
+        reasons.append(f"time window label: {label_match}")
+        if day_match and not window.day:
+            reasons.append(f"day detected: {day_match}")
+
     if day_match and not entities.time_window:
-        entities.time_window = TimeWindow(label=day_match)
+        entities.time_window = TimeWindow(label=day_match, day=day_match)
         reasons.append(f"day detected: {day_match}")
 
 
 AREA_PATTERN = re.compile(r"(?:in|around|near|location|area)\s+([a-zA-Z\s]{3,40})")
+AREA_STOPWORDS = {
+    "book",
+    "need",
+    "schedule",
+    "quote",
+    "please",
+    "tell",
+    "can",
+    "do",
+    "move",
+}
+LOCATION_HINTS = {"in", "near", "around", "at", "to", "by"}
 
 
 def _extract_area(original: str, normalized: str, entities: Entities, reasons: List[str]) -> None:
     match = AREA_PATTERN.search(original)
     if match:
         area = match.group(1).strip().rstrip(".?!")
+        first_token = area.split()[0] if area else ""
+        if first_token.lower() in AREA_STOPWORDS:
+            return
         entities.area = re.sub(r"\s+", " ", area)
         reasons.append(f"area: {entities.area}")
-    elif any(token.istitle() for token in original.split()):
-        candidates = [token for token in original.split() if token.istitle() and len(token) > 3]
-        if candidates:
-            entities.area = candidates[0]
+        return
+
+    tokens = original.split()
+    for index, token in enumerate(tokens):
+        if not token.istitle() or len(token) <= 3:
+            continue
+        if token.lower() in AREA_STOPWORDS:
+            continue
+        previous = tokens[index - 1].lower() if index > 0 else ""
+        if previous in LOCATION_HINTS or index == len(tokens) - 1:
+            entities.area = token
             reasons.append(f"area guess: {entities.area}")
+            break
 
 
 def extract_entities(text: str) -> Tuple[Entities, List[str]]:
@@ -318,6 +362,11 @@ def analyze_message(text: str) -> IntentResult:
     normalized = _normalize(text)
     intent, confidence, intent_reasons = _score_intent(normalized)
     entities, entity_reasons = extract_entities(text)
+
+    if any(lexeme in normalized for lexeme in CANCEL_LEXEMES):
+        if intent != Intent.cancel:
+            intent_reasons.append("override: cancel lexeme")
+        intent = Intent.cancel
 
     combined_reasons = intent_reasons + entity_reasons
     if confidence < 0.4:

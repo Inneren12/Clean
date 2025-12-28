@@ -1,9 +1,10 @@
 import logging
+from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.bot.nlu.engine import analyze_message
-from app.bot.nlu.models import Intent
+from app.bot.nlu.models import Entities, Intent, TimeWindow
 from app.dependencies import get_bot_store
 from app.domain.bot.schemas import (
     BotReply,
@@ -44,6 +45,55 @@ def _fsm_step_for_intent(intent: Intent) -> FsmStep:
             return FsmStep.routing
 
 
+def _format_preferred_time_window(time_window: Optional[TimeWindow]) -> Optional[str]:
+    if not time_window:
+        return None
+
+    parts: list[str] = []
+    label = (time_window.label or "").lower()
+    if time_window.day:
+        parts.append(time_window.day)
+
+    if label in {"after", "before", "by"}:
+        time_value = time_window.start or time_window.end
+        if time_value:
+            parts.append(f"{label} {time_value}")
+        elif label:
+            parts.append(label)
+    elif label and label != time_window.day:
+        parts.append(label)
+    elif time_window.start:
+        parts.append(time_window.start)
+
+    return " ".join(parts) if parts else None
+
+
+def _normalize_filled_fields(
+    existing: Dict[str, object],
+    message_text: str,
+    entities: Entities,
+) -> Dict[str, object]:
+    filled_fields = {**existing}
+    filled_fields["last_message"] = message_text
+
+    if entities.service_type:
+        filled_fields["service_type"] = entities.service_type
+    if entities.area:
+        filled_fields["area"] = entities.area
+    if entities.extras:
+        filled_fields["extras"] = sorted(set(entities.extras))
+
+    preferred_time = _format_preferred_time_window(entities.time_window)
+    if preferred_time:
+        filled_fields["preferred_time_window"] = preferred_time
+
+    entity_snapshot = entities.model_dump(exclude_none=True, by_alias=True)
+    if entity_snapshot:
+        filled_fields["entities"] = entity_snapshot
+
+    return filled_fields
+
+
 @router.post("/bot/session", response_model=SessionCreateResponse, status_code=201)
 async def create_session(request: SessionCreateRequest, store: BotStore = Depends(get_bot_store)) -> SessionCreateResponse:
     conversation = await store.create_conversation(
@@ -77,11 +127,9 @@ async def post_message(
     updated_state = ConversationState(
         current_intent=nlu_result.intent,
         fsm_step=fsm_step,
-        filled_fields={
-            **conversation.state.filled_fields,
-            "last_message": request.text,
-            "entities": nlu_result.entities.model_dump(exclude_none=True, by_alias=True),
-        },
+        filled_fields=_normalize_filled_fields(
+            conversation.state.filled_fields, request.text, nlu_result.entities
+        ),
         confidence=nlu_result.confidence,
     )
     await store.update_state(request.conversation_id, updated_state)
@@ -100,6 +148,7 @@ async def post_message(
     )
     await store.append_message(request.conversation_id, bot_payload)
 
+    request_id = getattr(http_request.state, "request_id", None) if http_request else None
     logger.info(
         "intent_detected",
         extra={
@@ -109,7 +158,7 @@ async def post_message(
             "fsm_step": fsm_step.value,
             "reasons": nlu_result.reasons,
             "entities": nlu_result.entities.model_dump(exclude_none=True, by_alias=True),
-            "request_id": getattr(http_request.state, "request_id", None) if http_request else None,
+            "request_id": request_id,
         },
     )
 
@@ -127,11 +176,19 @@ async def post_message(
 
 
 @router.get("/bot/messages", response_model=list[MessageRecord])
-async def list_messages(conversation_id: str, store: BotStore = Depends(get_bot_store)) -> list[MessageRecord]:
-    conversation = await store.get_conversation(conversation_id)
+async def list_messages(
+    conversation_id: Optional[str] = Query(None, alias="conversationId"),
+    legacy_conversation_id: Optional[str] = Query(None, alias="conversation_id"),
+    store: BotStore = Depends(get_bot_store),
+) -> list[MessageRecord]:
+    conversation_key = conversation_id or legacy_conversation_id
+    if not conversation_key:
+        raise HTTPException(status_code=422, detail="conversationId is required")
+
+    conversation = await store.get_conversation(conversation_key)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    return await store.list_messages(conversation_id)
+    return await store.list_messages(conversation_key)
 
 
 @router.get("/bot/session/{conversation_id}", response_model=ConversationRecord)

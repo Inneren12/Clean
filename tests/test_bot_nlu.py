@@ -29,7 +29,7 @@ GOLDEN_MESSAGES = [
     {
         "text": "Need to reschedule my appointment to Friday after 6pm",
         "intent": Intent.reschedule,
-        "entities": {"time_window_start": "18:00"},
+        "entities": {"time_window_start": "18:00", "time_window_day": "friday"},
     },
     {"text": "Please cancel my booking", "intent": Intent.cancel},
     {"text": "Status update for today's service", "intent": Intent.status},
@@ -103,7 +103,7 @@ GOLDEN_MESSAGES = [
     {
         "text": "Book cleaning by tomorrow evening",
         "intent": Intent.booking,
-        "entities": {"time_window_label": "evening"},
+        "entities": {"time_window_label": "evening", "time_window_day": "tomorrow"},
     },
     {
         "text": "hello",
@@ -126,6 +126,14 @@ GOLDEN_MESSAGES = [
     {
         "text": "I want to cancel my booking and get a refund",
         "intent": Intent.cancel,
+    },
+    {
+        "text": "cancel and refund my booking",
+        "intent": Intent.cancel,
+    },
+    {
+        "text": "Schedule a clean in Book please",
+        "intent": Intent.booking,
     },
     {
         "text": "записать уборку на завтра",
@@ -170,6 +178,9 @@ def test_golden_messages(case):
         if "time_window_start" in entities:
             assert result.entities.time_window is not None
             assert result.entities.time_window.start == entities["time_window_start"]
+        if "time_window_day" in entities:
+            assert result.entities.time_window is not None
+            assert result.entities.time_window.day == entities["time_window_day"]
         if "area" in entities:
             assert result.entities.area == entities["area"]
 

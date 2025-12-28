@@ -37,6 +37,25 @@ def test_post_message_updates_state(client):
     assert conversation.state.filled_fields["last_message"] == "I need a price quote"
 
 
+def test_message_normalizes_entities_into_state(client):
+    conversation_id = client.post("/api/bot/session", json={"channel": "web"}).json()["conversationId"]
+
+    client.post(
+        "/api/bot/message",
+        json={
+            "conversationId": conversation_id,
+            "text": "Please book a deep clean with oven and carpet tomorrow evening in Brooklyn",
+        },
+    )
+
+    conversation = anyio.run(app.state.bot_store.get_conversation, conversation_id)
+    filled = conversation.state.filled_fields
+    assert filled["service_type"] == "deep_clean"
+    assert set(filled.get("extras", [])) == {"oven", "carpet"}
+    assert filled.get("area") == "Brooklyn"
+    assert filled.get("preferred_time_window") == "tomorrow evening"
+
+
 def test_create_lead_and_case(client):
     conversation_id = client.post("/api/bot/session", json={"channel": "web", "userId": "u-1"}).json()[
         "conversationId"
