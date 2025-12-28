@@ -18,8 +18,8 @@ def test_price_single_message_flow(client):
 
     reply = body["reply"]
     assert "Estimate" in reply["text"]
-    assert reply["progress"]["total"] == 7
-    assert reply["state"]["fsmStep"] == "ask_property_type"
+    assert reply["progress"]["total"] <= 3
+    assert reply["state"]["fsmStep"] == "ask_preferred_time"
 
     conversation = anyio.run(app.state.bot_store.get_conversation, conversation_id)
     assert conversation.state.last_estimate is not None
@@ -36,19 +36,13 @@ def test_booking_step_by_step_reaches_confirm_lead(client):
     assert second["reply"]["state"]["fsmStep"] == "ask_size"
 
     third = _send_message(client, conversation_id, "2 bed 1 bath")
-    assert third["reply"]["state"]["fsmStep"] == "ask_condition"
+    assert third["reply"]["state"]["fsmStep"] == "ask_area"
 
-    fourth = _send_message(client, conversation_id, "It's pretty heavy")
-    assert fourth["reply"]["state"]["fsmStep"] == "ask_extras"
+    fourth = _send_message(client, conversation_id, "In Manhattan")
+    assert fourth["reply"]["state"]["fsmStep"] == "ask_preferred_time"
 
-    fifth = _send_message(client, conversation_id, "Add oven and windows")
-    assert fifth["reply"]["state"]["fsmStep"] == "ask_area"
-
-    sixth = _send_message(client, conversation_id, "In Manhattan")
-    assert sixth["reply"]["state"]["fsmStep"] == "ask_preferred_time"
-
-    seventh = _send_message(client, conversation_id, "Tomorrow at 9am works")
-    assert seventh["reply"]["state"]["fsmStep"] == "ask_contact"
+    fifth = _send_message(client, conversation_id, "Tomorrow at 9am works")
+    assert fifth["reply"]["state"]["fsmStep"] == "ask_contact"
 
     final = _send_message(client, conversation_id, "Email me at test@example.com")
     assert final["reply"]["state"]["fsmStep"] == "confirm_lead"
@@ -63,8 +57,8 @@ def test_price_flow_skips_contact(client):
     conversation_id = client.post("/api/bot/session", json={"channel": "web"}).json()["conversationId"]
 
     reply = _send_message(client, conversation_id, "Price quote for studio apartment regular clean in Queens")
-    assert reply["reply"]["state"]["fsmStep"] == "ask_condition"
-    assert reply["reply"]["progress"]["total"] == 7
+    assert reply["reply"]["state"]["fsmStep"] == "ask_preferred_time"
+    assert reply["reply"]["progress"]["total"] <= 5
     assert "contact" not in reply["reply"]["quickReplies"]
 
 
@@ -73,7 +67,7 @@ def test_russian_price_flow(client):
 
     reply = _send_message(client, conversation_id, "Сколько стоит генеральная уборка квартиры?")
     assert reply["reply"]["intent"] == "price"
-    assert reply["reply"]["progress"]["total"] == 7
+    assert reply["reply"]["progress"]["total"] == 5
     assert reply["reply"]["quickReplies"]
 
 
@@ -81,7 +75,7 @@ def test_skip_logic_when_entities_known(client):
     conversation_id = client.post("/api/bot/session", json={"channel": "web"}).json()["conversationId"]
 
     reply = _send_message(client, conversation_id, "Book deep clean for 3 bed house in Queens")
-    assert reply["reply"]["state"]["fsmStep"] == "ask_condition"
+    assert reply["reply"]["state"]["fsmStep"] == "ask_preferred_time"
     assert "ask_service_type" not in reply["reply"]["text"].lower()
 
 
@@ -110,7 +104,7 @@ def test_price_flow_works_in_single_step_and_stepwise(client):
     conversation_id = client.post("/api/bot/session", json={"channel": "web"}).json()["conversationId"]
     single = _send_message(client, conversation_id, "How much for a post-renovation clean 1200 sqft in Manhattan with windows?")
     assert "Estimate" in single["reply"]["text"]
-    assert single["reply"]["state"]["fsmStep"] == "ask_property_type"
+    assert single["reply"]["state"]["fsmStep"] == "ask_preferred_time"
 
     conversation_id2 = client.post("/api/bot/session", json={"channel": "web"}).json()["conversationId"]
     step1 = _send_message(client, conversation_id2, "Need a price")

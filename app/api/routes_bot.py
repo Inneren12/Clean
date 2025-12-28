@@ -8,6 +8,7 @@ from app.bot.faq.matcher import match_faq
 from app.bot.fsm import BotFsm
 from app.bot.handoff.case_builder import build_case_payload
 from app.bot.handoff.decision import evaluate_handoff
+from app.bot.handoff.reasons import HandoffReason
 from app.bot.handoff.metrics import metrics
 from app.bot.nlu.engine import analyze_message
 from app.bot.nlu.models import Intent
@@ -175,7 +176,10 @@ async def post_message(
     # Build metadata for frontend
     metadata = {**fsm_reply.metadata, "quickReplies": quick_replies}
     if decision.should_handoff:
-        metadata["handoff"] = {"reason": decision.reason, "summary": decision.summary}
+        metadata["handoff"] = {
+            "reason": decision.reason.value if isinstance(decision.reason, HandoffReason) else decision.reason,
+            "summary": decision.summary,
+        }
 
     # Ensure bot_text always exists
     if not bot_text:
@@ -203,7 +207,7 @@ async def post_message(
             intent_result=nlu_result,
         )
         await store.create_case(case_payload)
-        metrics.record(decision.reason or "handoff", updated_state.fsm_step)
+        metrics.record(decision.reason or HandoffReason.no_handoff, updated_state.fsm_step)
 
     request_id = getattr(http_request.state, "request_id", None) if http_request else None
     estimate = fsm_reply.estimate
@@ -218,6 +222,7 @@ async def post_message(
             "estimate_min": estimate.price_range_min if estimate else None,
             "estimate_max": estimate.price_range_max if estimate else None,
             "estimate_duration": estimate.duration_minutes if estimate else None,
+            "handoff_reason": decision.reason.value if isinstance(decision.reason, HandoffReason) else decision.reason,
         },
     )
 

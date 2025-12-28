@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from app.bot.fsm.engine import FsmReply
+from app.bot.handoff.reasons import HandoffReason
 from app.bot.nlu.models import Intent, IntentResult
 from app.domain.bot.schemas import FsmStep
 
@@ -16,7 +17,7 @@ _GREETING_KEYWORDS = {"hi", "hello", "hey", "thanks", "thank you", "yo"}
 @dataclass
 class HandoffDecision:
     should_handoff: bool
-    reason: Optional[str] = None
+    reason: Optional[HandoffReason] = None
     suggested_action: str = "continue"
     summary: str = ""
 
@@ -62,7 +63,7 @@ def evaluate_handoff(
     if intent in {Intent.complaint, Intent.human}:
         return HandoffDecision(
             should_handoff=True,
-            reason="complaint" if intent == Intent.complaint else "human_requested",
+            reason=HandoffReason.complaint if intent == Intent.complaint else HandoffReason.human_requested,
             suggested_action="handoff",
             summary="User explicitly requested human support",
         )
@@ -70,7 +71,7 @@ def evaluate_handoff(
     if intent == Intent.reschedule and intent_result.entities.time_window is None:
         return HandoffDecision(
             should_handoff=True,
-            reason="scheduling_conflict",
+            reason=HandoffReason.scheduling_conflict,
             suggested_action="handoff",
             summary="Reschedule requested without a viable time window",
         )
@@ -78,7 +79,7 @@ def evaluate_handoff(
     if progressing:
         return HandoffDecision(
             should_handoff=False,
-            reason="fsm_progressing_suppress_faq",
+            reason=HandoffReason.fsm_progressing_suppress_faq,
             suggested_action="continue",
             summary="FSM flow is in progress; suppressing FAQ fallback handoff",
         )
@@ -86,7 +87,7 @@ def evaluate_handoff(
     if faq_matches:
         return HandoffDecision(
             should_handoff=False,
-            reason="faq_matched",
+            reason=HandoffReason.faq_matched,
             suggested_action="continue",
             summary="FAQ match found; no handoff needed",
         )
@@ -99,20 +100,20 @@ def evaluate_handoff(
         if "human" in normalized or "agent" in normalized or "representative" in normalized:
             return HandoffDecision(
                 should_handoff=True,
-                reason="human_requested",
+                reason=HandoffReason.human_requested,
                 suggested_action="handoff",
                 summary="User asked for human while requesting FAQ clarification",
             )
         if low_confidence and len(normalized.split()) >= 12:
             return HandoffDecision(
                 should_handoff=True,
-                reason="faq_unclear_long",
+                reason=HandoffReason.faq_unclear_long,
                 suggested_action="handoff",
                 summary="Long FAQ message with very low confidence",
             )
         return HandoffDecision(
             should_handoff=False,
-            reason="faq_unclear",
+            reason=HandoffReason.faq_unclear,
             suggested_action="clarify",
             summary="FAQ unclear; suggest clarification",
         )
@@ -125,26 +126,26 @@ def evaluate_handoff(
             if trivial_message:
                 return HandoffDecision(
                     should_handoff=False,
-                    reason="clarify_trivial",
+                    reason=HandoffReason.clarify_trivial,
                     suggested_action="clarify",
                     summary="Low-confidence short message; request clarification",
                 )
             return HandoffDecision(
                 should_handoff=True,
-                reason="low_confidence",
+                reason=HandoffReason.low_confidence,
                 suggested_action="handoff",
                 summary="Low confidence and no active FSM path",
             )
         return HandoffDecision(
             should_handoff=False,
-            reason="low_confidence_continue",
+            reason=HandoffReason.low_confidence_continue,
             suggested_action="clarify",
             summary="Low confidence but FSM can continue",
         )
 
     return HandoffDecision(
         should_handoff=False,
-        reason="no_handoff",
+        reason=HandoffReason.no_handoff,
         suggested_action="continue",
         summary="No handoff conditions met",
     )

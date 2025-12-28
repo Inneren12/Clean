@@ -5,6 +5,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 from app.bot.nlu.models import Entities, Intent, IntentResult, TimeWindow
+from app.bot.rules.config import UPSOLD_EXTRAS
 
 logger = logging.getLogger(__name__)
 
@@ -224,13 +225,13 @@ SERVICE_KEYWORDS = {
 }
 
 
-EXTRA_KEYWORDS = {
-    "oven": ["oven"],
-    "fridge": ["fridge", "refrigerator"],
-    "windows": ["window", "windows"],
-    "carpet": ["carpet", "rug"],
-    "pets": ["pet", "pets", "dog", "dogs", "cat", "cats"],
-}
+EXTRA_KEYWORDS = {name: rule.keywords for name, rule in UPSOLD_EXTRAS.items()}
+
+
+def _has_keyword(normalized: str, keyword: str) -> bool:
+    if keyword.replace(" ", "").replace("-", "").isalnum():
+        return bool(re.search(rf"(?<!\w){re.escape(keyword)}(?!\w)", normalized))
+    return keyword in normalized
 
 PROPERTY_TYPES = {
     "apartment": ["apartment", "apt", "квартира"],
@@ -260,7 +261,7 @@ def _extract_service(normalized: str, entities: Entities, reasons: List[str]) ->
 
     extras: List[str] = []
     for extra, keywords in EXTRA_KEYWORDS.items():
-        if any(re.search(rf"\b{re.escape(keyword)}\b", normalized) for keyword in keywords):
+        if any(_has_keyword(normalized, keyword) for keyword in keywords):
             extras.append(extra)
     if extras:
         entities.extras = sorted(set(extras))
@@ -418,6 +419,23 @@ def analyze_message(text: str) -> IntentResult:
     normalized = _normalize(text)
     intent, confidence, intent_reasons = _score_intent(normalized)
     entities, entity_reasons = extract_entities(text)
+
+    if intent == Intent.faq and entities.service_type and (
+        entities.beds
+        or entities.baths
+        or entities.square_feet
+        or entities.square_meters
+        or entities.size_label
+        or entities.extras
+    ):
+        intent = Intent.booking
+        confidence = max(confidence, 0.55)
+        intent_reasons.append("fast-path booking: service and size detected")
+
+    if intent == Intent.reschedule and entities.service_type == "move_out":
+        intent = Intent.booking
+        confidence = max(confidence, 0.5)
+        intent_reasons.append("booking: move-out request")
 
     if any(lexeme in normalized for lexeme in CANCEL_LEXEMES):
         if intent != Intent.cancel:
