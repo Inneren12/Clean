@@ -109,6 +109,7 @@ class Payment(Base):
     )
     invoice_id: Mapped[str] = mapped_column(ForeignKey("invoices.invoice_id"), nullable=False, index=True)
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_ref: Mapped[str | None] = mapped_column(String(255))
     method: Mapped[str] = mapped_column(String(32), nullable=False)
     amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     currency: Mapped[str] = mapped_column(String(8), nullable=False)
@@ -125,7 +126,24 @@ class Payment(Base):
 
     __table_args__ = (
         Index("ix_invoice_payments_invoice_status", "invoice_id", "status"),
+        Index("ix_invoice_payments_provider_ref", "provider_ref"),
+        UniqueConstraint("provider", "provider_ref", name="uq_invoice_payments_provider_ref"),
     )
+
+
+class StripeEvent(Base):
+    __tablename__ = "stripe_events"
+
+    event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    processed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (Index("ix_stripe_events_payload_hash", "payload_hash"),)
 
 
 class InvoicePublicToken(Base):

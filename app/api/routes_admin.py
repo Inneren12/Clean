@@ -1101,6 +1101,7 @@ async def _record_manual_invoice_payment(
     payment_data = invoice_schemas.PaymentResponse(
         payment_id=payment.payment_id,
         provider=payment.provider,
+        provider_ref=payment.provider_ref,
         method=payment.method,
         amount_cents=payment.amount_cents,
         currency=payment.currency,

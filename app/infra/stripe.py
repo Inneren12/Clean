@@ -21,25 +21,33 @@ def create_checkout_session(
     success_url: str,
     cancel_url: str,
     metadata: dict[str, str] | None = None,
+    product_name: str = "Cleaning deposit",
+    payment_intent_metadata: dict[str, str] | None = None,
+    customer_email: str | None = None,
 ):
     stripe_client.api_key = secret_key
-    return stripe_client.checkout.Session.create(
-        mode="payment",
-        payment_method_types=["card"],
-        success_url=success_url,
-        cancel_url=cancel_url,
-        line_items=[
+    payload = {
+        "mode": "payment",
+        "payment_method_types": ["card"],
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+        "line_items": [
             {
                 "price_data": {
                     "currency": currency,
-                    "product_data": {"name": "Cleaning deposit"},
+                    "product_data": {"name": product_name},
                     "unit_amount": amount_cents,
                 },
                 "quantity": 1,
             }
         ],
-        metadata=metadata or {},
-    )
+        "metadata": metadata or {},
+    }
+    if payment_intent_metadata:
+        payload["payment_intent_data"] = {"metadata": payment_intent_metadata}
+    if customer_email:
+        payload["customer_email"] = customer_email
+    return stripe_client.checkout.Session.create(**payload)
 
 
 def parse_webhook_event(stripe_client: Any, payload: bytes, signature: str | None, webhook_secret: str):

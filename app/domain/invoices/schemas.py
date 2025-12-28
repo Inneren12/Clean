@@ -34,6 +34,7 @@ class InvoiceItemResponse(BaseModel):
 class PaymentResponse(BaseModel):
     payment_id: str
     provider: str
+    provider_ref: str | None = None
     method: str
     amount_cents: int
     currency: str
@@ -92,7 +93,7 @@ class InvoiceListResponse(BaseModel):
 
 class ManualPaymentRequest(BaseModel):
     amount_cents: int = Field(gt=0)
-    method: str = Field(pattern="^(cash|etransfer|other)$")
+    method: str = Field(pattern="^(cash|etransfer|other|card)$")
     reference: str | None = Field(default=None, max_length=255)
     received_at: datetime | None = None
 
@@ -123,3 +124,11 @@ class InvoiceSendResponse(BaseModel):
     invoice: InvoiceResponse
     public_link: str
     email_sent: bool
+
+
+class InvoicePaymentInitResponse(BaseModel):
+    provider: str
+    amount_cents: int
+    currency: str
+    checkout_url: str | None = None
+    client_secret: str | None = None

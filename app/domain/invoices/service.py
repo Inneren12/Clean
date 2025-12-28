@@ -129,34 +129,11 @@ def _paid_cents(invoice: Invoice) -> int:
     return sum(payment.amount_cents for payment in invoice.payments if payment.status == statuses.PAYMENT_STATUS_SUCCEEDED)
 
 
-async def record_manual_payment(
-    session: AsyncSession,
-    invoice: Invoice,
-    amount_cents: int,
-    method: str,
-    reference: str | None = None,
-    received_at: datetime | None = None,
-) -> Payment:
-    if invoice.status == statuses.INVOICE_STATUS_VOID:
-        raise ValueError("Cannot record payments on a void invoice")
-    if amount_cents <= 0:
-        raise ValueError("Payment amount must be positive")
-    normalized_method = method.lower()
-    if normalized_method not in statuses.PAYMENT_METHODS:
-        raise ValueError("Invalid payment method")
+def outstanding_balance_cents(invoice: Invoice) -> int:
+    return max(invoice.total_cents - _paid_cents(invoice), 0)
 
-    payment = Payment(
-        invoice_id=invoice.invoice_id,
-        provider="manual",
-        method=normalized_method,
-        amount_cents=amount_cents,
-        currency=invoice.currency,
-        status=statuses.PAYMENT_STATUS_SUCCEEDED,
-        received_at=received_at or datetime.now(tz=timezone.utc),
-        reference=reference,
-    )
-    session.add(payment)
-    await session.flush()
+
+async def _refresh_invoice_payment_status(session: AsyncSession, invoice: Invoice) -> int:
     paid = await session.scalar(
         select(func.coalesce(func.sum(Payment.amount_cents), 0)).where(
             Payment.invoice_id == invoice.invoice_id,
@@ -168,8 +145,112 @@ async def record_manual_payment(
         invoice.status = statuses.INVOICE_STATUS_PAID
     elif paid_amount > 0:
         invoice.status = statuses.INVOICE_STATUS_PARTIAL
+    return paid_amount
 
+
+async def register_payment(
+    session: AsyncSession,
+    invoice: Invoice,
+    *,
+    provider: str,
+    method: str,
+    amount_cents: int,
+    currency: str,
+    status: str,
+    received_at: datetime | None = None,
+    reference: str | None = None,
+    provider_ref: str | None = None,
+) -> Payment | None:
+    if invoice.status == statuses.INVOICE_STATUS_VOID:
+        raise ValueError("Cannot record payments on a void invoice")
+    if amount_cents <= 0:
+        raise ValueError("Payment amount must be positive")
+
+    if provider_ref:
+        existing_payment = await session.scalar(
+            select(Payment)
+            .where(Payment.provider == provider, Payment.provider_ref == provider_ref)
+            .with_for_update(of=Payment)
+        )
+        if existing_payment:
+            return None
+
+    payment = Payment(
+        invoice_id=invoice.invoice_id,
+        provider=provider,
+        provider_ref=provider_ref,
+        method=method,
+        amount_cents=amount_cents,
+        currency=currency.upper(),
+        status=status,
+        received_at=received_at,
+        reference=reference,
+    )
+    session.add(payment)
     await session.flush()
+    await _refresh_invoice_payment_status(session, invoice)
+    await session.flush()
+    return payment
+
+
+async def record_stripe_payment(
+    session: AsyncSession,
+    invoice: Invoice,
+    *,
+    amount_cents: int,
+    currency: str,
+    status: str,
+    provider_ref: str | None,
+    reference: str | None,
+    received_at: datetime,
+) -> Payment | None:
+    normalized_status = status.upper()
+    normalized_currency = currency.upper()
+    if normalized_status not in statuses.PAYMENT_STATUSES:
+        raise ValueError("Invalid payment status")
+    if normalized_currency != invoice.currency.upper():
+        raise ValueError("Payment currency does not match invoice")
+
+    return await register_payment(
+        session,
+        invoice,
+        provider="stripe",
+        provider_ref=provider_ref,
+        method=statuses.PAYMENT_METHOD_CARD,
+        amount_cents=amount_cents,
+        currency=normalized_currency,
+        status=normalized_status,
+        received_at=received_at,
+        reference=reference,
+    )
+
+
+async def record_manual_payment(
+    session: AsyncSession,
+    invoice: Invoice,
+    amount_cents: int,
+    method: str,
+    reference: str | None = None,
+    received_at: datetime | None = None,
+) -> Payment:
+    normalized_method = method.lower()
+    if normalized_method not in statuses.PAYMENT_METHODS:
+        raise ValueError("Invalid payment method")
+
+    payment = await register_payment(
+        session,
+        invoice,
+        provider="manual",
+        provider_ref=None,
+        method=normalized_method,
+        amount_cents=amount_cents,
+        currency=invoice.currency,
+        status=statuses.PAYMENT_STATUS_SUCCEEDED,
+        received_at=received_at or datetime.now(tz=timezone.utc),
+        reference=reference,
+    )
+    if payment is None:
+        raise ValueError("Payment was not recorded")
     return payment
 
 
@@ -208,6 +289,7 @@ def build_invoice_response(invoice: Invoice) -> dict:
             {
                 "payment_id": payment.payment_id,
                 "provider": payment.provider,
+                "provider_ref": payment.provider_ref,
                 "method": payment.method,
                 "amount_cents": payment.amount_cents,
                 "currency": payment.currency,

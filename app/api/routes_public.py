@@ -2,15 +2,19 @@ from __future__ import annotations
 
 from html import escape
 import io
+import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.invoices import service as invoice_service
+from app.domain.invoices import schemas as invoice_schemas, service as invoice_service, statuses as invoice_statuses
 from app.infra.db import get_db_session
+from app.infra import stripe as stripe_infra
+from app.settings import settings
 
 router = APIRouter(include_in_schema=False)
+logger = logging.getLogger(__name__)
 
 
 def _format_currency(cents: int, currency: str) -> str:
@@ -170,6 +174,8 @@ async def download_invoice_pdf(
     invoice = await invoice_service.get_invoice_by_public_token(session, token)
     if invoice is None:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.status == invoice_statuses.INVOICE_STATUS_VOID:
+        raise HTTPException(status_code=400, detail="Invoice is void")
     lead = await invoice_service.fetch_customer(session, invoice)
     context = invoice_service.build_public_invoice_view(invoice, lead)
     pdf_bytes = _render_invoice_pdf(context)
@@ -190,3 +196,58 @@ async def view_invoice(
     context["token"] = token
     html = _render_invoice_html(context)
     return HTMLResponse(content=html)
+
+
+@router.post(
+    "/i/{token}/pay",
+    response_model=invoice_schemas.InvoicePaymentInitResponse,
+    status_code=status.HTTP_201_CREATED,
+    name="public_invoice_pay",
+)
+async def create_invoice_payment(
+    token: str,
+    http_request: Request,
+    session: AsyncSession = Depends(get_db_session),
+) -> invoice_schemas.InvoicePaymentInitResponse:
+    invoice = await invoice_service.get_invoice_by_public_token(session, token)
+    if invoice is None:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if not settings.stripe_secret_key:
+        raise HTTPException(status_code=503, detail="Stripe not configured")
+
+    outstanding = invoice_service.outstanding_balance_cents(invoice)
+    if outstanding <= 0:
+        raise HTTPException(status_code=409, detail="Invoice already paid")
+
+    lead = await invoice_service.fetch_customer(session, invoice)
+    stripe_client = stripe_infra.resolve_client(http_request.app.state)
+    checkout_session = stripe_infra.create_checkout_session(
+        stripe_client=stripe_client,
+        secret_key=settings.stripe_secret_key,
+        amount_cents=outstanding,
+        currency=invoice.currency,
+        success_url=settings.stripe_invoice_success_url.replace("{INVOICE_ID}", invoice.invoice_id),
+        cancel_url=settings.stripe_invoice_cancel_url.replace("{INVOICE_ID}", invoice.invoice_id),
+        metadata={"invoice_id": invoice.invoice_id, "invoice_number": invoice.invoice_number},
+        payment_intent_metadata={"invoice_id": invoice.invoice_id, "invoice_number": invoice.invoice_number},
+        product_name=f"Invoice {invoice.invoice_number}",
+        customer_email=getattr(lead, "email", None),
+    )
+    checkout_url = getattr(checkout_session, "url", None) or checkout_session.get("url")
+    logger.info(
+        "stripe_invoice_checkout_created",
+        extra={
+            "extra": {
+                "invoice_id": invoice.invoice_id,
+                "checkout_session_id": getattr(checkout_session, "id", None) or checkout_session.get("id"),
+            }
+        },
+    )
+
+    return invoice_schemas.InvoicePaymentInitResponse(
+        provider="stripe",
+        amount_cents=outstanding,
+        currency=invoice.currency,
+        checkout_url=checkout_url,
+        client_secret=None,
+    )
