@@ -34,6 +34,12 @@ UPSOLD_EXTRAS: Dict[str, UpsellRule] = {
         extra="fridge",
         reason="Fridge interior wipe-down prevents odors",
     ),
+    "carpet": UpsellRule(
+        name="carpet",
+        keywords=["carpet", "rug"],
+        extra="carpet",
+        reason="Carpet cleaning add-on requested",
+    ),
     "pets": UpsellRule(
         name="pets",
         keywords=["pet", "pets", "dog", "dogs", "cat", "cats"],

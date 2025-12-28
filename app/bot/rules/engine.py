@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Dict, List, Sequence
 
 from app.bot.nlu.models import Entities, Intent
 from app.bot.rules.config import CHECKLISTS, DEFAULT_CHECKLIST, UPSOLD_EXTRAS, ChecklistConfig, UpsellRule
 from app.domain.bot.schemas import FsmStep
+
+
+def _has_keyword(normalized: str, keyword: str) -> bool:
+    if keyword.replace(" ", "").replace("-", "").isalnum():
+        return bool(re.search(rf"(?<!\w){re.escape(keyword)}(?!\w)", normalized))
+    return keyword in normalized
 
 
 @dataclass
@@ -34,7 +41,7 @@ class RulesEngine:
         reasons: List[str] = []
 
         for rule in self.upsell_rules.values():
-            if any(keyword in normalized for keyword in rule.keywords):
+            if any(_has_keyword(normalized, keyword) for keyword in rule.keywords):
                 if rule.extra not in extras:
                     extras.add(rule.extra)
                     added.append(rule.extra)

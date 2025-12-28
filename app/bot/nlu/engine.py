@@ -227,6 +227,12 @@ SERVICE_KEYWORDS = {
 
 EXTRA_KEYWORDS = {name: rule.keywords for name, rule in UPSOLD_EXTRAS.items()}
 
+
+def _has_keyword(normalized: str, keyword: str) -> bool:
+    if keyword.replace(" ", "").replace("-", "").isalnum():
+        return bool(re.search(rf"(?<!\w){re.escape(keyword)}(?!\w)", normalized))
+    return keyword in normalized
+
 PROPERTY_TYPES = {
     "apartment": ["apartment", "apt", "квартира"],
     "house": ["house", "home", "дом"],
@@ -255,7 +261,7 @@ def _extract_service(normalized: str, entities: Entities, reasons: List[str]) ->
 
     extras: List[str] = []
     for extra, keywords in EXTRA_KEYWORDS.items():
-        if any(re.search(rf"\b{re.escape(keyword)}\b", normalized) for keyword in keywords):
+        if any(_has_keyword(normalized, keyword) for keyword in keywords):
             extras.append(extra)
     if extras:
         entities.extras = sorted(set(extras))

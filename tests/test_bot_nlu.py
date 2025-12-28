@@ -201,3 +201,12 @@ def test_low_confidence_flag():
     assert result.intent == Intent.faq
     assert "low confidence" in result.reasons
     assert result.confidence <= 0.4
+
+
+def test_extras_keyword_collision():
+    carpet_result = analyze_message("carpet cleaning")
+    assert set(carpet_result.entities.extras or []) >= {"carpet"}
+    assert "pets" not in set(carpet_result.entities.extras or [])
+
+    pets_result = analyze_message("pet hair on the couch")
+    assert "pets" in set(pets_result.entities.extras or [])
