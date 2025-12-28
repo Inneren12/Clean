@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     admin_basic_password: str | None = Field(None, env="ADMIN_BASIC_PASSWORD")
     dispatcher_basic_username: str | None = Field(None, env="DISPATCHER_BASIC_USERNAME")
     dispatcher_basic_password: str | None = Field(None, env="DISPATCHER_BASIC_PASSWORD")
+    admin_notification_email: str | None = Field(None, env="ADMIN_NOTIFICATION_EMAIL")
     public_base_url: str | None = Field(None, env="PUBLIC_BASE_URL")
     invoice_public_token_secret: str | None = Field(None, env="INVOICE_PUBLIC_TOKEN_SECRET")
     export_mode: Literal["off", "webhook", "sheets"] = Field("off", env="EXPORT_MODE")

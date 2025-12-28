@@ -4,11 +4,14 @@ from html import escape
 import io
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.bookings.db_models import Booking
+from app.domain.clients.db_models import ClientUser
 from app.domain.invoices import schemas as invoice_schemas, service as invoice_service, statuses as invoice_statuses
+from app.domain.nps import service as nps_service
 from app.infra.db import get_db_session
 from app.infra import stripe as stripe_infra
 from app.settings import settings
@@ -76,8 +79,152 @@ def _render_invoice_html(context: dict) -> str:
     return "\n".join(rows)
 
 
+def _render_nps_form(order_id: str, token: str) -> str:
+    options = "".join(
+        f'<label class="score"><input type="radio" name="score" value="{value}" required> {value}</label>'
+        for value in range(11)
+    )
+    return f"""
+    <html>
+      <head>
+        <title>Rate your cleaning</title>
+        <style>
+          body {{ font-family: Arial, sans-serif; max-width: 540px; margin: 40px auto; padding: 0 12px; }}
+          h1 {{ color: #0f172a; }}
+          form {{ margin-top: 16px; }}
+          .scores {{ display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }}
+          .score {{ padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; min-width: 44px; text-align: center; }}
+          textarea {{ width: 100%; min-height: 120px; padding: 10px; border-radius: 8px; border: 1px solid #cbd5e1; }}
+          button {{ background: #2563eb; color: white; border: none; padding: 10px 16px; border-radius: 6px; cursor: pointer; }}
+          .muted {{ color: #475569; font-size: 0.95em; }}
+        </style>
+      </head>
+      <body>
+        <h1>How did we do?</h1>
+        <p class="muted">Rate your recent cleaning from 0 (very unhappy) to 10 (delighted).</p>
+        <form method="post" action="/nps/{escape(order_id)}">
+          <input type="hidden" name="token" value="{escape(token)}" />
+          <div class="scores">{options}</div>
+          <label class="muted" for="comment">Anything to share? (optional)</label>
+          <textarea id="comment" name="comment" placeholder="Tell us what went well or what to fix"></textarea>
+          <div style="margin-top: 12px;"><button type="submit">Submit</button></div>
+        </form>
+      </body>
+    </html>
+    """
+
+
+def _render_message(title: str, body: str, status_text: str | None = None) -> str:
+    status_section = f"<p class=\"muted\">{escape(status_text)}</p>" if status_text else ""
+    return f"""
+    <html>
+      <head>
+        <title>{escape(title)}</title>
+        <style>
+          body {{ font-family: Arial, sans-serif; max-width: 520px; margin: 40px auto; padding: 0 12px; }}
+          h1 {{ color: #0f172a; }}
+          .muted {{ color: #475569; }}
+        </style>
+      </head>
+      <body>
+        <h1>{escape(title)}</h1>
+        {status_section}
+        <p>{escape(body)}</p>
+      </body>
+    </html>
+    """
+
+
 def _escape_pdf_text(value: str) -> str:
     return value.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+@router.get("/nps/{order_id}", response_class=HTMLResponse, name="nps_form")
+async def nps_form(order_id: str, token: str, session: AsyncSession = Depends(get_db_session)) -> HTMLResponse:
+    try:
+        token_result = nps_service.verify_nps_token(token, secret=settings.client_portal_secret)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token")
+    if token_result.order_id != order_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token does not match order")
+
+    booking = await session.get(Booking, order_id)
+    if booking is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+
+    existing = await nps_service.get_existing_response(session, order_id)
+    if existing:
+        return HTMLResponse(_render_message("Thanks for the feedback!", "We've already received your rating."))
+
+    return HTMLResponse(_render_nps_form(order_id, token))
+
+
+@router.post("/nps/{order_id}", response_class=HTMLResponse)
+async def submit_nps(
+    order_id: str,
+    request: Request,
+    token: str = Form(...),
+    score: int = Form(...),
+    comment: str | None = Form(None),
+    session: AsyncSession = Depends(get_db_session),
+) -> HTMLResponse:
+    try:
+        token_result = nps_service.verify_nps_token(token, secret=settings.client_portal_secret)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token")
+    if token_result.order_id != order_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token does not match order")
+
+    if score < 0 or score > 10:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Score must be between 0 and 10")
+
+    booking = await session.get(Booking, order_id)
+    if booking is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+
+    existing = await nps_service.get_existing_response(session, order_id)
+    if existing:
+        return HTMLResponse(_render_message("Thanks for the feedback!", "We've already received your rating."))
+
+    await nps_service.record_response(session, booking=booking, score=score, comment=comment)
+
+    ticket = None
+    client = await session.get(ClientUser, booking.client_id) if booking.client_id else None
+    if score <= 3:
+        ticket = await nps_service.ensure_ticket_for_low_score(
+            session,
+            booking=booking,
+            score=score,
+            comment=comment,
+            client=client,
+        )
+        adapter = getattr(request.app.state, "email_adapter", None) if request else None
+        recipient = settings.admin_notification_email
+        if adapter and recipient:
+            subject = f"Support ticket created for order {booking.booking_id}"
+            body_lines = [
+                f"Order: {booking.booking_id}",
+                f"Score: {score}",
+            ]
+            if client and client.email:
+                body_lines.append(f"Client: {client.email}")
+            if comment:
+                body_lines.append("Comment: " + comment)
+            try:
+                await adapter.send_email(recipient=recipient, subject=subject, body="\n".join(body_lines))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "nps_admin_notification_failed",
+                    extra={"extra": {"order_id": booking.booking_id, "reason": type(exc).__name__}},
+                )
+
+    await session.commit()
+
+    if ticket:
+        message = "Thanks for your feedback. Our support team will reach out to resolve this."  # noqa: E501
+    else:
+        message = "Thanks for your feedback! If you loved the service, feel free to share a Google review."
+    return HTMLResponse(_render_message("Thanks for your feedback", message))
 
 
 def _build_pdf(lines: list[str]) -> bytes:

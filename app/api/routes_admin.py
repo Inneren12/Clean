@@ -43,10 +43,12 @@ from app.domain.invoices import statuses as invoice_statuses
 from app.domain.invoices.db_models import Invoice
 from app.domain.leads import statuses as lead_statuses
 from app.domain.leads.db_models import Lead, ReferralCredit
+from app.domain.nps.db_models import SupportTicket
 from app.domain.leads.service import grant_referral_credit
 from app.domain.leads.schemas import AdminLeadResponse, AdminLeadStatusUpdateRequest, admin_lead_from_model
 from app.domain.leads.statuses import assert_valid_transition, is_valid_status
 from app.domain.notifications import email_service
+from app.domain.nps import schemas as nps_schemas, service as nps_service
 from app.domain.pricing.config_loader import load_pricing_config
 from app.domain.reason_logs import schemas as reason_schemas
 from app.domain.reason_logs import service as reason_service
@@ -928,6 +930,7 @@ async def reschedule_booking(
 async def complete_booking(
     booking_id: str,
     request: booking_schemas.BookingCompletionRequest,
+    http_request: Request,
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
 ):
@@ -939,6 +942,31 @@ async def complete_booking(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if booking is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+
+    try:
+        lead = await session.get(Lead, booking.lead_id) if booking.lead_id else None
+        adapter = getattr(http_request.app.state, "email_adapter", None) if http_request else None
+        if lead and lead.email:
+            token = nps_service.issue_nps_token(
+                booking.booking_id,
+                client_id=booking.client_id,
+                email=lead.email,
+                secret=settings.client_portal_secret,
+            )
+            base_url = settings.public_base_url.rstrip("/") if settings.public_base_url else str(http_request.base_url).rstrip("/")
+            survey_link = f"{base_url}/nps/{booking.booking_id}?token={token}"
+            await email_service.send_nps_survey_email(
+                session=session,
+                adapter=adapter,
+                booking=booking,
+                lead=lead,
+                survey_link=survey_link,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "nps_email_failed",
+            extra={"extra": {"order_id": booking.booking_id, "reason": type(exc).__name__}},
+        )
 
     return booking_schemas.BookingResponse(
         booking_id=booking.booking_id,
@@ -957,6 +985,20 @@ async def complete_booking(
 def _invoice_response(invoice: Invoice) -> invoice_schemas.InvoiceResponse:
     data = invoice_service.build_invoice_response(invoice)
     return invoice_schemas.InvoiceResponse(**data)
+
+
+def _ticket_response(ticket: SupportTicket) -> nps_schemas.TicketResponse:
+    return nps_schemas.TicketResponse(
+        id=ticket.id,
+        order_id=ticket.order_id,
+        client_id=ticket.client_id,
+        status=ticket.status,
+        priority=ticket.priority,
+        subject=ticket.subject,
+        body=ticket.body,
+        created_at=ticket.created_at,
+        updated_at=ticket.updated_at,
+    )
 
 
 def _invoice_list_item(invoice: Invoice) -> invoice_schemas.InvoiceListItem:
@@ -1918,3 +1960,30 @@ async def _record_manual_invoice_payment(
         invoice=_invoice_response(refreshed_invoice),
         payment=payment_data,
     )
+
+
+@router.get("/api/admin/tickets", response_model=nps_schemas.TicketListResponse)
+async def list_support_tickets(
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_admin),
+) -> nps_schemas.TicketListResponse:
+    tickets = await nps_service.list_tickets(session)
+    return nps_schemas.TicketListResponse(tickets=[_ticket_response(ticket) for ticket in tickets])
+
+
+@router.patch("/api/admin/tickets/{ticket_id}", response_model=nps_schemas.TicketResponse)
+async def update_support_ticket(
+    ticket_id: str,
+    payload: nps_schemas.TicketUpdateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_admin),
+) -> nps_schemas.TicketResponse:
+    try:
+        ticket = await nps_service.update_ticket_status(session, ticket_id, payload.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if ticket is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
+    await session.commit()
+    await session.refresh(ticket)
+    return _ticket_response(ticket)
