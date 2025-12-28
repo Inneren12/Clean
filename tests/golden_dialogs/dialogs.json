@@ -1,0 +1,289 @@
+[
+  {
+    "id": "standard-quote-2x1",
+    "description": "Single-turn standard quote returns price stage with base estimate.",
+    "turns": [
+      {
+        "user": "Need a quote for 2 bed 1 bath standard cleaning",
+        "expect": {
+          "intent": "QUOTE",
+          "stage": "price",
+          "missing_fields": [],
+          "fields": {"beds": 2, "baths": 1.0, "cleaning_type": "standard"},
+          "estimate": {"total_before_tax": 105.0, "time_on_site_hours": 3.0, "team_size": 1},
+          "reply_contains": "$105",
+          "handoff_required": false
+        }
+      }
+    ]
+  },
+  {
+    "id": "deep-addons-3x2",
+    "description": "Deep clean with oven and fridge produces add-on costs and price stage.",
+    "turns": [
+      {
+        "user": "3 bed 2 bath deep clean with oven and fridge",
+        "expect": {
+          "intent": "OTHER",
+          "stage": "price",
+          "missing_fields": [],
+          "fields": {
+            "beds": 3,
+            "baths": 2.0,
+            "cleaning_type": "deep",
+            "add_ons": {"oven": true, "fridge": true}
+          },
+          "estimate": {"total_before_tax": 225.0, "time_on_site_hours": 2.5, "team_size": 2},
+          "reply_contains": "$225",
+          "handoff_required": false
+        }
+      }
+    ]
+  },
+  {
+    "id": "move-out-grease",
+    "description": "Move-out cleaning with heavy grease stays within price stage and includes surcharge.",
+    "turns": [
+      {
+        "user": "Move-out clean 1 bed 1 bath heavy grease",
+        "expect": {
+          "intent": "OTHER",
+          "stage": "price",
+          "missing_fields": [],
+          "fields": {
+            "beds": 1,
+            "baths": 1.0,
+            "cleaning_type": "move_out_empty",
+            "heavy_grease": true
+          },
+          "estimate": {"total_before_tax": 140.0, "time_on_site_hours": 4.0, "team_size": 1},
+          "reply_contains": "$140",
+          "handoff_required": false
+        }
+      }
+    ]
+  },
+  {
+    "id": "weekly-windows-balcony",
+    "description": "Weekly standard service with windows and balcony add-ons applies recurring discount and add-ons.",
+    "turns": [
+      {
+        "user": "Need weekly cleaning 2 bed 2 bath standard with windows and balcony",
+        "expect": {
+          "intent": "OTHER",
+          "stage": "price",
+          "missing_fields": [],
+          "fields": {
+            "beds": 2,
+            "baths": 2.0,
+            "cleaning_type": "standard",
+            "frequency": "weekly",
+            "add_ons": {"windows_up_to_5": true, "balcony": true}
+          },
+          "estimate": {"total_before_tax": 165.25, "time_on_site_hours": 3.5, "team_size": 1},
+          "reply_contains": "$165",
+          "handoff_required": false
+        }
+      }
+    ]
+  },
+  {
+    "id": "deep-multifloor",
+    "description": "Deep clean across multiple floors keeps multi-floor surcharge and oven add-on.",
+    "turns": [
+      {
+        "user": "Deep clean 4 bed 3 bath with stairs and oven",
+        "expect": {
+          "intent": "OTHER",
+          "stage": "price",
+          "missing_fields": [],
+          "fields": {
+            "beds": 4,
+            "baths": 3.0,
+            "cleaning_type": "deep",
+            "multi_floor": true,
+            "add_ons": {"oven": true}
+          },
+          "estimate": {"total_before_tax": 275.0, "time_on_site_hours": 3.5, "team_size": 2},
+          "reply_contains": "$275",
+          "handoff_required": false
+        }
+      }
+    ]
+  },
+  {
+    "id": "move-in-confirm-contact",
+    "description": "Move-in price then confirmation transitions to contact stage.",
+    "turns": [
+      {
+        "user": "Move in clean 2 bed 1 bath",
+        "expect": {
+          "intent": "OTHER",
+          "stage": "price",
+          "missing_fields": [],
+          "fields": {"beds": 2, "baths": 1.0, "cleaning_type": "move_in_empty"},
+          "estimate": {"total_before_tax": 157.5, "time_on_site_hours": 4.5, "team_size": 1},
+          "reply_contains": "$158",
+          "handoff_required": false
+        }
+      },
+      {
+        "user": "confirm",
+        "expect": {
+          "intent": "OTHER",
+          "stage": "contact",
+          "missing_fields": [],
+          "fields": {"beds": 2, "baths": 1.0, "cleaning_type": "move_in_empty"},
+          "estimate": {"total_before_tax": 157.5, "time_on_site_hours": 4.5, "team_size": 1},
+          "reply_contains": "Perfect! Name and phone?",
+          "handoff_required": false
+        }
+      }
+    ]
+  },
+  {
+    "id": "collect-then-price",
+    "description": "Missing bathroom count triggers collection step before pricing.",
+    "turns": [
+      {
+        "user": "Need a price for 3 bed",
+        "expect": {
+          "intent": "QUOTE",
+          "stage": "collect",
+          "missing_fields": ["baths"],
+          "fields": {"beds": 3, "awaiting_field": "baths", "cleaning_type": "standard"},
+          "proposed_question_contains": "Bathrooms?",
+          "handoff_required": false
+        }
+      },
+      {
+        "user": "2 bath",
+        "expect": {
+          "intent": "OTHER",
+          "stage": "price",
+          "missing_fields": [],
+          "fields": {"beds": 3, "baths": 2.0, "cleaning_type": "standard"},
+          "estimate": {"total_before_tax": 140.0, "time_on_site_hours": 4.0, "team_size": 1},
+          "reply_contains": "$140",
+          "handoff_required": false
+        }
+      }
+    ]
+  },
+  {
+    "id": "renovation-handoff",
+    "description": "Red-flag keywords trigger specialist handoff.",
+    "turns": [
+      {
+        "user": "Post renovation cleaning with construction dust for 2 bed 1 bath",
+        "expect": {
+          "intent": "OTHER",
+          "missing_fields": [],
+          "fields": {"beds": 2, "baths": 1.0, "cleaning_type": "standard"},
+          "reply_contains": "specialist follow up",
+          "handoff_required": true
+        }
+      }
+    ]
+  },
+  {
+    "id": "deep-price-explanation",
+    "description": "User asks for price explanation after seeing deep clean estimate.",
+    "turns": [
+      {
+        "user": "2 bed 1 bath deep clean",
+        "expect": {
+          "intent": "OTHER",
+          "stage": "price",
+          "missing_fields": [],
+          "fields": {"beds": 2, "baths": 1.0, "cleaning_type": "deep"},
+          "estimate": {"total_before_tax": 140.0, "time_on_site_hours": 4.0, "team_size": 1},
+          "reply_contains": "$140",
+          "handoff_required": false
+        }
+      },
+      {
+        "user": "why this price?",
+        "expect": {
+          "intent": "QUOTE",
+          "stage": "price",
+          "missing_fields": [],
+          "fields": {"beds": 2, "baths": 1.0, "cleaning_type": "deep"},
+          "estimate": {"total_before_tax": 140.0, "time_on_site_hours": 4.0, "team_size": 1},
+          "reply_contains": "Here's why:",
+          "handoff_required": false
+        }
+      }
+    ]
+  },
+  {
+    "id": "linens-steam",
+    "description": "Linens and steam add-ons stay in parsed fields and estimate breakdown.",
+    "turns": [
+      {
+        "user": "Standard clean 3 bed 2 bath with linens and steam armchair 2",
+        "expect": {
+          "intent": "OTHER",
+          "stage": "price",
+          "missing_fields": [],
+          "fields": {
+            "beds": 3,
+            "baths": 2.0,
+            "cleaning_type": "standard",
+            "add_ons": {"linen_beds": 3, "steam_armchair": 1}
+          },
+          "estimate": {"total_before_tax": 215.0, "time_on_site_hours": 4.0, "team_size": 1},
+          "reply_contains": "$215",
+          "handoff_required": false
+        }
+      }
+    ]
+  },
+  {
+    "id": "multifloor-two-floors",
+    "description": "Multi-floor surcharge applied for large home.",
+    "turns": [
+      {
+        "user": "Quote for 4 bed 2.5 bath across two floors",
+        "expect": {
+          "intent": "QUOTE",
+          "stage": "price",
+          "missing_fields": [],
+          "fields": {"beds": 4, "baths": 2.5, "cleaning_type": "standard", "multi_floor": true},
+          "estimate": {"total_before_tax": 210.0, "time_on_site_hours": 3.0, "team_size": 2},
+          "reply_contains": "$210",
+          "handoff_required": false
+        }
+      }
+    ]
+  },
+  {
+    "id": "awaiting-numeric-bath-followup",
+    "description": "Awaiting bath count is filled by numeric-only reply.",
+    "turns": [
+      {
+        "user": "Looking for cleaning 4 bed",
+        "expect": {
+          "intent": "OTHER",
+          "stage": "collect",
+          "missing_fields": ["baths"],
+          "fields": {"beds": 4, "awaiting_field": "baths", "cleaning_type": "standard"},
+          "proposed_question_contains": "Bathrooms?",
+          "handoff_required": false
+        }
+      },
+      {
+        "user": "1.5",
+        "expect": {
+          "intent": "OTHER",
+          "stage": "price",
+          "missing_fields": [],
+          "fields": {"beds": 4, "baths": 1.5, "cleaning_type": "standard"},
+          "estimate": {"total_before_tax": 157.5, "time_on_site_hours": 4.5, "team_size": 1},
+          "reply_contains": "$158",
+          "handoff_required": false
+        }
+      }
+    ]
+  }
+]
