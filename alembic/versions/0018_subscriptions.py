@@ -20,6 +20,9 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    is_sqlite = bind.dialect.name == "sqlite"
+
     op.create_table(
         "subscriptions",
         sa.Column("subscription_id", sa.String(length=36), primary_key=True),
@@ -43,18 +46,58 @@ def upgrade() -> None:
         sa.UniqueConstraint("subscription_id", "addon_code", name="uq_subscription_addons_code"),
     )
 
-    op.add_column("bookings", sa.Column("subscription_id", sa.String(length=36), sa.ForeignKey("subscriptions.subscription_id"), nullable=True))
-    op.add_column("bookings", sa.Column("scheduled_date", sa.Date(), nullable=True))
-    op.create_index("ix_bookings_subscription_id", "bookings", ["subscription_id"])
-    op.create_unique_constraint(
-        "uq_bookings_subscription_schedule", "bookings", ["subscription_id", "scheduled_date"]
-    )
+    if is_sqlite:
+        with op.batch_alter_table("bookings") as batch_op:
+            batch_op.add_column(
+                sa.Column(
+                    "subscription_id",
+                    sa.String(length=36),
+                    sa.ForeignKey(
+                        "subscriptions.subscription_id",
+                        name="fk_bookings_subscription_id_subscriptions",
+                    ),
+                    nullable=True,
+                )
+            )
+            batch_op.add_column(sa.Column("scheduled_date", sa.Date(), nullable=True))
+            batch_op.create_index("ix_bookings_subscription_id", ["subscription_id"])
+            batch_op.create_unique_constraint(
+                "uq_bookings_subscription_schedule", ["subscription_id", "scheduled_date"]
+            )
+    else:
+        op.add_column(
+            "bookings",
+            sa.Column(
+                "subscription_id",
+                sa.String(length=36),
+                sa.ForeignKey(
+                    "subscriptions.subscription_id",
+                    name="fk_bookings_subscription_id_subscriptions",
+                ),
+                nullable=True,
+            ),
+        )
+        op.add_column("bookings", sa.Column("scheduled_date", sa.Date(), nullable=True))
+        op.create_index("ix_bookings_subscription_id", "bookings", ["subscription_id"])
+        op.create_unique_constraint(
+            "uq_bookings_subscription_schedule", "bookings", ["subscription_id", "scheduled_date"]
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint("uq_bookings_subscription_schedule", "bookings", type_="unique")
-    op.drop_index("ix_bookings_subscription_id", table_name="bookings")
-    op.drop_column("bookings", "scheduled_date")
-    op.drop_column("bookings", "subscription_id")
+    bind = op.get_bind()
+    is_sqlite = bind.dialect.name == "sqlite"
+
+    if is_sqlite:
+        with op.batch_alter_table("bookings") as batch_op:
+            batch_op.drop_constraint("uq_bookings_subscription_schedule", type_="unique")
+            batch_op.drop_index("ix_bookings_subscription_id")
+            batch_op.drop_column("scheduled_date")
+            batch_op.drop_column("subscription_id")
+    else:
+        op.drop_constraint("uq_bookings_subscription_schedule", "bookings", type_="unique")
+        op.drop_index("ix_bookings_subscription_id", table_name="bookings")
+        op.drop_column("bookings", "scheduled_date")
+        op.drop_column("bookings", "subscription_id")
     op.drop_table("subscription_addons")
     op.drop_table("subscriptions")
