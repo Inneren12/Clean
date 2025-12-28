@@ -34,6 +34,10 @@ class BotStore(Protocol):
 
     async def create_case(self, payload: CasePayload) -> CaseRecord: ...
 
+    async def list_cases(self) -> List[CaseRecord]: ...
+
+    async def mark_handed_off(self, conversation_id: str) -> ConversationRecord: ...
+
 
 class InMemoryBotStore(BotStore):
     def __init__(self) -> None:
@@ -107,5 +111,17 @@ class InMemoryBotStore(BotStore):
             case_id = str(uuid.uuid4())
             record = CaseRecord(**payload.model_dump(), case_id=case_id, created_at=time.time())
             self._cases[case_id] = record
+            return record
+
+    async def list_cases(self) -> List[CaseRecord]:
+        async with self._lock:
+            return list(self._cases.values())
+
+    async def mark_handed_off(self, conversation_id: str) -> ConversationRecord:
+        async with self._lock:
+            record = self._conversations[conversation_id]
+            record.status = ConversationStatus.handed_off
+            record.updated_at = time.time()
+            self._conversations[conversation_id] = record
             return record
 
