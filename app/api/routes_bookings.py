@@ -31,11 +31,18 @@ async def get_slots(
     query: booking_schemas.SlotQuery = Depends(),
     session: AsyncSession = Depends(get_db_session),
 ) -> booking_schemas.SlotAvailabilityResponse:
-    slots = await booking_service.generate_slots(query.date, query.duration_minutes, session)
+    slot_result = await booking_service.suggest_slots(
+        query.date,
+        query.duration_minutes,
+        session,
+        time_window=query.time_window(),
+        service_type=query.service_type.value if query.service_type else None,
+    )
     return booking_schemas.SlotAvailabilityResponse(
         date=query.date,
         duration_minutes=query.duration_minutes,
-        slots=slots,
+        slots=slot_result.slots,
+        clarifier=slot_result.clarifier,
     )
 
 

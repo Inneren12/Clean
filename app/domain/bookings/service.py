@@ -19,6 +19,7 @@ from app.domain.notifications import email_service
 from app.domain.pricing.models import CleaningType
 from app.domain.leads.db_models import Lead
 from app.domain.leads.service import grant_referral_credit
+from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,14 @@ BUFFER_MINUTES = 30
 BLOCKING_STATUSES = {"PENDING", "CONFIRMED"}
 LOCAL_TZ = ZoneInfo("America/Edmonton")
 DEFAULT_TEAM_NAME = "Default Team"
+MIN_SLOTS_SUGGESTED = 2
+MAX_SLOTS_SUGGESTED = 3
+
+
+@dataclass(frozen=True)
+class DurationRule:
+    min_minutes: int
+    max_minutes: int
 BOOKING_TRANSITIONS = {
     "PENDING": {"CONFIRMED", "CANCELLED"},
     "CONFIRMED": {"DONE", "CANCELLED"},
@@ -44,10 +53,60 @@ class DepositDecision:
     deposit_cents: int | None = None
 
 
+@dataclass
+class TimeWindowPreference:
+    start_hour: int
+    end_hour: int
+
+    def bounds(self, target_date: date) -> tuple[datetime, datetime]:
+        start_local = datetime.combine(target_date, time(hour=self.start_hour, tzinfo=LOCAL_TZ))
+        end_local = datetime.combine(target_date, time(hour=self.end_hour, tzinfo=LOCAL_TZ))
+        return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+
+
+@dataclass
+class SlotSuggestionRequest:
+    date: date
+    duration_minutes: int
+    time_window: TimeWindowPreference | None = None
+    service_type: str | None = None
+
+
+@dataclass
+class SlotSuggestionResult:
+    slots: list[datetime]
+    clarifier: str | None = None
+
+
 def round_duration_minutes(time_on_site_hours: float) -> int:
     minutes = max(time_on_site_hours, 0) * 60
     rounded_steps = math.ceil(minutes / SLOT_STEP_MINUTES)
     return max(rounded_steps * SLOT_STEP_MINUTES, SLOT_STEP_MINUTES)
+
+
+SERVICE_DURATION_RULES: dict[str, DurationRule] = {
+    CleaningType.standard.value: DurationRule(min_minutes=60, max_minutes=240),
+    CleaningType.deep.value: DurationRule(min_minutes=90, max_minutes=360),
+    CleaningType.move_out_empty.value: DurationRule(min_minutes=150, max_minutes=420),
+    CleaningType.move_in_empty.value: DurationRule(min_minutes=150, max_minutes=420),
+}
+DEFAULT_DURATION_RULE = DurationRule(
+    min_minutes=SLOT_STEP_MINUTES,
+    max_minutes=(WORK_END_HOUR - WORK_START_HOUR) * 60,
+)
+
+
+def apply_duration_constraints(duration_minutes: int, service_type: str | CleaningType | None = None) -> int:
+    key = None
+    if isinstance(service_type, CleaningType):
+        key = service_type.value
+    elif isinstance(service_type, str):
+        key = service_type
+
+    rule = SERVICE_DURATION_RULES.get(key, DEFAULT_DURATION_RULE)
+    bounded = max(duration_minutes, rule.min_minutes, SLOT_STEP_MINUTES)
+    bounded = min(bounded, rule.max_minutes, DEFAULT_DURATION_RULE.max_minutes)
+    return bounded
 
 
 def _normalize_datetime(dt: datetime) -> datetime:
@@ -185,6 +244,85 @@ async def generate_slots(
             slots.append(candidate)
         candidate += timedelta(minutes=SLOT_STEP_MINUTES)
     return slots
+
+
+class SlotProvider:
+    async def suggest_slots(
+        self,
+        request: SlotSuggestionRequest,
+        session: AsyncSession,
+        team_id: int | None = None,
+    ) -> SlotSuggestionResult:
+        raise NotImplementedError
+
+
+class StubSlotProvider(SlotProvider):
+    def __init__(self, max_suggestions: int = MAX_SLOTS_SUGGESTED, min_suggestions: int = MIN_SLOTS_SUGGESTED):
+        self.max_suggestions = max_suggestions
+        self.min_suggestions = min_suggestions
+
+    async def suggest_slots(
+        self,
+        request: SlotSuggestionRequest,
+        session: AsyncSession,
+        team_id: int | None = None,
+    ) -> SlotSuggestionResult:
+        slots = await generate_slots(request.date, request.duration_minutes, session, team_id=team_id)
+        slots = sorted(slots)
+
+        selected = self._filter_by_window(slots, request.time_window)
+        clarifier: str | None = None
+        if request.time_window and len(selected) < self.min_suggestions:
+            clarifier = "Limited availability in that window; can we look at nearby times the same day?"
+            fallback = [slot for slot in slots if slot not in selected]
+            selected = (selected + fallback)[: self.max_suggestions]
+        else:
+            selected = selected[: self.max_suggestions]
+
+        if not selected:
+            clarifier = clarifier or "No open slots on that day. Would you like another date?"
+
+        return SlotSuggestionResult(slots=selected, clarifier=clarifier)
+
+    def _filter_by_window(
+        self, slots: list[datetime], time_window: TimeWindowPreference | None
+    ) -> list[datetime]:
+        if not time_window:
+            return slots
+        start, end = time_window.bounds(slots[0].astimezone(LOCAL_TZ).date()) if slots else time_window.bounds(date.today())
+        filtered: list[datetime] = []
+        for slot in slots:
+            if start <= slot < end:
+                filtered.append(slot)
+        return filtered
+
+
+def resolve_slot_provider() -> SlotProvider:
+    mode = (getattr(settings, "slot_provider_mode", "stub") or "stub").lower()
+    if mode == "stub":
+        return StubSlotProvider()
+    logger.warning("Unknown slot provider mode %s; using stub", mode)
+    return StubSlotProvider()
+
+
+async def suggest_slots(
+    target_date: date,
+    duration_minutes: int,
+    session: AsyncSession,
+    *,
+    time_window: TimeWindowPreference | None = None,
+    service_type: str | None = None,
+    team_id: int | None = None,
+    provider: SlotProvider | None = None,
+) -> SlotSuggestionResult:
+    active_provider = provider or resolve_slot_provider()
+    request = SlotSuggestionRequest(
+        date=target_date,
+        duration_minutes=duration_minutes,
+        time_window=time_window,
+        service_type=service_type,
+    )
+    return await active_provider.suggest_slots(request, session, team_id=team_id)
 
 
 async def is_slot_available(
