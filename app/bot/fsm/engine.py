@@ -280,10 +280,9 @@ class BotFsm:
             )
 
         # Soft interrupts (status/faq): treat as interrupts whenever ongoing,
-        # UNLESS user provided entities (which means they're continuing the flow, not interrupting)
-        # Fallback faq intent with entities should allow flow progression
-        is_fallback_faq = incoming_intent == Intent.faq and "fallback to faq" in intent_result.reasons
-        if incoming_intent in SOFT_INTERRUPTS and ongoing and not (has_entities and is_fallback_faq):
+        # UNLESS user provided entities (which means they're continuing the flow)
+        # If has_entities: continue normal flow; else: soft-interrupt
+        if incoming_intent in SOFT_INTERRUPTS and ongoing and not has_entities:
             active_intent = self.state.current_intent
             current_step = self.state.fsm_step or FsmStep.routing
             steps = self._steps_for_intent(active_intent)
