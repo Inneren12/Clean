@@ -13,7 +13,7 @@ Set the following environment variables to enable Stripe-based invoice payments:
 
 1. The public invoice page (`/i/{token}`) calls `POST /i/{token}/pay` to create a Stripe Checkout Session for the outstanding balance.
 2. The API returns a redirect URL so the customer can complete payment in Stripe Checkout.
-3. Stripe sends webhooks to `POST /stripe/webhook` for `checkout.session.completed`, `payment_intent.succeeded`, and `payment_intent.payment_failed` events. The webhook is idempotent by `event.id` and deduplicates payments by Stripe `payment_intent` IDs.
+3. Stripe sends webhooks to `POST /stripe/webhook` for `checkout.session.completed`, `payment_intent.succeeded`, and `payment_intent.payment_failed` events. The webhook is idempotent by `event.id` and deduplicates payments by Stripe `payment_intent` IDs. `checkout.session.completed` events without a `payment_intent` are ignored.
 4. Successful webhook events create `invoice_payments` records with `provider="stripe"` and update invoice status to `PARTIAL`/`PAID` in a single transaction.
 
 ## Local webhook testing
@@ -32,3 +32,4 @@ Set the following environment variables to enable Stripe-based invoice payments:
 - Secrets must come from the environment or secret storage; never hardcode keys in code or tests.
 - Webhook processing logs `succeeded`, `ignored`, and `error` outcomes to aid observability.
 - Payments are idempotent both by Stripe event ID (via the `stripe_events` table) and by `provider_ref` (Stripe payment intent) to avoid duplicate `invoice_payments` rows.
+- Invoice checkout uses the invoice currency uppercased for display and lowercased for the Stripe API. VOID invoices cannot be paid.

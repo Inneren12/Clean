@@ -229,7 +229,7 @@ async def create_invoice_payment(
         stripe_client=stripe_client,
         secret_key=settings.stripe_secret_key,
         amount_cents=outstanding,
-        currency=invoice.currency,
+        currency=invoice.currency.lower(),
         success_url=settings.stripe_invoice_success_url.replace("{INVOICE_ID}", invoice.invoice_id),
         cancel_url=settings.stripe_invoice_cancel_url.replace("{INVOICE_ID}", invoice.invoice_id),
         metadata={"invoice_id": invoice.invoice_id, "invoice_number": invoice.invoice_number},

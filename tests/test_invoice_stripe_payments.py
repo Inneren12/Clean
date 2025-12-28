@@ -37,6 +37,7 @@ async def _seed_invoice(
 
 def test_create_payment_session(client, async_session_maker, monkeypatch):
     monkeypatch.setattr(settings, "stripe_secret_key", "sk_test")
+    app.state.stripe_client = SimpleNamespace()
     invoice_id, token = asyncio.run(_seed_invoice(async_session_maker, total_cents=2400))
 
     def _fake_checkout_session(**kwargs):

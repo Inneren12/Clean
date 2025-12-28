@@ -33,7 +33,7 @@
 ## Sending invoices
 - Endpoint: `POST /v1/admin/invoices/{invoice_id}/send`
 - Generates/rotates a long URL-safe public token and emails the customer a link to `/i/{token}` (PDF link `/i/{token}.pdf`).
-- The database stores only an HMAC-SHA256 hash of the token, keyed by a secret (`INVOICE_PUBLIC_TOKEN_SECRET`); the raw token only appears in the emailed URL/response.
+- The database stores only an HMAC-SHA256 hash of the token, keyed by a secret (`INVOICE_PUBLIC_TOKEN_SECRET`); the raw token only appears in the emailed URL/response. If the secret is not set, a deterministic fallback derived from the application name is used.
 - If the invoice is still `DRAFT`, sending transitions it to `SENT`.
 - Token metadata tracks the last send time; rotate by re-sending.
 - Public links intentionally avoid exposing customer or invoice IDs; do not include PII in URLs.
