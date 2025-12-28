@@ -1,4 +1,5 @@
 import html
+import json
 import logging
 import secrets
 from datetime import date, datetime, time, timezone
@@ -638,6 +639,12 @@ async def admin_case_detail(
     state_data = conversation_data.get("state") or {}
     if isinstance(state_data, dict):
         contact_fields = state_data.get("filled_fields") or {}
+        if not isinstance(contact_fields, dict):
+            contact_fields = {}
+    contact_data = contact_fields.get("contact") if isinstance(contact_fields, dict) else None
+    contact_data = contact_data if isinstance(contact_data, dict) else {}
+    phone = contact_fields.get("phone") or contact_data.get("phone")
+    email = contact_fields.get("email") or contact_data.get("email")
 
     transcript = payload.get("messages") or []
     if not transcript and getattr(case, "source_conversation_id", None):
@@ -675,13 +682,16 @@ async def admin_case_detail(
         transcript_html = _render_empty("No transcript available")
 
     quick_actions: list[str] = []
-    for field in ("phone", "email"):
-        value = contact_fields.get(field)
+    contact_quick_actions = {
+        "phone": phone,
+        "email": email,
+    }
+    for field, value in contact_quick_actions.items():
         if value:
             quick_actions.append(
                 """
-                <button class="btn" onclick="navigator.clipboard.writeText('{value}')">Copy {label}</button>
-                """.format(value=html.escape(str(value)), label=field.title())
+                <button class="btn" onclick="navigator.clipboard.writeText({value})">Copy {label}</button>
+                """.format(value=json.dumps(str(value)), label=field.title())
             )
     quick_actions.append("<button class=\"btn\" onclick=\"alert('Mark contacted placeholder')\">Mark contacted</button>")
 
