@@ -48,6 +48,9 @@ from app.domain.pricing.config_loader import load_pricing_config
 from app.domain.reason_logs import schemas as reason_schemas
 from app.domain.reason_logs import service as reason_service
 from app.domain.retention import cleanup_retention
+from app.domain.subscriptions import schemas as subscription_schemas
+from app.domain.subscriptions import service as subscription_service
+from app.domain.subscriptions.db_models import Subscription
 from app.infra.bot_store import BotStore
 from app.settings import settings
 
@@ -464,6 +467,49 @@ async def run_retention_cleanup(
     _admin: AdminIdentity = Depends(require_admin),
 ) -> dict[str, int]:
     return await cleanup_retention(session)
+
+
+def _admin_subscription_response(model: Subscription) -> subscription_schemas.AdminSubscriptionListItem:
+    return subscription_schemas.AdminSubscriptionListItem(
+        subscription_id=model.subscription_id,
+        client_id=model.client_id,
+        status=model.status,
+        frequency=model.frequency,
+        next_run_at=model.next_run_at,
+        base_service_type=model.base_service_type,
+        base_price=model.base_price,
+        created_at=model.created_at,
+    )
+
+
+@router.get(
+    "/v1/admin/subscriptions",
+    response_model=list[subscription_schemas.AdminSubscriptionListItem],
+)
+async def list_subscriptions_admin(
+    identity: AdminIdentity = Depends(require_admin), session: AsyncSession = Depends(get_db_session)
+) -> list[subscription_schemas.AdminSubscriptionListItem]:
+    stmt = select(Subscription).order_by(Subscription.created_at.desc())
+    result = await session.execute(stmt)
+    subscriptions = result.scalars().all()
+    return [_admin_subscription_response(sub) for sub in subscriptions]
+
+
+@router.post(
+    "/v1/admin/subscriptions/run",
+    response_model=subscription_schemas.SubscriptionRunResult,
+)
+async def run_subscriptions(
+    request: Request,
+    identity: AdminIdentity = Depends(require_admin),
+    session: AsyncSession = Depends(get_db_session),
+) -> subscription_schemas.SubscriptionRunResult:
+    adapter = getattr(request.app.state, "email_adapter", None)
+    result = await subscription_service.generate_due_orders(session, email_adapter=adapter)
+    await session.commit()
+    return subscription_schemas.SubscriptionRunResult(
+        processed=result.processed, created_orders=result.created_orders
+    )
 
 
 def _normalize_range(
