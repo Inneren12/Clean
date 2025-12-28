@@ -59,7 +59,7 @@ def upgrade() -> None:
         sa.Column("run_id", sa.String(length=36), primary_key=True),
         sa.Column("order_id", sa.String(length=36), sa.ForeignKey("bookings.booking_id"), nullable=False),
         sa.Column("template_id", sa.Integer(), sa.ForeignKey("checklist_templates.template_id"), nullable=False),
-        sa.Column("status", sa.String(length=32), nullable=False, server_default="in_progress"),
+        sa.Column("status", sa.String(length=32), nullable=False, server_default=sa.text("'in_progress'")),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

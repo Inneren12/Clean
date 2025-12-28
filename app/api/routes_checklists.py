@@ -119,7 +119,10 @@ async def delete_template(
     session: AsyncSession = Depends(get_db_session),
     identity=Depends(require_admin),
 ) -> None:
-    deleted = await checklist_service.delete_template(session, template_id)
+    try:
+        deleted = await checklist_service.delete_template(session, template_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
 
