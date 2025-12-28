@@ -1,14 +1,17 @@
+import html
 import logging
 import secrets
 from datetime import date, datetime, time, timezone
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.dependencies import get_bot_store
 from app.domain.analytics import schemas as analytics_schemas
 from app.domain.analytics.service import (
     EventType,
@@ -25,6 +28,7 @@ from app.domain.bookings import schemas as booking_schemas
 from app.domain.bookings import service as booking_service
 from app.domain.export_events.db_models import ExportEvent
 from app.domain.export_events.schemas import ExportEventResponse
+from app.domain.leads import statuses as lead_statuses
 from app.domain.leads.db_models import Lead, ReferralCredit
 from app.domain.leads.service import grant_referral_credit
 from app.domain.leads.schemas import AdminLeadResponse, AdminLeadStatusUpdateRequest, admin_lead_from_model
@@ -32,11 +36,25 @@ from app.domain.leads.statuses import assert_valid_transition, is_valid_status
 from app.domain.notifications import email_service
 from app.domain.pricing.config_loader import load_pricing_config
 from app.domain.retention import cleanup_retention
+from app.infra.bot_store import BotStore
 from app.settings import settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 security = HTTPBasic(auto_error=False)
+
+
+def _format_dt(value: datetime | None) -> str:
+    if value is None:
+        return "-"
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _format_ts(value: float | None) -> str:
+    if value is None:
+        return "-"
+    dt = datetime.fromtimestamp(value, tz=timezone.utc)
+    return _format_dt(dt)
 
 
 async def verify_admin_or_dispatcher(credentials: HTTPBasicCredentials | None = Depends(security)) -> str:
@@ -74,6 +92,193 @@ async def require_admin(role: str = Depends(verify_admin_or_dispatcher)) -> str:
     if role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
     return role
+
+
+def _filter_badge(filter_key: str, active_filters: set[str]) -> str:
+    labels = {
+        "needs_human": "Needs human",
+        "waiting_for_contact": "Waiting for contact",
+        "order_created": "Order created",
+    }
+    label = labels.get(filter_key, filter_key)
+    is_active = filter_key in active_filters
+    href = "" if is_active else f"?filters={filter_key}"
+    class_name = "badge" + (" badge-active" if is_active else "")
+    return f'<a class="{class_name}" href="{href}">{html.escape(label)}</a>'
+
+
+def _render_filters(active_filters: set[str]) -> str:
+    parts = [
+        '<div class="filters">',
+        "<strong>Quick filters:</strong>",
+        _filter_badge("needs_human", active_filters),
+        _filter_badge("waiting_for_contact", active_filters),
+        _filter_badge("order_created", active_filters),
+        '<a class="badge" href="/v1/admin/observability">Clear</a>',
+        "</div>",
+    ]
+    return "".join(parts)
+
+
+def _render_section(title: str, body: str) -> str:
+    return f"<section><h2>{html.escape(title)}</h2>{body}</section>"
+
+
+def _render_empty(message: str) -> str:
+    return f"<p class=\"muted\">{html.escape(message)}</p>"
+
+
+def _render_leads(leads: Iterable[Lead], active_filters: set[str]) -> str:
+    cards: list[str] = []
+    for lead in leads:
+        tags: set[str] = set()
+        bookings_count = len(getattr(lead, "bookings", []))
+        if lead.status == lead_statuses.LEAD_STATUS_NEW:
+            tags.add("waiting_for_contact")
+        if bookings_count:
+            tags.add("order_created")
+
+        if active_filters and not active_filters.intersection(tags):
+            continue
+
+        contact_bits = [html.escape(lead.phone)]
+        if lead.email:
+            contact_bits.append(html.escape(lead.email))
+        contact = " · ".join(contact_bits)
+        tag_text = " ".join(f"<span class=\"tag\">{t}</span>" for t in sorted(tags))
+        cards.append(
+            """
+            <div class="card">
+              <div class="card-row">
+                <div>
+                  <div class="title">{name}</div>
+                  <div class="muted">{contact}</div>
+                </div>
+                <div class="status">{status}</div>
+              </div>
+              <div class="card-row">
+                <div class="muted">Created {created}</div>
+                <div>{tags}</div>
+              </div>
+              <div class="muted">Notes: {notes}</div>
+            </div>
+            """.format(
+                name=html.escape(lead.name),
+                contact=contact,
+                status=html.escape(lead.status),
+                created=_format_dt(lead.created_at),
+                notes=html.escape(lead.notes or "-"),
+                tags=tag_text,
+            )
+        )
+    if not cards:
+        return _render_empty("No leads match the current filter.")
+    return "".join(cards)
+
+
+def _render_cases(cases: Iterable[object], active_filters: set[str]) -> str:
+    cards: list[str] = []
+    for case in cases:
+        tags = {"needs_human"}
+        if active_filters and not active_filters.intersection(tags):
+            continue
+        summary = getattr(case, "summary", "Escalated case") or "Escalated case"
+        reason = getattr(case, "reason", "-")
+        conversation_id = getattr(case, "source_conversation_id", None)
+        cards.append(
+            """
+            <div class="card">
+              <div class="card-row">
+                <div>
+                  <div class="title">{summary}</div>
+                  <div class="muted">Reason: {reason}</div>
+                </div>
+                <div class="muted">{created}</div>
+              </div>
+              <div class="card-row">
+                <a class="btn" href="/v1/admin/observability/cases/{case_id}">View detail</a>
+                <div class="muted">Conversation: {conversation}</div>
+              </div>
+            </div>
+            """.format(
+                summary=html.escape(summary),
+                reason=html.escape(reason),
+                created=_format_ts(getattr(case, "created_at", None)),
+                case_id=html.escape(getattr(case, "case_id", "")),
+                conversation=html.escape(conversation_id or "n/a"),
+            )
+        )
+    if not cards:
+        return _render_empty("No cases match the current filter.")
+    return "".join(cards)
+
+
+def _render_dialogs(
+    conversations: Iterable[object],
+    message_lookup: dict[str, list[object]],
+    active_filters: set[str],
+) -> str:
+    cards: list[str] = []
+    for conversation in conversations:
+        tags: set[str] = set()
+        status = getattr(conversation, "status", "")
+        if str(status).lower() == "handed_off":
+            tags.add("needs_human")
+
+        if active_filters and not active_filters.intersection(tags):
+            continue
+
+        messages = message_lookup.get(conversation.conversation_id, [])
+        last_message = messages[-1].text if messages else "No messages yet"
+        cards.append(
+            """
+            <div class="card">
+              <div class="card-row">
+                <div class="title">{conversation_id}</div>
+                <div class="status">{status}</div>
+              </div>
+              <div class="muted">Last message: {last_message}</div>
+              <div class="muted">Updated {updated_at}</div>
+            </div>
+            """.format(
+                conversation_id=html.escape(conversation.conversation_id),
+                status=html.escape(str(status)),
+                last_message=html.escape(last_message),
+                updated_at=_format_ts(getattr(conversation, "updated_at", None)),
+            )
+        )
+    if not cards:
+        return _render_empty("No dialogs match the current filter.")
+    return "".join(cards)
+
+
+def _wrap_page(content: str) -> str:
+    return f"""
+    <html>
+      <head>
+        <title>Admin Observability</title>
+        <style>
+          body {{ font-family: Arial, sans-serif; margin: 24px; background: #fafafa; }}
+          h1 {{ margin-bottom: 8px; }}
+          h2 {{ margin-top: 28px; margin-bottom: 12px; }}
+          .card {{ background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; margin-bottom: 10px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }}
+          .card-row {{ display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }}
+          .title {{ font-weight: 600; }}
+          .status {{ font-weight: 600; color: #2563eb; }}
+          .muted {{ color: #6b7280; font-size: 13px; }}
+          .filters {{ display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }}
+          .badge {{ padding: 4px 8px; border-radius: 999px; border: 1px solid #d1d5db; text-decoration: none; color: #111827; font-size: 13px; }}
+          .badge-active {{ background: #2563eb; color: #fff; border-color: #2563eb; }}
+          .btn {{ padding: 6px 10px; background: #111827; color: #fff; border-radius: 6px; text-decoration: none; font-size: 13px; }}
+          .tag {{ display: inline-block; background: #eef2ff; color: #4338ca; padding: 2px 6px; border-radius: 6px; font-size: 12px; margin-left: 4px; }}
+        </style>
+      </head>
+      <body>
+        <h1>Admin — Leads, Cases & Dialogs</h1>
+        {content}
+      </body>
+    </html>
+    """
 
 
 @router.get("/v1/admin/leads", response_model=List[AdminLeadResponse])
@@ -380,6 +585,137 @@ async def confirm_booking(
         deposit_status=booking.deposit_status,
         checkout_url=None,
     )
+
+
+@router.get("/v1/admin/observability", response_class=HTMLResponse)
+async def admin_observability(
+    filters: list[str] = Query(default=[]),
+    session: AsyncSession = Depends(get_db_session),
+    store: BotStore = Depends(get_bot_store),
+    role: str = Depends(verify_admin_or_dispatcher),
+) -> HTMLResponse:
+    active_filters = {value.lower() for value in filters if value}
+    lead_stmt = (
+        select(Lead)
+        .options(selectinload(Lead.bookings))
+        .order_by(Lead.created_at.desc())
+        .limit(200)
+    )
+    leads = (await session.execute(lead_stmt)).scalars().all()
+    cases = sorted(await store.list_cases(), key=lambda c: getattr(c, "created_at", 0), reverse=True)
+    conversations = sorted(
+        await store.list_conversations(), key=lambda c: getattr(c, "updated_at", 0), reverse=True
+    )
+    message_lookup: dict[str, list[object]] = {}
+    for conversation in conversations:
+        message_lookup[conversation.conversation_id] = await store.list_messages(conversation.conversation_id)
+
+    content = "".join(
+        [
+            _render_filters(active_filters),
+            _render_section("Cases", _render_cases(cases, active_filters)),
+            _render_section("Leads", _render_leads(leads, active_filters)),
+            _render_section("Dialogs", _render_dialogs(conversations, message_lookup, active_filters)),
+        ]
+    )
+    return HTMLResponse(_wrap_page(content))
+
+
+@router.get("/v1/admin/observability/cases/{case_id}", response_class=HTMLResponse)
+async def admin_case_detail(
+    case_id: str,
+    store: BotStore = Depends(get_bot_store),
+    role: str = Depends(verify_admin_or_dispatcher),
+) -> HTMLResponse:
+    cases = await store.list_cases()
+    case = next((item for item in cases if getattr(item, "case_id", None) == case_id), None)
+    if case is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found")
+
+    payload = getattr(case, "payload", {}) or {}
+    contact_fields = {}
+    conversation_data = payload.get("conversation") or {}
+    state_data = conversation_data.get("state") or {}
+    if isinstance(state_data, dict):
+        contact_fields = state_data.get("filled_fields") or {}
+
+    transcript = payload.get("messages") or []
+    if not transcript and getattr(case, "source_conversation_id", None):
+        messages = await store.list_messages(case.source_conversation_id)
+        transcript = [
+            {
+                "role": msg.role,
+                "text": msg.text,
+                "ts": msg.created_at,
+            }
+            for msg in messages
+        ]
+
+    transcript_html = "".join(
+        """
+        <div class="card">
+          <div class="card-row">
+            <div class="title">{role}</div>
+            <div class="muted">{ts}</div>
+          </div>
+          <div>{text}</div>
+        </div>
+        """.format(
+            role=html.escape(str(message.get("role", "") if isinstance(message, dict) else getattr(message, "role", ""))),
+            ts=_format_ts(
+                message.get("ts") if isinstance(message, dict) else getattr(message, "ts", getattr(message, "created_at", None))
+            ),
+            text=html.escape(
+                str(message.get("text", "")) if isinstance(message, dict) else str(getattr(message, "text", ""))
+            ),
+        )
+        for message in transcript
+    )
+    if not transcript_html:
+        transcript_html = _render_empty("No transcript available")
+
+    quick_actions: list[str] = []
+    for field in ("phone", "email"):
+        value = contact_fields.get(field)
+        if value:
+            quick_actions.append(
+                """
+                <button class="btn" onclick="navigator.clipboard.writeText('{value}')">Copy {label}</button>
+                """.format(value=html.escape(str(value)), label=field.title())
+            )
+    quick_actions.append("<button class=\"btn\" onclick=\"alert('Mark contacted placeholder')\">Mark contacted</button>")
+
+    summary_block = """
+        <div class="card">
+          <div class="card-row">
+            <div>
+              <div class="title">{summary}</div>
+              <div class="muted">Reason: {reason}</div>
+            </div>
+            <div class="muted">{created}</div>
+          </div>
+          <div class="card-row">
+            <div class="muted">Conversation: {conversation}</div>
+            <div class="muted">Case ID: {case_id}</div>
+          </div>
+          <div class="card-row">{actions}</div>
+        </div>
+    """.format(
+        summary=html.escape(getattr(case, "summary", "Escalated case") or "Escalated case"),
+        reason=html.escape(getattr(case, "reason", "-")),
+        created=_format_ts(getattr(case, "created_at", None)),
+        conversation=html.escape(getattr(case, "source_conversation_id", "")),
+        case_id=html.escape(getattr(case, "case_id", "")),
+        actions="".join(quick_actions),
+    )
+
+    content = "".join(
+        [
+            summary_block,
+            _render_section("Transcript", transcript_html),
+        ]
+    )
+    return HTMLResponse(_wrap_page(content))
 
 
 @router.post("/v1/admin/bookings/{booking_id}/cancel", response_model=booking_schemas.BookingResponse)
