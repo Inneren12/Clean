@@ -3,6 +3,8 @@ S2-C UX Scenarios: Price → Confirm → Contact → Created
 
 5 test scenarios to validate the smart UX flow with microcopy and no text walls.
 """
+from pathlib import Path
+
 import pytest
 from app.domain.chat.models import ChatTurnRequest, ParsedFields
 from app.domain.chat.state_machine import handle_turn
@@ -12,7 +14,8 @@ from app.domain.pricing.config_loader import load_pricing_config
 @pytest.fixture
 def pricing_config():
     """Load pricing configuration."""
-    return load_pricing_config("pricing/economy_v1.json")
+    config_path = Path(__file__).resolve().parents[1] / "pricing" / "economy_v1.json"
+    return load_pricing_config(str(config_path))
 
 
 @pytest.fixture

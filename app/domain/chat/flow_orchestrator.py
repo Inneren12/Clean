@@ -82,9 +82,22 @@ def _build_choices_for_collection(
     if first_missing == "cleaning_type":
         return ChoicesConfig(
             items=[
-                Choice(id="standard", label="Standard clean", value="standard"),
-                Choice(id="deep", label="Deep clean", value="deep"),
-                Choice(id="move_out", label="Move-out clean", value="move_out_empty"),
+                Choice(
+                    id="standard",
+                    label="Standard clean",
+                    value=CleaningType.standard.value,
+                ),
+                Choice(id="deep", label="Deep clean", value=CleaningType.deep.value),
+                Choice(
+                    id="move_out",
+                    label="Move-out clean",
+                    value=CleaningType.move_out_empty.value,
+                ),
+                Choice(
+                    id="move_in",
+                    label="Move-in clean",
+                    value=CleaningType.move_in_empty.value,
+                ),
             ],
             multi_select=False,
             selection_type="chip",
@@ -148,26 +161,40 @@ def _build_summary_patch(
                 editable=True,
                 field_type="select",
                 options=[
-                    Choice(id="standard", label="Standard", value="standard"),
-                    Choice(id="deep", label="Deep", value="deep"),
-                    Choice(id="move_out", label="Move-out", value="move_out_empty"),
+                    Choice(
+                        id="standard",
+                        label="Standard",
+                        value=CleaningType.standard.value,
+                    ),
+                    Choice(id="deep", label="Deep", value=CleaningType.deep.value),
+                    Choice(
+                        id="move_out",
+                        label="Move-out",
+                        value=CleaningType.move_out_empty.value,
+                    ),
+                    Choice(
+                        id="move_in",
+                        label="Move-in",
+                        value=CleaningType.move_in_empty.value,
+                    ),
                 ],
             )
         )
 
     # Add-ons
-    if fields.add_ons.windows_up_to_5:
+    windows = getattr(fields.add_ons, "windows_up_to_5", False)
+    if windows:
         summary_fields.append(
             SummaryField(
-                key="windows_up_to_5",
-                label="Windows",
+                key="windows",
+                label="Windows (up to 5)",
                 value=True,
                 editable=True,
                 field_type="boolean",
             )
         )
 
-    if fields.add_ons.fridge:
+    if getattr(fields.add_ons, "fridge", False):
         summary_fields.append(
             SummaryField(
                 key="fridge",
@@ -178,7 +205,7 @@ def _build_summary_patch(
             )
         )
 
-    if fields.add_ons.oven:
+    if getattr(fields.add_ons, "oven", False):
         summary_fields.append(
             SummaryField(
                 key="oven",
@@ -228,31 +255,40 @@ def _build_step_info(stage: FlowStage, missing_fields: List[str]) -> StepInfo:
     )
 
 
-def _build_price_explanation(estimate: EstimateResponse, fields: ParsedFields) -> str:
+def _build_price_explanation(fields: ParsedFields, estimate: EstimateResponse) -> str:
     """Build 'Why this price?' explanation with 2-3 bullet reasons."""
     breakdown = estimate.breakdown
     reasons = []
 
     # Reason 1: Size/Type
-    size_msg = f"{fields.beds}BR/{fields.baths}BA"
-    type_msg = fields.cleaning_type.value.replace("_", "-") if fields.cleaning_type else "standard"
+    beds = fields.beds if fields.beds is not None else "?"
+    baths = fields.baths if fields.baths is not None else "?"
+    size_msg = f"{beds}BR/{baths}BA"
+    cleaning_value = (
+        fields.cleaning_type.value if fields.cleaning_type else CleaningType.standard.value
+    )
+    type_msg = cleaning_value.replace("_", "-")
     reasons.append(f"• {size_msg} {type_msg} clean")
 
     # Reason 2: Depth/Complexity
     complexity_parts = []
-    if breakdown.time_on_site_hours >= 4:
-        complexity_parts.append(f"{breakdown.time_on_site_hours:.1f}h job")
-    if breakdown.team_size > 1:
-        complexity_parts.append(f"{breakdown.team_size}-person team")
+    hours = getattr(breakdown or estimate, "time_on_site_hours", 0)
+    team_size = getattr(breakdown or estimate, "team_size", 1)
+    if hours and hours >= 4:
+        complexity_parts.append(f"{hours:.1f}h job")
+    if team_size and team_size > 1:
+        complexity_parts.append(f"{team_size}-person team")
     if complexity_parts:
         reasons.append(f"• {', '.join(complexity_parts)}")
 
     # Reason 3: Extras/Urgency
     extras = []
-    if breakdown.add_ons_cost > 0:
-        extras.append(f"add-ons ${breakdown.add_ons_cost:.0f}")
-    if breakdown.discount_amount > 0:
-        extras.append(f"discount -${breakdown.discount_amount:.0f}")
+    add_ons_cost = getattr(breakdown or estimate, "add_ons_cost", 0)
+    discount_amount = getattr(breakdown or estimate, "discount_amount", 0)
+    if add_ons_cost and add_ons_cost > 0:
+        extras.append(f"add-ons ${add_ons_cost:.0f}")
+    if discount_amount and discount_amount > 0:
+        extras.append(f"discount -${discount_amount:.0f}")
     if extras:
         reasons.append(f"• {', '.join(extras)}")
 
@@ -293,6 +329,14 @@ def _detect_uncertainty(fields: ParsedFields, confidence: float) -> Tuple[bool, 
     return False, None
 
 
+def _is_price_explanation_request(user_message: str) -> bool:
+    lowered = user_message.lower().strip()
+    action_tokens = {"explain", "why_price", "why this price", "why price"}
+    if any(token in lowered for token in action_tokens):
+        return True
+    return "why" in lowered and "price" in lowered
+
+
 def orchestrate_flow(
     fields: ParsedFields,
     missing_fields: List[str],
@@ -306,9 +350,9 @@ def orchestrate_flow(
     Returns: (reply_text, proposed_questions, choices, step_info, summary_patch, ui_hint)
     """
     # Check for user requesting price explanation
-    if "why" in user_message.lower() and "price" in user_message.lower():
+    if _is_price_explanation_request(user_message):
         if estimate:
-            explanation = _build_price_explanation(estimate, fields)
+            explanation = _build_price_explanation(fields, estimate)
             reply_text = f"Here's why:\n{explanation}"
             choices = _build_choices_for_price()
             stage = FlowStage.PRICE
@@ -362,7 +406,13 @@ def orchestrate_flow(
     # PRICE stage
     if stage == FlowStage.PRICE and estimate:
         breakdown = estimate.breakdown
-        reply_text = f"${breakdown.total_before_tax:.0f} ({breakdown.time_on_site_hours:.1f}h, {breakdown.team_size} person team)"
+        price_source = breakdown or estimate
+        total_before_tax = getattr(price_source, "total_before_tax", 0)
+        time_on_site_hours = getattr(price_source, "time_on_site_hours", 0)
+        team_size = getattr(price_source, "team_size", 1)
+        reply_text = (
+            f"${total_before_tax:.0f} ({time_on_site_hours:.1f}h, {team_size} person team)"
+        )
         choices = _build_choices_for_price()
         step_info = _build_step_info(stage, missing_fields)
         summary_patch = _build_summary_patch(fields, stage)
