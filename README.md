@@ -148,6 +148,8 @@ make test
 ## Slot bookings (Sprint B)
 
 - Slot search: `GET /v1/slots?date=YYYY-MM-DD&time_on_site_hours=H[.H]&postal_code=XYZ` returns 30-minute slots between 09:00–18:00 **America/Edmonton** (UTC timestamps in responses) with a 30-minute buffer between jobs.
+- Slot provider: set `SLOT_PROVIDER_MODE=stub` (default) to use deterministic in-app slot generation. Swap to a real calendar integration later by implementing a `SlotProvider` and toggling the mode; the stub always returns 2–3 options and widens the search if a requested window is blocked.
+- Optional time-window filtering is supported via `window_start_hour` / `window_end_hour` on `/v1/slots`; durations are clamped per service type (e.g., standard clean 60–240 minutes, deep clean 90–360 minutes, move-out/move-in 150–420 minutes).
 - Booking creation: `POST /v1/bookings` with `starts_at` (ISO8601) and `time_on_site_hours` creates a `PENDING` booking and removes the slot from future searches.
 - Cleanup: `POST /v1/admin/cleanup` (Basic auth using `ADMIN_BASIC_USERNAME`/`ADMIN_BASIC_PASSWORD`) deletes `PENDING` bookings older than 30 minutes so cron/Cloudflare Scheduler can call it.
 - Email workflow v1: booking creation sends a pending notification when a lead email is present. `POST /v1/admin/email-scan` delivers 24h reminders once per booking using `email_events` dedupe, and `POST /v1/admin/bookings/{booking_id}/resend-last-email` replays the latest message for troubleshooting.
