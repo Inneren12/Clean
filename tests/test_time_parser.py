@@ -48,3 +48,21 @@ def test_time_qualifier_respects_meridiem_and_day():
     assert result.time_window.start_iso.startswith("2024-05-03T06:00:00")
     assert result.time_window.end_iso.startswith("2024-05-03T09:00:00")
     assert result.clarifier is None
+
+
+def test_time_qualifier_crosses_midnight_when_needed():
+    result = parse_time_request("after 11pm on friday", reference_date=BASE_DATE)
+
+    assert result.confidence == "high"
+    assert result.time_window is not None
+    assert result.time_window.start_iso.startswith("2024-05-03T23:00:00")
+    assert result.time_window.end_iso.startswith("2024-05-04T02:00:00")
+    assert result.clarifier is None
+
+
+def test_non_after_qualifier_is_ignored():
+    result = parse_time_request("before 6", reference_date=BASE_DATE)
+
+    assert result.confidence == "low"
+    assert result.time_window is None
+    assert result.clarifier is None
