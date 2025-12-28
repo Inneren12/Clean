@@ -103,6 +103,53 @@ async def update_template(
     if template is None:
         return None
 
+    # If items are being updated, check if template is referenced by any runs
+    if request.items is not None:
+        # Check if any checklist runs reference this template
+        runs_count_stmt = select(func.count()).select_from(ChecklistRun).where(
+            ChecklistRun.template_id == template_id
+        )
+        runs_count = await session.scalar(runs_count_stmt)
+
+        if runs_count and runs_count > 0:
+            # Template has runs - create a new version instead of mutating
+            new_version = await _next_version(session, template.service_type)
+            new_template = ChecklistTemplate(
+                name=request.name if request.name is not None else template.name,
+                service_type=request.service_type if request.service_type is not None else template.service_type,
+                version=new_version,
+                is_active=request.is_active if request.is_active is not None else template.is_active,
+            )
+            for item in _positioned(request.items):
+                new_template.items.append(ChecklistTemplateItem(**item))
+
+            # Deactivate old template if new one is active
+            if new_template.is_active:
+                template.is_active = False
+
+            session.add(new_template)
+            await session.commit()
+            await session.refresh(new_template)
+            await session.refresh(new_template, attribute_names=["items"])
+            logger.info(
+                "checklist_template_versioned",
+                extra={
+                    "extra": {
+                        "old_template_id": template_id,
+                        "new_template_id": new_template.template_id,
+                        "service_type": new_template.service_type,
+                        "version": new_version,
+                    }
+                },
+            )
+            return new_template
+        else:
+            # No runs reference this template - safe to clear and recreate items
+            template.items.clear()
+            for item in _positioned(request.items):
+                template.items.append(ChecklistTemplateItem(**item))
+
+    # Update other fields
     if request.name is not None:
         template.name = request.name
     if request.service_type is not None:
@@ -111,10 +158,6 @@ async def update_template(
         template.version = request.version
     if request.is_active is not None:
         template.is_active = request.is_active
-    if request.items is not None:
-        template.items.clear()
-        for item in _positioned(request.items):
-            template.items.append(ChecklistTemplateItem(**item))
 
     await session.commit()
     await session.refresh(template)

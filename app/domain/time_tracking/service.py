@@ -4,6 +4,7 @@ from math import ceil
 from typing import Iterable
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.bookings.db_models import Booking
@@ -85,15 +86,27 @@ async def fetch_time_entry(session: AsyncSession, booking_id: str) -> WorkTimeEn
 
 
 def _planned_seconds(booking: Booking) -> int | None:
-    minutes = booking.planned_minutes or booking.duration_minutes
+    minutes = booking.planned_minutes if booking.planned_minutes is not None else booking.duration_minutes
     if minutes is None:
         return None
     return minutes * 60
 
 
+def _stored_total_seconds(booking: Booking, entry: WorkTimeEntry | None) -> int:
+    """Get the stored/closed total seconds (no live calculation)."""
+    if entry:
+        return entry.total_seconds or 0
+    if booking.actual_seconds is not None:
+        return booking.actual_seconds
+    if booking.actual_duration_minutes is not None:
+        return booking.actual_duration_minutes * 60
+    return 0
+
+
 def _derive_actual_seconds(
     booking: Booking, entry: WorkTimeEntry | None, now: datetime | None = None
 ) -> int:
+    """Get the effective total seconds including any running segment."""
     if entry:
         return _effective_total_seconds(entry, now)
     if booking.actual_seconds is not None:
@@ -132,6 +145,10 @@ async def start_time_tracking(
     if booking is None:
         return None
 
+    # Disallow starting tracking for completed orders
+    if booking.status == "DONE" or booking.actual_duration_minutes is not None:
+        raise ValueError("Cannot start time tracking for completed order")
+
     entry = WorkTimeEntry(
         booking_id=booking_id,
         worker_id=worker_id,
@@ -142,7 +159,22 @@ async def start_time_tracking(
     )
     booking.actual_seconds = 0
     session.add(entry)
-    await session.commit()
+
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Race condition: another request created the entry concurrently
+        await session.rollback()
+        entry = await _load_entry(session, booking_id)
+        if entry:
+            logger.info(
+                "time_tracking_start_race_recovered",
+                extra={"extra": {"booking_id": booking_id, "worker_id": worker_id, "state": entry.state}},
+            )
+            return entry
+        # If still not found, re-raise the error
+        raise
+
     await session.refresh(entry)
     logger.info(
         "time_tracking_start",
@@ -301,7 +333,7 @@ def summarize_order_time(
         "started_at": getattr(entry, "started_at", None),
         "paused_at": getattr(entry, "paused_at", None),
         "finished_at": getattr(entry, "finished_at", None),
-        "planned_minutes": booking.planned_minutes or booking.duration_minutes,
+        "planned_minutes": booking.planned_minutes if booking.planned_minutes is not None else booking.duration_minutes,
         "planned_seconds": planned_seconds,
         "total_seconds": stored_total_seconds,
         "effective_seconds": effective_seconds,
