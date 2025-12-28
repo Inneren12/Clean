@@ -60,7 +60,12 @@ class TimeWindowPreference:
 
     def bounds(self, target_date: date) -> tuple[datetime, datetime]:
         start_local = datetime.combine(target_date, time(hour=self.start_hour, tzinfo=LOCAL_TZ))
-        end_local = datetime.combine(target_date, time(hour=self.end_hour, tzinfo=LOCAL_TZ))
+        if self.end_hour == 24:
+            end_local = datetime.combine(
+                target_date + timedelta(days=1), time(hour=0, tzinfo=LOCAL_TZ)
+            )
+        else:
+            end_local = datetime.combine(target_date, time(hour=self.end_hour, tzinfo=LOCAL_TZ))
         return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
 
@@ -270,7 +275,9 @@ class StubSlotProvider(SlotProvider):
         slots = await generate_slots(request.date, request.duration_minutes, session, team_id=team_id)
         slots = sorted(slots)
 
-        selected = self._filter_by_window(slots, request.time_window)
+        selected = self._filter_by_window(
+            slots, request.time_window, request.date, request.duration_minutes
+        )
         clarifier: str | None = None
         if request.time_window and len(selected) < self.min_suggestions:
             clarifier = "Limited availability in that window; can we look at nearby times the same day?"
@@ -285,14 +292,22 @@ class StubSlotProvider(SlotProvider):
         return SlotSuggestionResult(slots=selected, clarifier=clarifier)
 
     def _filter_by_window(
-        self, slots: list[datetime], time_window: TimeWindowPreference | None
+        self,
+        slots: list[datetime],
+        time_window: TimeWindowPreference | None,
+        target_date: date,
+        duration_minutes: int,
     ) -> list[datetime]:
         if not time_window:
             return slots
-        start, end = time_window.bounds(slots[0].astimezone(LOCAL_TZ).date()) if slots else time_window.bounds(date.today())
+        start, end = time_window.bounds(
+            slots[0].astimezone(LOCAL_TZ).date() if slots else target_date
+        )
+        duration_delta = timedelta(minutes=duration_minutes)
         filtered: list[datetime] = []
         for slot in slots:
-            if start <= slot < end:
+            slot_end = slot + duration_delta
+            if start <= slot and slot_end <= end:
                 filtered.append(slot)
         return filtered
 
