@@ -28,6 +28,9 @@ from app.domain.bookings import schemas as booking_schemas
 from app.domain.bookings import service as booking_service
 from app.domain.export_events.db_models import ExportEvent
 from app.domain.export_events.schemas import ExportEventResponse
+from app.domain.invoices import schemas as invoice_schemas
+from app.domain.invoices import service as invoice_service
+from app.domain.invoices.db_models import Invoice
 from app.domain.leads import statuses as lead_statuses
 from app.domain.leads.db_models import Lead, ReferralCredit
 from app.domain.leads.service import grant_referral_credit
@@ -830,4 +833,187 @@ async def complete_booking(
         deposit_policy=booking.deposit_policy,
         deposit_status=booking.deposit_status,
         checkout_url=None,
+    )
+
+
+def _invoice_response(invoice: Invoice) -> invoice_schemas.InvoiceResponse:
+    data = invoice_service.build_invoice_response(invoice)
+    return invoice_schemas.InvoiceResponse(**data)
+
+
+def _invoice_list_item(invoice: Invoice) -> invoice_schemas.InvoiceListItem:
+    data = invoice_service.build_invoice_response(invoice)
+    return invoice_schemas.InvoiceListItem(
+        invoice_id=data["invoice_id"],
+        invoice_number=data["invoice_number"],
+        order_id=data["order_id"],
+        customer_id=data["customer_id"],
+        status=data["status"],
+        issue_date=data["issue_date"],
+        due_date=data["due_date"],
+        currency=data["currency"],
+        subtotal_cents=data["subtotal_cents"],
+        tax_cents=data["tax_cents"],
+        total_cents=data["total_cents"],
+        paid_cents=data["paid_cents"],
+        balance_due_cents=data["balance_due_cents"],
+        created_at=data["created_at"],
+        updated_at=data["updated_at"],
+    )
+
+
+@router.get("/v1/admin/invoices", response_model=invoice_schemas.InvoiceListResponse)
+async def list_invoices(
+    status_filter: str | None = Query(default=None, alias="status"),
+    customer_id: str | None = None,
+    order_id: str | None = None,
+    q: str | None = None,
+    page: int = Query(default=1, ge=1),
+    session: AsyncSession = Depends(get_db_session),
+    role: str = Depends(require_admin),
+) -> invoice_schemas.InvoiceListResponse:
+    page_size = 50
+    filters = []
+    if status_filter:
+        filters.append(Invoice.status == status_filter.upper())
+    if customer_id:
+        filters.append(Invoice.customer_id == customer_id)
+    if order_id:
+        filters.append(Invoice.order_id == order_id)
+    if q:
+        filters.append(func.lower(Invoice.invoice_number).like(f"%{q.lower()}%"))
+
+    base_query = select(Invoice).where(*filters)
+    count_stmt = select(func.count()).select_from(base_query.subquery())
+    total = int((await session.scalar(count_stmt)) or 0)
+
+    stmt = (
+        base_query.options(
+            selectinload(Invoice.items),
+            selectinload(Invoice.payments),
+        )
+        .order_by(Invoice.created_at.desc())
+        .limit(page_size)
+        .offset((page - 1) * page_size)
+    )
+    result = await session.execute(stmt)
+    invoices = result.scalars().all()
+    return invoice_schemas.InvoiceListResponse(
+        invoices=[_invoice_list_item(inv) for inv in invoices],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.get("/v1/admin/invoices/{invoice_id}", response_model=invoice_schemas.InvoiceResponse)
+async def get_invoice(
+    invoice_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    role: str = Depends(require_admin),
+) -> invoice_schemas.InvoiceResponse:
+    invoice = await session.get(
+        Invoice,
+        invoice_id,
+        options=(selectinload(Invoice.items), selectinload(Invoice.payments)),
+    )
+    if invoice is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
+
+    return _invoice_response(invoice)
+
+
+@router.post(
+    "/v1/admin/orders/{order_id}/invoice",
+    response_model=invoice_schemas.InvoiceResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_invoice_from_order(
+    order_id: str,
+    request: invoice_schemas.InvoiceCreateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    role: str = Depends(require_admin),
+) -> invoice_schemas.InvoiceResponse:
+    order = await session.get(Booking, order_id)
+    if order is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+
+    try:
+        invoice = await invoice_service.create_invoice_from_order(
+            session=session,
+            order=order,
+            items=request.items,
+            issue_date=request.issue_date,
+            due_date=request.due_date,
+            currency=request.currency,
+            notes=request.notes,
+            created_by=role,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    await session.commit()
+    result = await session.execute(
+        select(Invoice)
+        .options(selectinload(Invoice.items), selectinload(Invoice.payments))
+        .where(Invoice.invoice_id == invoice.invoice_id)
+    )
+    fresh_invoice = result.scalar_one()
+    return _invoice_response(fresh_invoice)
+
+
+@router.post(
+    "/v1/admin/invoices/{invoice_id}/mark-paid",
+    response_model=invoice_schemas.ManualPaymentResult,
+    status_code=status.HTTP_201_CREATED,
+)
+async def mark_invoice_paid(
+    invoice_id: str,
+    request: invoice_schemas.ManualPaymentRequest,
+    session: AsyncSession = Depends(get_db_session),
+    role: str = Depends(require_admin),
+) -> invoice_schemas.ManualPaymentResult:
+    invoice = await session.get(
+        Invoice,
+        invoice_id,
+        options=(selectinload(Invoice.items), selectinload(Invoice.payments)),
+    )
+    if invoice is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
+
+    try:
+        payment = await invoice_service.record_manual_payment(
+            session=session,
+            invoice=invoice,
+            amount_cents=request.amount_cents,
+            method=request.method,
+            reference=request.reference,
+            received_at=request.received_at,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    await session.commit()
+    await session.refresh(payment)
+    refreshed_invoice = await session.get(
+        Invoice,
+        invoice_id,
+        options=(selectinload(Invoice.items), selectinload(Invoice.payments)),
+    )
+    assert refreshed_invoice is not None
+    await session.refresh(refreshed_invoice)
+    payment_data = invoice_schemas.PaymentResponse(
+        payment_id=payment.payment_id,
+        provider=payment.provider,
+        method=payment.method,
+        amount_cents=payment.amount_cents,
+        currency=payment.currency,
+        status=payment.status,
+        received_at=payment.received_at,
+        reference=payment.reference,
+        created_at=payment.created_at,
+    )
+    return invoice_schemas.ManualPaymentResult(
+        invoice=_invoice_response(refreshed_invoice),
+        payment=payment_data,
     )
