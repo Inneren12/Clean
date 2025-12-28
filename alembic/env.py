@@ -13,6 +13,7 @@ from app.domain.bookings import db_models as booking_db_models  # noqa: F401
 from app.domain.export_events import db_models as export_events_db_models  # noqa: F401
 from app.domain.leads import db_models  # noqa: F401
 from app.domain.invoices import db_models as invoice_db_models  # noqa: F401
+from app.domain.time_tracking import db_models as time_tracking_db_models  # noqa: F401
 from app.infra.db import Base
 from app.settings import settings
 

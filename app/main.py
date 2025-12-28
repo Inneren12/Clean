@@ -16,6 +16,7 @@ from app.api.routes_estimate import router as estimate_router
 from app.api.routes_bot import router as bot_router
 from app.api.routes_health import router as health_router
 from app.api.routes_payments import router as payments_router
+from app.api.routes_time_tracking import router as time_tracking_router
 from app.api.routes_public import router as public_router
 from app.api.routes_leads import router as leads_router
 from app.domain.errors import DomainError
@@ -205,6 +206,7 @@ def create_app(app_settings) -> FastAPI:
     app.include_router(estimate_router)
     app.include_router(chat_router)
     app.include_router(payments_router)
+    app.include_router(time_tracking_router)
     app.include_router(bookings_router)
     app.include_router(leads_router)
     app.include_router(admin_router)

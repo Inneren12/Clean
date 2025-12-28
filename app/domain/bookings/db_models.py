@@ -41,6 +41,8 @@ class Booking(Base):
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     actual_duration_minutes: Mapped[int | None] = mapped_column(Integer)
+    planned_minutes: Mapped[int | None] = mapped_column(Integer)
+    actual_seconds: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     deposit_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     deposit_cents: Mapped[int | None] = mapped_column(Integer)
