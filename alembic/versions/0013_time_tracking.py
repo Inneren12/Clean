@@ -21,6 +21,14 @@ def upgrade() -> None:
 
     op.execute("UPDATE bookings SET planned_minutes = duration_minutes WHERE planned_minutes IS NULL")
 
+    # Determine JSON default based on dialect
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        json_default = sa.text("'[]'::json")
+    else:
+        # SQLite and others
+        json_default = sa.text("'[]'")
+
     op.create_table(
         "work_time_entries",
         sa.Column("entry_id", sa.String(length=36), primary_key=True),
@@ -31,7 +39,7 @@ def upgrade() -> None:
         sa.Column("paused_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("total_seconds", sa.Integer(), nullable=False, server_default=sa.text("0")),
-        sa.Column("segments", sa.JSON(), nullable=False, server_default=sa.text("'[]'")),
+        sa.Column("segments", sa.JSON(), nullable=False, server_default=json_default),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column(
             "updated_at",
