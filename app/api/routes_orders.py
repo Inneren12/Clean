@@ -9,6 +9,8 @@ from app.api.routes_admin import AdminIdentity, require_admin, verify_admin_or_d
 from app.dependencies import get_db_session
 from app.domain.bookings import photos_service
 from app.domain.bookings import schemas as booking_schemas
+from app.domain.reason_logs import schemas as reason_schemas
+from app.domain.reason_logs import service as reason_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -21,6 +23,52 @@ async def optional_identity(
     if credentials is None:
         return None
     return await verify_admin_or_dispatcher(credentials)
+
+
+@router.post(
+    "/v1/orders/{order_id}/reasons",
+    response_model=reason_schemas.ReasonResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_reason_log(
+    order_id: str,
+    payload: reason_schemas.ReasonCreateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+) -> reason_schemas.ReasonResponse:
+    await photos_service.fetch_order(session, order_id)
+    try:
+        reason = await reason_service.create_reason(
+            session,
+            order_id,
+            kind=payload.kind,
+            code=payload.code,
+            note=payload.note,
+            created_by=identity.username or identity.role,
+            time_entry_id=payload.time_entry_id,
+            invoice_item_id=payload.invoice_item_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    await session.commit()
+    await session.refresh(reason)
+    return reason_schemas.ReasonResponse.from_model(reason)
+
+
+@router.get(
+    "/v1/orders/{order_id}/reasons",
+    response_model=reason_schemas.ReasonListResponse,
+)
+async def list_order_reasons(
+    order_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+) -> reason_schemas.ReasonListResponse:
+    await photos_service.fetch_order(session, order_id)
+    reasons = await reason_service.list_reasons_for_order(session, order_id)
+    return reason_schemas.ReasonListResponse(
+        reasons=[reason_schemas.ReasonResponse.from_model(reason) for reason in reasons]
+    )
 
 
 @router.patch(
