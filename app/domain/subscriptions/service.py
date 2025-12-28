@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 
@@ -31,11 +32,15 @@ def _resolve_first_run_date(payload: SubscriptionCreateRequest) -> date:
     if payload.frequency == statuses.MONTHLY:
         preferred_day = payload.preferred_day_of_month or payload.start_date.day
         if payload.start_date.day <= preferred_day:
-            return payload.start_date.replace(day=preferred_day)
+            last_day = calendar.monthrange(payload.start_date.year, payload.start_date.month)[1]
+            clamped_day = min(preferred_day, last_day)
+            return payload.start_date.replace(day=clamped_day)
         month = payload.start_date.month + 1
         year = payload.start_date.year + (month - 1) // 12
         month = ((month - 1) % 12) + 1
-        return date(year=year, month=month, day=preferred_day)
+        last_day = calendar.monthrange(year, month)[1]
+        clamped_day = min(preferred_day, last_day)
+        return date(year=year, month=month, day=clamped_day)
 
     target_weekday = payload.preferred_weekday
     if target_weekday is None:
@@ -55,7 +60,9 @@ def _next_date(subscription: Subscription, current_date: date) -> date:
         year = current_date.year + (month - 1) // 12
         month = ((month - 1) % 12) + 1
         day = subscription.preferred_day_of_month or current_date.day
-        return date(year=year, month=month, day=day)
+        last_day = calendar.monthrange(year, month)[1]
+        clamped_day = min(day, last_day)
+        return date(year=year, month=month, day=clamped_day)
     raise ValueError("Unknown frequency")
 
 
@@ -63,6 +70,10 @@ async def create_subscription(
     session: AsyncSession, client_id: str, payload: SubscriptionCreateRequest
 ) -> Subscription:
     first_date = _resolve_first_run_date(payload)
+    # For monthly subscriptions, ensure preferred_day_of_month is set
+    preferred_day = payload.preferred_day_of_month
+    if payload.frequency == statuses.MONTHLY and preferred_day is None:
+        preferred_day = payload.start_date.day
     subscription = Subscription(
         client_id=client_id,
         status=statuses.ACTIVE,
@@ -70,7 +81,7 @@ async def create_subscription(
         start_date=payload.start_date,
         next_run_at=_start_of_day_utc(first_date),
         preferred_weekday=payload.preferred_weekday,
-        preferred_day_of_month=payload.preferred_day_of_month,
+        preferred_day_of_month=preferred_day,
         base_service_type=payload.base_service_type,
         base_price=payload.base_price,
     )
