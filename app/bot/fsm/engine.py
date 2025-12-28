@@ -281,6 +281,9 @@ class BotFsm:
         if incoming_intent in SOFT_INTERRUPTS and not (ongoing and has_entities):
             active_intent = self.state.current_intent if ongoing else self.state.current_intent or incoming_intent
             current_step = self.state.fsm_step or FsmStep.routing
+            steps = self._steps_for_intent(active_intent) if active_intent in FLOW_INTENTS else []
+            progress = _progress(steps, filled) if steps else None
+            _, quick_replies = _question_for_step(current_step) if current_step else ("", [])
             self.state = ConversationState(
                 current_intent=active_intent,
                 fsm_step=current_step,
@@ -295,8 +298,8 @@ class BotFsm:
             )
             return FsmReply(
                 text=status_text,
-                quick_replies=[],
-                progress=None,
+                quick_replies=quick_replies,
+                progress=progress,
                 summary=_summary(filled),
                 step=current_step,
                 estimate=None,

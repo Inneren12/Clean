@@ -3,7 +3,12 @@ from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from app.bot.faq.formatter import clarification_prompt, format_matches
+from app.bot.faq.matcher import match_faq
 from app.bot.fsm import BotFsm
+from app.bot.handoff.case_builder import build_case_payload
+from app.bot.handoff.decision import evaluate_handoff
+from app.bot.handoff.metrics import metrics
 from app.bot.nlu.engine import analyze_message
 from app.bot.nlu.models import Intent
 from app.dependencies import get_bot_store
@@ -14,6 +19,7 @@ from app.domain.bot.schemas import (
     ConversationCreate,
     ConversationRecord,
     ConversationState,
+    ConversationStatus,
     FsmStep,
     LeadPayload,
     LeadRecord,
@@ -75,15 +81,54 @@ async def post_message(
     nlu_result = analyze_message(request.text)
     fsm = BotFsm(conversation.state)
     fsm_reply = fsm.handle(request.text, nlu_result)
-    updated_state = fsm.state
-    fsm_step = updated_state.fsm_step or _fsm_step_for_intent(nlu_result.intent)
-    fsm_step_value = fsm_step.value if hasattr(fsm_step, "value") else fsm_step
-    await store.update_state(request.conversation_id, updated_state)
+    faq_requested = nlu_result.intent == Intent.faq or request.text.lower().startswith(("faq:", "faq "))
+    faq_matches = match_faq(request.text) if faq_requested else []
 
     bot_text = fsm_reply.text or (
         "Thanks! I noted your request. "
         "I'll keep gathering details so we can prepare the right follow-up."
     )
+    quick_replies = list(fsm_reply.quick_replies)
+
+    if faq_requested:
+        if faq_matches:
+            bot_text = format_matches(faq_matches)
+        else:
+            bot_text, quick_replies = clarification_prompt()
+
+    decision = evaluate_handoff(nlu_result, fsm_reply, request.text, faq_matches=faq_matches)
+
+    if decision.suggested_action == "clarify" and not faq_requested and not decision.should_handoff:
+        clarification_text, quick_reply_options = clarification_prompt()
+        bot_text = clarification_text
+        quick_replies = quick_reply_options
+
+    updated_state = fsm.state
+    if decision.should_handoff and updated_state.fsm_step != FsmStep.handoff_check:
+        updated_state = ConversationState(
+            current_intent=nlu_result.intent,
+            fsm_step=FsmStep.handoff_check,
+            filled_fields=fsm.state.filled_fields,
+            confidence=nlu_result.confidence,
+            last_estimate=fsm.state.last_estimate,
+        )
+
+    if decision.should_handoff:
+        bot_text = "I'll connect you to a human right away to help with this."
+        quick_replies = []
+
+    fsm_step = updated_state.fsm_step or _fsm_step_for_intent(nlu_result.intent)
+    fsm_step_value = fsm_step.value if hasattr(fsm_step, "value") else fsm_step
+    await store.update_state(
+        request.conversation_id,
+        updated_state,
+        status=ConversationStatus.handed_off if decision.should_handoff else None,
+    )
+
+    metadata = {**fsm_reply.metadata, "quickReplies": quick_replies}
+    if decision.should_handoff:
+        metadata["handoff"] = {"reason": decision.reason, "summary": decision.summary}
+
     bot_payload = MessagePayload(
         role=MessageRole.bot,
         text=bot_text,
@@ -91,9 +136,22 @@ async def post_message(
         confidence=nlu_result.confidence,
         extracted_entities=nlu_result.entities.model_dump(exclude_none=True, by_alias=True),
         reasons=nlu_result.reasons,
-        metadata=fsm_reply.metadata,
+        metadata=metadata,
     )
     await store.append_message(request.conversation_id, bot_payload)
+
+    if decision.should_handoff:
+        conversation = await store.get_conversation(request.conversation_id)
+        messages = await store.list_messages(request.conversation_id)
+        case_payload = build_case_payload(
+            decision=decision,
+            conversation=conversation,
+            messages=messages,
+            fsm_reply=fsm_reply,
+            intent_result=nlu_result,
+        )
+        await store.create_case(case_payload)
+        metrics.record(decision.reason or "handoff", updated_state.fsm_step)
 
     request_id = getattr(http_request.state, "request_id", None) if http_request else None
     estimate = fsm_reply.estimate
@@ -120,7 +178,7 @@ async def post_message(
             state=updated_state,
             extracted_entities=nlu_result.entities.model_dump(exclude_none=True, by_alias=True),
             reasons=nlu_result.reasons,
-            quick_replies=fsm_reply.quick_replies,
+            quick_replies=quick_replies,
             progress=fsm_reply.progress,
             summary=fsm_reply.summary,
         ),
