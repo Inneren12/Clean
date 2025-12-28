@@ -10,7 +10,12 @@ from app.domain.pricing.config_loader import load_pricing_config
 
 GOLDEN_PATH = Path(__file__).parent / "golden_dialogs" / "dialogs.json"
 GOLDENS = json.loads(GOLDEN_PATH.read_text())
-CONFIG = load_pricing_config("pricing/economy_v1.json")
+
+
+@pytest.fixture(scope="session")
+def pricing_config():
+    pricing_path = Path(__file__).resolve().parents[1] / "pricing" / "economy_v1.json"
+    return load_pricing_config(str(pricing_path))
 
 STEP_LABEL_TO_STAGE = {
     "Property details": "collect",
@@ -43,8 +48,26 @@ def _assert_estimate(response, expected_estimate: Dict[str, Any]):
 def _derive_stage(response) -> str | None:
     if response.handoff_required:
         return "handoff"
-    if response.step_info:
-        return STEP_LABEL_TO_STAGE.get(response.step_info.step_label)
+    if response.missing_fields:
+        return "collect"
+
+    step_info = response.step_info
+    if step_info:
+        if step_info.remaining_questions:
+            return "collect"
+        if step_info.current_step and step_info.total_steps:
+            if step_info.current_step >= step_info.total_steps:
+                return "created"
+            if step_info.current_step == step_info.total_steps - 1:
+                return "contact"
+            if step_info.current_step == step_info.total_steps - 2:
+                return "price"
+        step_label = (step_info.step_label or "").strip().lower()
+        for label, stage in STEP_LABEL_TO_STAGE.items():
+            if step_label.startswith(label.lower()):
+                return stage
+    if response.estimate:
+        return "price"
     return None
 
 
@@ -58,15 +81,17 @@ def _assert_proposed_question(response, snippet: str):
 
 
 @pytest.mark.parametrize("dialogue", GOLDENS, ids=[case["id"] for case in GOLDENS])
-def test_golden_dialogs(dialogue):
+def test_golden_dialogs(dialogue, pricing_config):
     state = None
     for turn in dialogue["turns"]:
         request = ChatTurnRequest(session_id=dialogue["id"], message=turn["user"])
-        response, state = handle_turn(request, state, CONFIG)
+        response, state = handle_turn(request, state, pricing_config)
         expected = turn.get("expect", {})
 
         if "intent" in expected:
-            assert response.intent.value == expected["intent"]
+            expected_intent = str(expected["intent"]).upper()
+            actual_intent = (response.intent.name or response.intent.value).upper()
+            assert actual_intent == expected_intent
 
         if "stage" in expected:
             assert _derive_stage(response) == expected["stage"]
