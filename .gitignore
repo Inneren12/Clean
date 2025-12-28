@@ -8,3 +8,4 @@ node_modules/
 .next/
 out/
 web/.env.local
+*.tsbuildinfo
