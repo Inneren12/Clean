@@ -70,13 +70,14 @@ def _format_time_window(entities: Entities) -> Optional[str]:
     if label:
         parts.append(label)
 
+    # For part-of-day labels (morning/afternoon/evening), don't append misleading single times
     if start and end and label not in {"morning", "afternoon", "evening"}:
         parts.append(f"{start}-{end}")
     elif start and not end and not label:
         parts.append(start)
     elif end and not start and not label:
         parts.append(f"by {end}")
-    elif start and label:
+    elif start and label and label not in {"morning", "afternoon", "evening"}:
         parts.append(start)
 
     return " ".join([p for p in parts if p]) or None
@@ -270,7 +271,7 @@ class BotFsm:
                 last_estimate=self.state.last_estimate,
             )
             return FsmReply(
-                text="Understood, I've canceled the request. If you'd like to start again, let me know.",
+                text="Okay — I won't proceed with booking. If you want to start again, tell me.",
                 quick_replies=[],
                 progress=None,
                 summary=_summary(filled),
@@ -278,9 +279,16 @@ class BotFsm:
                 estimate=None,
             )
 
-        if incoming_intent in SOFT_INTERRUPTS and not (ongoing and has_entities):
-            active_intent = self.state.current_intent if ongoing else self.state.current_intent or incoming_intent
+        # Soft interrupts (status/faq): treat as interrupts whenever ongoing,
+        # UNLESS user provided entities (which means they're continuing the flow, not interrupting)
+        # Fallback faq intent with entities should allow flow progression
+        is_fallback_faq = incoming_intent == Intent.faq and "fallback to faq" in intent_result.reasons
+        if incoming_intent in SOFT_INTERRUPTS and ongoing and not (has_entities and is_fallback_faq):
+            active_intent = self.state.current_intent
             current_step = self.state.fsm_step or FsmStep.routing
+            steps = self._steps_for_intent(active_intent)
+            question, quick_replies = _question_for_step(current_step) if current_step else ("", [])
+
             self.state = ConversationState(
                 current_intent=active_intent,
                 fsm_step=current_step,
@@ -295,8 +303,8 @@ class BotFsm:
             )
             return FsmReply(
                 text=status_text,
-                quick_replies=[],
-                progress=None,
+                quick_replies=quick_replies,
+                progress=_progress(steps, filled) if steps else None,
                 summary=_summary(filled),
                 step=current_step,
                 estimate=None,

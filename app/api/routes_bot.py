@@ -80,6 +80,17 @@ async def post_message(
     fsm_step_value = fsm_step.value if hasattr(fsm_step, "value") else fsm_step
     await store.update_state(request.conversation_id, updated_state)
 
+    # A1: Compute fsm_is_flow to safeguard against FAQ/clarification overlays
+    # When fsm_is_flow is True, NEVER override FSM reply with FAQ/clarify prompts
+    step_str = str(fsm_step_value) if fsm_step_value else ""
+    fsm_is_flow = step_str.startswith("ask_") or step_str == "confirm_lead"
+
+    # A2-A5: Safeguards for future FAQ/handoff integration:
+    # - Only compute faq_matches when FAQ explicitly requested (faq:, faq command, etc.)
+    # - Never apply FAQ/clarification overlays when fsm_is_flow is True
+    # - Only handoff when decision.should_handoff == True, never during active flow
+    # - Complaint/human intents always handoff and create case (handled by FSM)
+
     bot_text = fsm_reply.text or (
         "Thanks! I noted your request. "
         "I'll keep gathering details so we can prepare the right follow-up."
