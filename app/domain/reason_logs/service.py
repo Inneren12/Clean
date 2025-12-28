@@ -5,9 +5,10 @@ from datetime import datetime
 
 from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from app.domain.bookings.db_models import Booking
-from app.domain.invoices.db_models import InvoiceItem
+from app.domain.invoices.db_models import Invoice, InvoiceItem
 from app.domain.leads.db_models import Lead
 from app.domain.reason_logs.db_models import ReasonLog
 from app.domain.reason_logs.schemas import (
@@ -61,7 +62,14 @@ async def _ensure_time_entry(
 async def _ensure_invoice_item(
     session: AsyncSession, invoice_item_id: int, order_id: str
 ) -> InvoiceItem:
-    item = await session.get(InvoiceItem, invoice_item_id)
+    stmt = (
+        select(InvoiceItem)
+        .join(Invoice, Invoice.invoice_id == InvoiceItem.invoice_id)
+        .options(joinedload(InvoiceItem.invoice))
+        .where(InvoiceItem.item_id == invoice_item_id)
+    )
+    result = await session.execute(stmt)
+    item = result.scalar_one_or_none()
     if item is None or getattr(item, "invoice", None) is None:
         raise ValueError("Invalid invoice item reference")
     invoice = item.invoice
