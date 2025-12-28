@@ -33,6 +33,9 @@ class Entities(BaseModel):
     square_feet: Optional[int] = Field(default=None, alias="squareFeet")
     square_meters: Optional[int] = Field(default=None, alias="squareMeters")
     service_type: Optional[str] = Field(default=None, alias="serviceType")
+    property_type: Optional[str] = Field(default=None, alias="propertyType")
+    condition: Optional[str] = None
+    size_label: Optional[str] = Field(default=None, alias="size")
     extras: List[str] = Field(default_factory=list)
     time_window: Optional[TimeWindow] = Field(default=None, alias="timeWindow")
     area: Optional[str] = None
