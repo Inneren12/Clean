@@ -190,15 +190,15 @@ async def register_payment(
         received_at=received_at,
         reference=reference,
     )
-    session.add(payment)
     try:
-        await session.flush()
+        async with session.begin_nested():
+            session.add(payment)
+            await session.flush()
     except IntegrityError:
         logger.info(
             "invoice_payment_duplicate",
             extra={"extra": {"invoice_id": invoice.invoice_id, "provider": provider, "provider_ref": provider_ref}},
         )
-        await session.rollback()
         return None
 
     await _refresh_invoice_payment_status(session, invoice)

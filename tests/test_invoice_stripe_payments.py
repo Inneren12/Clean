@@ -132,6 +132,73 @@ def test_webhook_signature_verification(client, monkeypatch):
     assert response.status_code == 400
 
 
+def test_webhook_retries_after_processing_error(client, async_session_maker, monkeypatch):
+    monkeypatch.setattr(settings, "stripe_webhook_secret", "whsec_test")
+    invoice_id, _ = asyncio.run(_seed_invoice(async_session_maker, total_cents=4200))
+    payload = b"{}"
+
+    event = {
+        "id": "evt_retry_once",
+        "type": "payment_intent.succeeded",
+        "created": int(datetime.now(tz=timezone.utc).timestamp()),
+        "data": {
+            "object": {
+                "id": "pi_retry_once",
+                "amount_received": 4200,
+                "currency": "CAD",
+                "metadata": {"invoice_id": invoice_id},
+            }
+        },
+    }
+
+    def _parse_webhook_event(**_: object):
+        return event
+
+    call_count = {"value": 0}
+    real_record_payment = invoice_service.record_stripe_payment
+
+    async def _record_payment(session, invoice, **kwargs):
+        call_count["value"] += 1
+        if call_count["value"] == 1:
+            raise RuntimeError("transient failure")
+        return await real_record_payment(session=session, invoice=invoice, **kwargs)
+
+    monkeypatch.setattr(stripe_infra, "parse_webhook_event", _parse_webhook_event)
+    monkeypatch.setattr(invoice_service, "record_stripe_payment", _record_payment)
+    app.state.stripe_client = SimpleNamespace()
+
+    headers = {"Stripe-Signature": "t=test"}
+    first = client.post("/stripe/webhook", content=payload, headers=headers)
+    assert first.status_code == 500
+
+    async def _fetch_state() -> tuple[str | None, str | None, int]:
+        async with async_session_maker() as session:
+            invoice = await session.get(Invoice, invoice_id)
+            event_record = await session.get(StripeEvent, "evt_retry_once")
+            payment_count = await session.scalar(
+                sa.select(sa.func.count()).select_from(Payment).where(Payment.invoice_id == invoice_id)
+            )
+            return (
+                event_record.status if event_record else None,
+                invoice.status if invoice else None,
+                int(payment_count or 0),
+            )
+
+    status_value, invoice_status, payment_count = asyncio.run(_fetch_state())
+    assert status_value == "error"
+    assert invoice_status == invoice_statuses.INVOICE_STATUS_SENT
+    assert payment_count == 0
+
+    second = client.post("/stripe/webhook", content=payload, headers=headers)
+    assert second.status_code == 200
+    assert second.json()["processed"] is True
+
+    status_value, invoice_status, payment_count = asyncio.run(_fetch_state())
+    assert status_value == "succeeded"
+    assert invoice_status == invoice_statuses.INVOICE_STATUS_PAID
+    assert payment_count == 1
+
+
 def test_webhook_retries_after_error(client, async_session_maker, monkeypatch):
     monkeypatch.setattr(settings, "stripe_webhook_secret", "whsec_test")
     invoice_id, _ = asyncio.run(_seed_invoice(async_session_maker, total_cents=4200))
