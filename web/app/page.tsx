@@ -40,11 +40,58 @@ type EstimateResponse = {
   breakdown?: EstimateBreakdown | null;
 };
 
+// UI Contract Extension Types (S2-A)
+type Choice = {
+  id: string;
+  label: string;
+  value?: string | null;
+};
+
+type ChoicesConfig = {
+  items: Choice[];
+  multi_select?: boolean;
+  selection_type?: 'button' | 'chip';
+};
+
+type StepInfo = {
+  current_step: number;
+  total_steps: number;
+  step_label?: string | null;
+  remaining_questions?: number | null;
+};
+
+type SummaryField = {
+  key: string;
+  label: string;
+  value: unknown;
+  editable?: boolean;
+  field_type?: 'text' | 'number' | 'select' | 'boolean';
+  options?: Choice[] | null;
+};
+
+type SummaryPatch = {
+  title?: string | null;
+  fields: SummaryField[];
+};
+
+type UIHint = {
+  show_summary?: boolean;
+  show_confirm?: boolean;
+  show_choices?: boolean;
+  show_progress?: boolean;
+  minimize_text?: boolean;
+};
+
 type ChatTurnResponse = {
   reply_text: string;
   proposed_questions: string[];
   estimate: EstimateResponse | null;
   state: Record<string, unknown>;
+  // UI Contract Extension (S2-A) - all optional for backward compatibility
+  choices?: ChoicesConfig | null;
+  step_info?: StepInfo | null;
+  summary_patch?: SummaryPatch | null;
+  ui_hint?: UIHint | null;
 };
 
 type SlotAvailability = {
@@ -166,6 +213,13 @@ export default function HomePage() {
   const [bookingSubmitting, setBookingSubmitting] = useState(false);
   const [bookingSuccess, setBookingSuccess] = useState<string | null>(null);
   const [bookingError, setBookingError] = useState<string | null>(null);
+
+  // UI Contract Extension State (S2-A)
+  const [choices, setChoices] = useState<ChoicesConfig | null>(null);
+  const [stepInfo, setStepInfo] = useState<StepInfo | null>(null);
+  const [summaryPatch, setSummaryPatch] = useState<SummaryPatch | null>(null);
+  const [uiHint, setUIHint] = useState<UIHint | null>(null);
+  const [selectedChoices, setSelectedChoices] = useState<string[]>([]);
 
   const apiBaseUrl = useMemo(
     () => process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000',
@@ -325,6 +379,14 @@ export default function HomePage() {
         setProposedQuestions(data.proposed_questions ?? []);
         setEstimate(data.estimate ?? null);
         setStructuredInputs(data.state ?? {});
+
+        // UI Contract Extension (S2-A) - handle new optional fields
+        setChoices(data.choices ?? null);
+        setStepInfo(data.step_info ?? null);
+        setSummaryPatch(data.summary_patch ?? null);
+        setUIHint(data.ui_hint ?? null);
+        setSelectedChoices([]); // Reset selections on new message
+
         if (data.estimate) {
           setShowLeadForm(false);
           setLeadSuccess(false);
@@ -643,6 +705,76 @@ export default function HomePage() {
                   </button>
                 </form>
 
+                {/* UI Contract Extension: Step Progress Indicator (S2-A) */}
+                {stepInfo && (uiHint?.show_progress ?? true) ? (
+                  <div className="step-progress">
+                    <div className="step-progress-header">
+                      <p className="label">
+                        {stepInfo.step_label ?? `Step ${stepInfo.current_step} of ${stepInfo.total_steps}`}
+                      </p>
+                      {stepInfo.remaining_questions !== null && stepInfo.remaining_questions !== undefined ? (
+                        <p className="muted">{stepInfo.remaining_questions} question{stepInfo.remaining_questions !== 1 ? 's' : ''} remaining</p>
+                      ) : null}
+                    </div>
+                    <div className="progress-bar">
+                      <div
+                        className="progress-fill"
+                        style={{ width: `${(stepInfo.current_step / stepInfo.total_steps) * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+
+                {/* UI Contract Extension: Choices (S2-A) */}
+                {choices && (uiHint?.show_choices ?? true) ? (
+                  <div className="choices-section">
+                    <div className="choices-header">
+                      <p className="label">Select {choices.multi_select ? 'options' : 'an option'}</p>
+                    </div>
+                    <div className={`choices-list ${choices.selection_type === 'button' ? 'choices-buttons' : 'choices-chips'}`}>
+                      {choices.items.map((choice) => {
+                        const isSelected = selectedChoices.includes(choice.id);
+                        return (
+                          <button
+                            key={choice.id}
+                            type="button"
+                            className={`btn ${choices.selection_type === 'button' ? 'btn-secondary' : 'btn-ghost'} choice-item ${isSelected ? 'choice-selected' : ''}`}
+                            onClick={() => {
+                              if (choices.multi_select) {
+                                setSelectedChoices((prev) =>
+                                  isSelected ? prev.filter((id) => id !== choice.id) : [...prev, choice.id]
+                                );
+                              } else {
+                                setSelectedChoices([choice.id]);
+                                void submitMessage(choice.value ?? choice.label);
+                              }
+                            }}
+                            disabled={loading}
+                          >
+                            {choice.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {choices.multi_select && selectedChoices.length > 0 ? (
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => {
+                          const selected = choices.items
+                            .filter((c) => selectedChoices.includes(c.id))
+                            .map((c) => c.value ?? c.label)
+                            .join(', ');
+                          void submitMessage(selected);
+                        }}
+                        disabled={loading}
+                      >
+                        Confirm Selection
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 {proposedQuestions.length > 0 ? (
                   <div className="quick-replies">
                     <div className="quick-reply-heading">
@@ -733,6 +865,80 @@ export default function HomePage() {
                   </div>
                 )}
               </div>
+
+              {/* UI Contract Extension: Summary Patch (S2-A) */}
+              {summaryPatch && (uiHint?.show_summary ?? true) ? (
+                <div className="card summary-card">
+                  <div className="card-header">
+                    <div>
+                      <p className="eyebrow">Conversation Summary</p>
+                      <h3>{summaryPatch.title ?? 'Review Your Details'}</h3>
+                    </div>
+                  </div>
+                  <div className="card-body">
+                    <div className="summary-fields">
+                      {summaryPatch.fields.map((field) => (
+                        <div key={field.key} className="summary-field">
+                          <p className="label">{field.label}</p>
+                          {field.editable && field.field_type === 'select' && field.options ? (
+                            <select
+                              className="summary-input"
+                              value={String(field.value ?? '')}
+                              onChange={(e) => {
+                                // Update summary and send message
+                                void submitMessage(`Update ${field.key} to ${e.target.value}`);
+                              }}
+                              disabled={loading}
+                            >
+                              {field.options.map((opt) => (
+                                <option key={opt.id} value={opt.value ?? opt.label}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                          ) : field.editable && field.field_type === 'boolean' ? (
+                            <label className="summary-checkbox">
+                              <input
+                                type="checkbox"
+                                checked={Boolean(field.value)}
+                                onChange={(e) => {
+                                  void submitMessage(`Set ${field.key} to ${e.target.checked}`);
+                                }}
+                                disabled={loading}
+                              />
+                              <span>{field.value ? 'Yes' : 'No'}</span>
+                            </label>
+                          ) : field.editable ? (
+                            <input
+                              type={field.field_type === 'number' ? 'number' : 'text'}
+                              className="summary-input"
+                              value={String(field.value ?? '')}
+                              onBlur={(e) => {
+                                if (e.target.value !== String(field.value)) {
+                                  void submitMessage(`Update ${field.key} to ${e.target.value}`);
+                                }
+                              }}
+                              disabled={loading}
+                            />
+                          ) : (
+                            <p className="value">{String(field.value ?? '—')}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    {uiHint?.show_confirm ? (
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => void submitMessage('Confirm details')}
+                        disabled={loading}
+                      >
+                        Confirm Details
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
 
               <div className="card slots-card">
                 <div className="slots-header">
