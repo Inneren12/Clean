@@ -81,6 +81,13 @@ async def post_message(
     nlu_result = analyze_message(request.text)
     fsm = BotFsm(conversation.state)
     fsm_reply = fsm.handle(request.text, nlu_result)
+    updated_state = fsm.state
+    fsm_step_value = (
+        updated_state.fsm_step.value
+        if hasattr(updated_state.fsm_step, "value")
+        else updated_state.fsm_step
+    )
+    fsm_is_flow = bool(fsm_step_value and (fsm_step_value.startswith("ask_") or fsm_step_value == "confirm_lead"))
     faq_requested = nlu_result.intent == Intent.faq or request.text.lower().startswith(("faq:", "faq "))
     faq_matches = match_faq(request.text) if faq_requested else []
 
@@ -90,7 +97,7 @@ async def post_message(
     )
     quick_replies = list(fsm_reply.quick_replies)
 
-    if faq_requested:
+    if faq_requested and not fsm_is_flow:
         if faq_matches:
             bot_text = format_matches(faq_matches)
         else:
@@ -98,12 +105,16 @@ async def post_message(
 
     decision = evaluate_handoff(nlu_result, fsm_reply, request.text, faq_matches=faq_matches)
 
-    if decision.suggested_action == "clarify" and not faq_requested and not decision.should_handoff:
+    if (
+        decision.suggested_action == "clarify"
+        and not faq_requested
+        and not decision.should_handoff
+        and not fsm_is_flow
+    ):
         clarification_text, quick_reply_options = clarification_prompt()
         bot_text = clarification_text
         quick_replies = quick_reply_options
 
-    updated_state = fsm.state
     if decision.should_handoff and updated_state.fsm_step != FsmStep.handoff_check:
         updated_state = ConversationState(
             current_intent=nlu_result.intent,
