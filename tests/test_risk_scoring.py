@@ -166,3 +166,45 @@ def test_high_risk_requires_manual_confirmation(async_session_maker) -> None:
             assert updated.status == "PENDING"
 
     asyncio.run(_run())
+
+
+def test_create_booking_evaluates_risk_without_explicit_assessment(async_session_maker) -> None:
+    start_local = (
+        datetime.now(tz=booking_service.LOCAL_TZ)
+        .replace(hour=10, minute=0, second=0, microsecond=0)
+    )
+    if start_local <= datetime.now(tz=booking_service.LOCAL_TZ):
+        start_local += timedelta(days=1)
+    starts_at = start_local.astimezone(timezone.utc)
+
+    async def _run() -> None:
+        async with async_session_maker() as session:
+            lead = await _create_lead(
+                session,
+                postal_code="T9X1A1",
+                estimate_total=180.0,
+            )
+            session.add(
+                Booking(
+                    booking_id="cancel-seed-risk",
+                    team_id=1,
+                    lead_id=lead.lead_id,
+                    starts_at=datetime.now(tz=timezone.utc) - timedelta(days=2),
+                    duration_minutes=60,
+                    status="CANCELLED",
+                )
+            )
+            await session.commit()
+
+            booking = await booking_service.create_booking(
+                starts_at=starts_at,
+                duration_minutes=90,
+                lead_id=lead.lead_id,
+                session=session,
+            )
+
+            assert booking.risk_band == booking_service.RiskBand.HIGH
+            assert {"cancel_history", "short_notice"}.issubset(set(booking.risk_reasons))
+            assert "area_flagged" in booking.risk_reasons
+
+    asyncio.run(_run())

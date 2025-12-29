@@ -751,6 +751,7 @@ async def create_booking(
     if resolved_lead is None and lead_id:
         resolved_lead = await session.get(Lead, lead_id)
 
+    estimated_total = (resolved_lead.estimate_snapshot or {}).get("total_before_tax") if resolved_lead else None
     normalized_service_type = _resolve_service_type(service_type, resolved_lead)
 
     decision = deposit_decision
@@ -762,7 +763,7 @@ async def create_booking(
             deposit_percent=settings.deposit_percent,
             deposits_enabled=settings.deposits_enabled,
             service_type=normalized_service_type,
-            estimated_total=(resolved_lead.estimate_snapshot or {}).get("total_before_tax") if resolved_lead else None,
+            estimated_total=estimated_total,
         )
 
     snapshot = policy_snapshot or decision.policy_snapshot
@@ -799,7 +800,7 @@ async def create_booking(
             client_id=client_id,
             starts_at=normalized,
             postal_code=resolved_lead.postal_code if resolved_lead else None,
-            estimated_total=(resolved_lead.estimate_snapshot or {}).get("total_before_tax") if resolved_lead else None,
+            estimated_total=estimated_total,
         )
     snapshot_payload: dict | None = copy.deepcopy(
         snapshot.model_dump(mode="json") if hasattr(snapshot, "model_dump") else snapshot
