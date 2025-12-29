@@ -1,13 +1,17 @@
 import base64
 import datetime
-from datetime import timezone
+from datetime import date, timezone
 
 import pytest
 import sqlalchemy as sa
 
+from app.domain.addons.db_models import AddonDefinition
 from app.domain.admin_audit.db_models import AdminAuditLog
 from app.domain.analytics.db_models import EventLog
 from app.domain.bookings.db_models import Booking
+from app.domain.invoices import service as invoice_service
+from app.domain.invoices.db_models import Invoice
+from app.domain.invoices.schemas import InvoiceItemCreate
 from app.domain.leads.db_models import Lead
 from app.domain.reason_logs.db_models import ReasonLog
 from app.domain.time_tracking.db_models import WorkTimeEntry
@@ -188,4 +192,139 @@ async def test_worker_cannot_mutate_other_team_job(client, async_session_maker):
     client.post("/worker/login", headers=_basic_auth("worker", "secret"))
     resp = client.post(f"/worker/jobs/{other_booking}/start")
     assert resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_worker_addons_update_invoice_totals(client, async_session_maker):
+    settings.worker_basic_username = "worker"
+    settings.worker_basic_password = "secret"
+    settings.worker_team_id = 1
+
+    async with async_session_maker() as session:
+        lead = Lead(
+            name="Invoice Lead",
+            phone="780-555-9999",
+            email="invoice@example.com",
+            postal_code="T5A",
+            address="1 Addon St",
+            preferred_dates=["Tue"],
+            structured_inputs={"beds": 2, "baths": 1, "cleaning_type": "standard"},
+            estimate_snapshot={
+                "subtotal_cents": 10000,
+                "tax_cents": 500,
+                "total_before_tax": 10000,
+                "pricing_config_version": "v1",
+                "config_hash": "hash",
+                "line_items": [],
+            },
+            pricing_config_version="v1",
+            config_hash="hash",
+        )
+        session.add(lead)
+        await session.flush()
+
+        booking = Booking(
+            team_id=1,
+            lead_id=lead.lead_id,
+            starts_at=datetime.datetime.now(tz=timezone.utc) + datetime.timedelta(hours=2),
+            duration_minutes=60,
+            status="PENDING",
+            deposit_required=False,
+            deposit_policy=[],
+            consent_photos=False,
+        )
+        session.add(booking)
+        addon = AddonDefinition(
+            code="WIN",
+            name="Windows",
+            price_cents=2000,
+            default_minutes=30,
+            is_active=True,
+        )
+        session.add(addon)
+        await session.flush()
+
+        invoice = await invoice_service.create_invoice_from_order(
+            session,
+            booking,
+            [
+                InvoiceItemCreate(
+                    description="Base",
+                    qty=1,
+                    unit_price_cents=10000,
+                    tax_rate=0.05,
+                )
+            ],
+            issue_date=date.today(),
+        )
+        await session.commit()
+
+        booking_id = booking.booking_id
+        addon_id = addon.addon_id
+        invoice_id = invoice.invoice_id
+
+    client.post("/worker/login", headers=_basic_auth("worker", "secret"))
+    resp = client.post(
+        f"/worker/jobs/{booking_id}/addons",
+        data={"addon_id": addon_id, "qty": 1},
+    )
+    assert resp.status_code == 200, resp.text
+
+    async with async_session_maker() as session:
+        refreshed = await session.get(Invoice, invoice_id)
+        assert refreshed is not None
+        await session.refresh(refreshed, attribute_names=["items"])
+        assert refreshed.subtotal_cents == 12000
+        assert refreshed.tax_cents == 600
+        assert refreshed.total_cents == 12600
+        assert any(item.description == "Windows" for item in refreshed.items)
+
+
+@pytest.mark.anyio
+async def test_worker_cannot_add_addons_to_other_team(client, async_session_maker):
+    settings.worker_basic_username = "worker"
+    settings.worker_basic_password = "secret"
+    settings.worker_team_id = 1
+
+    async with async_session_maker() as session:
+        booking = Booking(
+            team_id=2,
+            starts_at=datetime.datetime.now(tz=timezone.utc) + datetime.timedelta(hours=3),
+            duration_minutes=45,
+            status="PENDING",
+        )
+        session.add(booking)
+        addon = AddonDefinition(
+            code="FRI",
+            name="Fridge",
+            price_cents=1500,
+            default_minutes=20,
+            is_active=True,
+        )
+        session.add(addon)
+        await session.commit()
+        booking_id = booking.booking_id
+        addon_id = addon.addon_id
+
+    client.post("/worker/login", headers=_basic_auth("worker", "secret"))
+    resp = client.post(
+        f"/worker/jobs/{booking_id}/addons", data={"addon_id": addon_id, "qty": 1}
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_worker_price_adjust_requires_note(client, async_session_maker):
+    settings.worker_basic_username = "worker"
+    settings.worker_basic_password = "secret"
+    settings.worker_team_id = 1
+    booking_id = await _seed_booking(async_session_maker, team_id=1)
+
+    client.post("/worker/login", headers=_basic_auth("worker", "secret"))
+    client.post(f"/worker/jobs/{booking_id}/start")
+    resp = client.post(
+        f"/worker/jobs/{booking_id}/finish",
+        data={"price_adjust_reason": "EXTRA_SERVICE"},
+    )
+    assert resp.status_code == 400
 

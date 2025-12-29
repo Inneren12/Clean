@@ -142,6 +142,18 @@ def outstanding_balance_cents(invoice: Invoice) -> int:
     return max(invoice.total_cents - _paid_cents(invoice), 0)
 
 
+def recalculate_totals(invoice: Invoice) -> None:
+    subtotal = 0
+    tax_total = 0
+    for item in invoice.items:
+        subtotal += item.line_total_cents
+        tax_total += _calculate_tax(item.line_total_cents, item.tax_rate)
+
+    invoice.subtotal_cents = subtotal
+    invoice.tax_cents = tax_total
+    invoice.total_cents = subtotal + tax_total
+
+
 async def _refresh_invoice_payment_status(session: AsyncSession, invoice: Invoice) -> int:
     paid = await session.scalar(
         select(func.coalesce(func.sum(Payment.amount_cents), 0)).where(
