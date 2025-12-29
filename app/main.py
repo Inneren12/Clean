@@ -26,7 +26,6 @@ from app.api.routes_worker import router as worker_router
 from app.api.worker_auth import WorkerAccessMiddleware
 from app.api.routes_public import router as public_router
 from app.api.routes_leads import router as leads_router
-from app.api.routes_style_guide import router as style_guide_router
 from app.domain.errors import DomainError
 from app.infra.db import get_session_factory
 from app.infra.email import EmailAdapter, resolve_email_adapter
@@ -122,6 +121,15 @@ def _resolve_cors_origins(app_settings) -> Iterable[str]:
     if app_settings.app_env == "dev":
         return ["http://localhost:3000"]
     return []
+
+
+def _try_include_style_guide(app: FastAPI) -> None:
+    try:
+        from app.api.routes_style_guide import router as style_guide_router
+    except Exception as exc:
+        logger.warning("style_guide_disabled", extra={"extra": {"reason": str(exc)}})
+        return
+    app.include_router(style_guide_router)
 
 
 def create_app(app_settings) -> FastAPI:
@@ -228,7 +236,7 @@ def create_app(app_settings) -> FastAPI:
     app.include_router(bookings_router)
     app.include_router(leads_router)
     app.include_router(admin_router)
-    app.include_router(style_guide_router)
+    _try_include_style_guide(app)
     return app
 
 
