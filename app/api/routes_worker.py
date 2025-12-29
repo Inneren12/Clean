@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from math import ceil
 from typing import Iterable
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,9 +22,16 @@ from app.api.worker_auth import (
 from app.dependencies import get_db_session
 from app.domain.addons import service as addon_service
 from app.domain.analytics import service as analytics_service
+from app.domain.bookings import photos_service
 from app.domain.bookings.db_models import Booking
+from app.domain.bookings import schemas as booking_schemas
 from app.domain.addons.db_models import OrderAddon
 from app.domain.admin_audit import service as audit_service
+from app.domain.checklists import schemas as checklist_schemas
+from app.domain.checklists import service as checklist_service
+from app.domain.disputes import schemas as dispute_schemas
+from app.domain.disputes import service as dispute_service
+from app.domain.disputes.db_models import Dispute
 from app.domain.invoices.db_models import Invoice
 from app.domain.leads.db_models import Lead
 from app.domain.reason_logs import schemas as reason_schemas
@@ -31,9 +39,14 @@ from app.domain.reason_logs import service as reason_service
 from app.domain.time_tracking import schemas as time_schemas
 from app.domain.time_tracking import service as time_service
 from app.settings import settings
+from pydantic import BaseModel
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+class WorkerDisputeRequest(BaseModel):
+    reason: str | None = None
 
 
 def _format_dt(value: datetime | None) -> str:
@@ -129,6 +142,17 @@ async def _load_worker_booking(
     if booking is None or booking.team_id != identity.team_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
     return booking
+
+
+def _infer_service_type(booking: Booking) -> str | None:
+    lead: Lead | None = getattr(booking, "lead", None)
+    if not lead or not isinstance(getattr(lead, "structured_inputs", None), dict):
+        return None
+    structured = lead.structured_inputs or {}
+    service_type = structured.get("service_type") or structured.get("cleaning_type")
+    if isinstance(service_type, str):
+        return service_type
+    return None
 
 
 async def _record_job_event(
@@ -711,4 +735,270 @@ async def worker_finish_job(
         message = str(exc)
         error = True
     return await _render_job_page(session, booking, identity, message=message, error=error, log_view=False)
+
+
+@router.get(
+    "/worker/jobs/{job_id}/checklist",
+    response_model=checklist_schemas.ChecklistRunResponse,
+)
+async def worker_checklist(
+    job_id: str,
+    identity: WorkerIdentity = Depends(require_worker),
+    session: AsyncSession = Depends(get_db_session),
+) -> checklist_schemas.ChecklistRunResponse:
+    booking = await _load_worker_booking(session, job_id, identity)
+    await session.refresh(booking, attribute_names=["lead"])
+    run = await checklist_service.find_run_by_order(session, booking.booking_id)
+    if run is None:
+        try:
+            run = await checklist_service.init_checklist(
+                session,
+                booking.booking_id,
+                template_id=None,
+                service_type=_infer_service_type(booking),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Checklist not found")
+    await _audit(
+        session,
+        identity,
+        action="WORKER_CHECKLIST_VIEW",
+        resource_type="checklist",
+        resource_id=run.run_id,
+        before=None,
+        after={"order_id": booking.booking_id},
+    )
+    await session.commit()
+    return checklist_service.serialize_run(run)
+
+
+@router.patch(
+    "/worker/jobs/{job_id}/checklist/items/{run_item_id}",
+    response_model=checklist_schemas.ChecklistRunResponse,
+)
+async def worker_toggle_checklist_item(
+    job_id: str,
+    run_item_id: str,
+    patch: checklist_schemas.ChecklistRunItemPatch,
+    identity: WorkerIdentity = Depends(require_worker),
+    session: AsyncSession = Depends(get_db_session),
+) -> checklist_schemas.ChecklistRunResponse:
+    booking = await _load_worker_booking(session, job_id, identity)
+    try:
+        item = await checklist_service.toggle_item(session, booking.booking_id, run_item_id, patch)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Checklist item not found")
+    await _audit(
+        session,
+        identity,
+        action="WORKER_CHECKLIST_UPDATE",
+        resource_type="checklist_item",
+        resource_id=item.run_item_id,
+        before=None,
+        after={"checked": item.checked, "note": item.note},
+    )
+    run = await checklist_service.find_run_by_order(session, booking.booking_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Checklist not found")
+    return checklist_service.serialize_run(run)
+
+
+@router.post(
+    "/worker/jobs/{job_id}/checklist/complete",
+    response_model=checklist_schemas.ChecklistRunResponse,
+)
+async def worker_complete_checklist(
+    job_id: str,
+    identity: WorkerIdentity = Depends(require_worker),
+    session: AsyncSession = Depends(get_db_session),
+) -> checklist_schemas.ChecklistRunResponse:
+    booking = await _load_worker_booking(session, job_id, identity)
+    try:
+        run = await checklist_service.complete_checklist(session, booking.booking_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Checklist not found")
+    await _audit(
+        session,
+        identity,
+        action="WORKER_CHECKLIST_COMPLETE",
+        resource_type="checklist",
+        resource_id=run.run_id,
+        before=None,
+        after={"status": run.status},
+    )
+    return checklist_service.serialize_run(run)
+
+
+@router.post(
+    "/worker/jobs/{job_id}/photos",
+    response_model=booking_schemas.OrderPhotoResponse,
+)
+async def worker_upload_photo(
+    job_id: str,
+    phase: str = Form(...),
+    consent: bool = Form(False),
+    file: UploadFile = File(...),
+    identity: WorkerIdentity = Depends(require_worker),
+    session: AsyncSession = Depends(get_db_session),
+) -> booking_schemas.OrderPhotoResponse:
+    booking = await _load_worker_booking(session, job_id, identity)
+    if consent and not booking.consent_photos:
+        booking = await photos_service.update_consent(session, booking.booking_id, True)
+    if not booking.consent_photos:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Photo consent not granted")
+
+    parsed_phase = booking_schemas.PhotoPhase.from_any_case(phase)
+    photo = await photos_service.save_photo(
+        session,
+        booking,
+        file,
+        parsed_phase,
+        identity.username,
+    )
+    await _audit(
+        session,
+        identity,
+        action="WORKER_PHOTO_UPLOAD",
+        resource_type="photo",
+        resource_id=photo.photo_id,
+        before=None,
+        after={"phase": parsed_phase.value, "order_id": booking.booking_id},
+    )
+    return booking_schemas.OrderPhotoResponse(
+        photo_id=photo.photo_id,
+        order_id=photo.order_id,
+        phase=booking_schemas.PhotoPhase(photo.phase),
+        filename=photo.filename,
+        original_filename=photo.original_filename,
+        content_type=photo.content_type,
+        size_bytes=photo.size_bytes,
+        sha256=photo.sha256,
+        uploaded_by=photo.uploaded_by,
+        created_at=photo.created_at,
+    )
+
+
+@router.get(
+    "/worker/jobs/{job_id}/photos",
+    response_model=booking_schemas.OrderPhotoListResponse,
+)
+async def worker_list_photos(
+    job_id: str,
+    identity: WorkerIdentity = Depends(require_worker),
+    session: AsyncSession = Depends(get_db_session),
+) -> booking_schemas.OrderPhotoListResponse:
+    booking = await _load_worker_booking(session, job_id, identity)
+    _ = booking
+    photos = await photos_service.list_photos(session, job_id)
+    return booking_schemas.OrderPhotoListResponse(
+        photos=[
+            booking_schemas.OrderPhotoResponse(
+                photo_id=p.photo_id,
+                order_id=p.order_id,
+                phase=booking_schemas.PhotoPhase(p.phase),
+                filename=p.filename,
+                original_filename=p.original_filename,
+                content_type=p.content_type,
+                size_bytes=p.size_bytes,
+                sha256=p.sha256,
+                uploaded_by=p.uploaded_by,
+                created_at=p.created_at,
+            )
+            for p in photos
+        ]
+    )
+
+
+@router.delete(
+    "/worker/jobs/{job_id}/photos/{photo_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def worker_delete_photo(
+    job_id: str,
+    photo_id: str,
+    identity: WorkerIdentity = Depends(require_worker),
+    session: AsyncSession = Depends(get_db_session),
+):
+    booking = await _load_worker_booking(session, job_id, identity)
+    photo = await photos_service.get_photo(session, job_id, photo_id)
+    if photo.uploaded_by != identity.username:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot delete another worker's upload")
+    await photos_service.delete_photo(session, booking.booking_id, photo.photo_id)
+    await _audit(
+        session,
+        identity,
+        action="WORKER_PHOTO_DELETE",
+        resource_type="photo",
+        resource_id=photo.photo_id,
+        before=None,
+        after={"order_id": booking.booking_id},
+    )
+    return JSONResponse(status_code=status.HTTP_204_NO_CONTENT, content={"status": "deleted"})
+
+
+@router.post(
+    "/worker/jobs/{job_id}/disputes/report",
+    response_model=dict,
+)
+async def worker_report_dispute(
+    job_id: str,
+    request: WorkerDisputeRequest,
+    identity: WorkerIdentity = Depends(require_worker),
+    session: AsyncSession = Depends(get_db_session),
+):
+    booking = await _load_worker_booking(session, job_id, identity)
+    await session.refresh(booking, attribute_names=["lead"])
+    dispute_stmt = (
+        select(Dispute)
+        .where(
+            Dispute.booking_id == booking.booking_id,
+            Dispute.state.in_(
+                [dispute_schemas.DisputeState.OPEN.value, dispute_schemas.DisputeState.FACTS_COLLECTED.value]
+            ),
+        )
+        .limit(1)
+    )
+    result = await session.execute(dispute_stmt)
+    dispute = result.scalar_one_or_none()
+    if dispute is None:
+        dispute = await dispute_service.open_dispute(
+            session,
+            booking.booking_id,
+            reason=request.reason or "Worker reported issue",
+            opened_by=identity.username,
+        )
+
+    checklist_run = await checklist_service.find_run_by_order(session, booking.booking_id)
+    checklist_snapshot = (
+        jsonable_encoder(checklist_service.serialize_run(checklist_run)) if checklist_run else None
+    )
+    photos = await photos_service.list_photos(session, booking.booking_id)
+    time_log = await time_service.fetch_time_tracking_summary(session, booking.booking_id)
+    if time_log is None:
+        time_log = time_service.summarize_order_time(booking, None)
+    time_log = jsonable_encoder(time_log)
+
+    facts = dispute_schemas.DisputeFacts(
+        photo_refs=[p.photo_id for p in photos],
+        checklist_snapshot=checklist_snapshot,
+        time_log=time_log,
+    )
+    await dispute_service.attach_facts(session, dispute.dispute_id, facts)
+    await _audit(
+        session,
+        identity,
+        action="WORKER_DISPUTE_REPORT",
+        resource_type="dispute",
+        resource_id=dispute.dispute_id,
+        before=None,
+        after={"booking_id": booking.booking_id, "photo_refs": facts.photo_refs},
+    )
+    await session.commit()
+    return {"dispute_id": dispute.dispute_id, "state": dispute.state, "facts": facts.model_dump()}
 
