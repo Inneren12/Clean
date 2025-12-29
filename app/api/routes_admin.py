@@ -372,8 +372,8 @@ async def list_leads(
 
 @router.post("/v1/admin/leads/{lead_id}/status", response_model=AdminLeadResponse)
 async def update_lead_status(
+    http_request: Request,
     lead_id: str,
-    request: Request,
     payload: AdminLeadStatusUpdateRequest,
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
@@ -395,7 +395,7 @@ async def update_lead_status(
     )
     response_body = admin_lead_from_model(lead, referral_credit_count=int(credit_count or 0))
 
-    request.state.explicit_admin_audit = True
+    http_request.state.explicit_admin_audit = True
     await audit_service.record_action(
         session,
         identity=identity,
@@ -503,11 +503,11 @@ async def list_subscriptions_admin(
     response_model=subscription_schemas.SubscriptionRunResult,
 )
 async def run_subscriptions(
-    request: Request,
+    http_request: Request,
     identity: AdminIdentity = Depends(require_admin),
     session: AsyncSession = Depends(get_db_session),
 ) -> subscription_schemas.SubscriptionRunResult:
-    adapter = getattr(request.app.state, "email_adapter", None)
+    adapter = getattr(http_request.app.state, "email_adapter", None)
     result = await subscription_service.generate_due_orders(session, email_adapter=adapter)
     await session.commit()
     return subscription_schemas.SubscriptionRunResult(
@@ -679,8 +679,8 @@ async def list_bookings(
 
 @router.post("/v1/admin/bookings/{booking_id}/confirm", response_model=booking_schemas.BookingResponse)
 async def confirm_booking(
+    http_request: Request,
     booking_id: str,
-    request: Request,
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ):
@@ -771,7 +771,7 @@ async def confirm_booking(
         cancellation_exception=booking.cancellation_exception,
         cancellation_exception_note=booking.cancellation_exception_note,
     )
-    request.state.explicit_admin_audit = True
+    http_request.state.explicit_admin_audit = True
     await audit_service.record_action(
         session,
         identity=identity,
@@ -935,8 +935,8 @@ async def admin_case_detail(
 
 @router.post("/v1/admin/bookings/{booking_id}/cancel", response_model=booking_schemas.BookingResponse)
 async def cancel_booking(
+    http_request: Request,
     booking_id: str,
-    request: Request,
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ):
@@ -985,7 +985,7 @@ async def cancel_booking(
         cancellation_exception=booking.cancellation_exception,
         cancellation_exception_note=booking.cancellation_exception_note,
     )
-    request.state.explicit_admin_audit = True
+    http_request.state.explicit_admin_audit = True
     await audit_service.record_action(
         session,
         identity=identity,
@@ -1001,8 +1001,8 @@ async def cancel_booking(
 
 @router.post("/v1/admin/bookings/{booking_id}/reschedule", response_model=booking_schemas.BookingResponse)
 async def reschedule_booking(
+    http_request: Request,
     booking_id: str,
-    request: Request,
     payload: booking_schemas.BookingRescheduleRequest,
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
@@ -1058,7 +1058,7 @@ async def reschedule_booking(
         cancellation_exception=booking.cancellation_exception,
         cancellation_exception_note=booking.cancellation_exception_note,
     )
-    request.state.explicit_admin_audit = True
+    http_request.state.explicit_admin_audit = True
     await audit_service.record_action(
         session,
         identity=identity,
@@ -1077,9 +1077,9 @@ async def reschedule_booking(
     response_model=booking_schemas.BookingResponse,
 )
 async def complete_booking(
+    http_request: Request,
     booking_id: str,
     payload: booking_schemas.BookingCompletionRequest,
-    http_request: Request,
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ):
