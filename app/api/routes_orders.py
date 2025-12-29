@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.admin_auth import AdminIdentity, AdminRole, require_admin, require_dispatch
+from app.api.admin_auth import AdminIdentity, AdminPermission, AdminRole, _assert_permissions, require_admin, require_dispatch
 from app.domain.addons import schemas as addon_schemas
 from app.domain.addons import service as addon_service
 from app.dependencies import get_db_session
@@ -148,12 +148,15 @@ async def upload_order_photo(
     order = await photos_service.fetch_order(session, order_id)
     parsed_phase = booking_schemas.PhotoPhase.from_any_case(phase)
 
-    if admin_override and identity.role != AdminRole.ADMIN:
-        logger.info(
-            "order_photo_denied",
-            extra={"extra": {"order_id": order_id, "reason": "admin_override_required"}},
-        )
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin override required")
+    if admin_override:
+        try:
+            _assert_permissions(identity, [AdminPermission.ADMIN])
+        except HTTPException:
+            logger.info(
+                "order_photo_denied",
+                extra={"extra": {"order_id": order_id, "reason": "admin_override_required"}},
+            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin override required")
 
     if not order.consent_photos and not admin_override:
         logger.info(
