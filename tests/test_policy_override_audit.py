@@ -133,3 +133,62 @@ async def test_cancellation_exception_audit_is_immutable(async_session_maker):
             audit.reason = "tamper"
             await session.flush()
         await session.rollback()
+
+
+@pytest.mark.anyio
+async def test_apply_override_defers_commit(async_session_maker):
+    booking_id: str
+
+    async with async_session_maker() as session:
+        booking = Booking(
+            team_id=1,
+            lead_id=None,
+            starts_at=datetime.now(tz=timezone.utc),
+            duration_minutes=30,
+            planned_minutes=30,
+            status="PENDING",
+            deposit_required=False,
+            deposit_policy=[],
+            deposit_status=None,
+        )
+        session.add(booking)
+        await session.commit()
+        await session.refresh(booking)
+
+        await booking_service.override_deposit_policy(
+            session,
+            booking.booking_id,
+            actor="ops",
+            reason="manual hold",
+            deposit_required=True,
+            deposit_cents=2500,
+            deposit_policy=["manual_override"],
+            deposit_status="pending",
+            commit=False,
+        )
+
+        assert booking.deposit_required is True
+        booking_id = booking.booking_id
+
+        await session.rollback()
+
+    async with async_session_maker() as read_session:
+        reverted = await read_session.get(Booking, booking_id)
+        assert reverted.deposit_required is False
+
+    async with async_session_maker() as session:
+        await booking_service.override_deposit_policy(
+            session,
+            booking_id,
+            actor="ops",
+            reason="manual hold",
+            deposit_required=True,
+            deposit_cents=2500,
+            deposit_policy=["manual_override"],
+            deposit_status="pending",
+            commit=True,
+        )
+
+    async with async_session_maker() as read_session:
+        persisted = await read_session.get(Booking, booking_id)
+        assert persisted.deposit_required is True

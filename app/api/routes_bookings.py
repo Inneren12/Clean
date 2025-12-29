@@ -175,9 +175,10 @@ async def create_booking(
                     )
                     booking.deposit_required = False
                     booking.deposit_status = None
-                    booking.deposit_policy = deposit_decision.reasons
+                    booking.deposit_policy = list(deposit_decision.reasons)
                     booking.deposit_cents = None
                     booking.policy_snapshot = deposit_decision.policy_snapshot.model_dump(mode="json")
+                    await session.flush()
                     logger.warning(
                         "stripe_checkout_creation_failed",
                         extra={

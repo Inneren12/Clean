@@ -1,6 +1,7 @@
 import json
 import time
 from datetime import datetime, timedelta, timezone
+import asyncio
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -230,6 +231,20 @@ def test_checkout_failure_downgrades_booking(client, async_session_maker, monkey
         assert data["deposit_required"] is False
         assert any("checkout_unavailable" in reason for reason in data["deposit_policy"])
         assert data["policy_snapshot"]["deposit"]["downgraded_reason"] == "checkout_unavailable"
+        booking_id = data["booking_id"]
+
+        async def _fetch_booking() -> Booking:
+            async with async_session_maker() as session:
+                return await session.get(Booking, booking_id)
+
+        booking = asyncio.run(_fetch_booking())
+        assert booking is not None
+        assert booking.deposit_required is False
+        assert booking.deposit_status is None
+        assert booking.deposit_cents is None
+        assert any("checkout_unavailable" in reason for reason in booking.deposit_policy)
+        assert booking.policy_snapshot is not None
+        assert booking.policy_snapshot.get("deposit", {}).get("downgraded_reason") == "checkout_unavailable"
     finally:
         app.state.email_adapter = original_adapter
         settings.stripe_secret_key = original_secret
