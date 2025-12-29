@@ -10,12 +10,15 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.admin_auth import (
     AdminIdentity,
+    AdminPermission,
+    ROLE_PERMISSIONS,
     require_admin,
     require_dispatch,
     require_finance,
@@ -68,6 +71,24 @@ from app.settings import settings
 
 router = APIRouter(dependencies=[Depends(require_viewer)])
 logger = logging.getLogger(__name__)
+
+
+class AdminProfileResponse(BaseModel):
+    username: str
+    role: str
+    permissions: list[str]
+
+
+@router.get("/v1/admin/profile", response_model=AdminProfileResponse)
+async def get_admin_profile(identity: AdminIdentity = Depends(require_viewer)) -> AdminProfileResponse:
+    return AdminProfileResponse(
+        username=identity.username,
+        role=getattr(identity.role, "value", str(identity.role)),
+        permissions=sorted(
+            getattr(permission, "value", str(permission))
+            for permission in ROLE_PERMISSIONS.get(identity.role, set())
+        ),
+    )
 
 
 def _format_dt(value: datetime | None) -> str:
