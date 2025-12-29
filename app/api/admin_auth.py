@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Iterable, Optional
 
 from fastapi import Depends, HTTPException, Request, status
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.security.utils import get_authorization_scheme_param
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -213,11 +214,14 @@ class AdminAccessMiddleware(BaseHTTPMiddleware):
         if not request.url.path.startswith("/v1/admin"):
             return await call_next(request)
 
-        credentials = _credentials_from_header(request)
-        identity = _authenticate_credentials(credentials)
-        _assert_permissions(identity, [AdminPermission.VIEW])
-        request.state.admin_identity = identity
-        return await call_next(request)
+        try:
+            credentials = _credentials_from_header(request)
+            identity = _authenticate_credentials(credentials)
+            _assert_permissions(identity, [AdminPermission.VIEW])
+            request.state.admin_identity = identity
+            return await call_next(request)
+        except HTTPException as exc:
+            return await http_exception_handler(request, exc)
 
 
 class AdminAuditMiddleware(BaseHTTPMiddleware):

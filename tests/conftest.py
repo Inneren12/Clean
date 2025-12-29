@@ -122,3 +122,19 @@ def client(async_session_maker):
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def client_no_raise(async_session_maker):
+    """Test client that returns HTTP responses instead of raising server exceptions."""
+
+    async def override_db_session():
+        async with async_session_maker() as session:
+            yield session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.state.bot_store = InMemoryBotStore()
+    app.state.db_session_factory = async_session_maker
+    with TestClient(app, raise_server_exceptions=False) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
