@@ -234,3 +234,96 @@ async def test_apply_override_defers_commit(async_session_maker):
     async with async_session_maker() as read_session:
         persisted = await read_session.get(Booking, booking_id)
         assert persisted.deposit_required is True
+
+
+@pytest.mark.anyio
+async def test_apply_override_does_not_rollback_outer_transaction(async_session_maker):
+    """Test that apply_override does not rollback an outer transaction on error."""
+    async with async_session_maker() as session:
+        # Create a booking within an outer transaction
+        booking = Booking(
+            team_id=1,
+            lead_id=None,
+            starts_at=datetime.now(tz=timezone.utc),
+            duration_minutes=30,
+            planned_minutes=30,
+            status="PENDING",
+            deposit_required=False,
+            deposit_policy=[],
+            deposit_status=None,
+        )
+        session.add(booking)
+        await session.flush()
+        booking_id = booking.booking_id
+
+        # Try to apply an invalid override (empty reason)
+        # This should fail, but should not rollback the outer transaction
+        try:
+            await override_service.apply_override(
+                session,
+                booking_id=booking_id,
+                override_type=OverrideType.RISK_BAND,
+                actor="admin",
+                reason="",  # Invalid: empty reason
+                payload={"risk_band": "HIGH"},
+                commit=False,
+            )
+        except ValueError:
+            pass  # Expected error
+
+        # The outer transaction should still be active
+        # and we should be able to commit the booking
+        await session.commit()
+
+    # Verify the booking was created despite the failed override
+    async with async_session_maker() as read_session:
+        created_booking = await read_session.get(Booking, booking_id)
+        assert created_booking is not None
+        assert created_booking.status == "PENDING"
+
+
+@pytest.mark.anyio
+async def test_audit_row_flushed_when_commit_false(async_session_maker):
+    """Test that audit rows are flushed even when commit=False."""
+    async with async_session_maker() as session:
+        booking = Booking(
+            team_id=1,
+            lead_id=None,
+            starts_at=datetime.now(tz=timezone.utc),
+            duration_minutes=30,
+            planned_minutes=30,
+            status="PENDING",
+            deposit_required=False,
+            deposit_policy=[],
+            deposit_status=None,
+        )
+        session.add(booking)
+        await session.commit()
+        await session.refresh(booking)
+
+        # Apply override with commit=False
+        await booking_service.override_risk_band(
+            session,
+            booking.booking_id,
+            actor="admin",
+            reason="test",
+            new_band=booking_service.RiskBand.HIGH,
+            commit=False,
+        )
+
+        # Audit should be visible after flush
+        audits = await override_service.list_overrides(
+            session, booking_id=booking.booking_id, override_type=OverrideType.RISK_BAND
+        )
+        assert len(audits) == 1
+
+        # Commit the transaction
+        await session.commit()
+
+    # Verify audit persisted
+    async with async_session_maker() as read_session:
+        audits = await override_service.list_overrides(
+            read_session, booking_id=booking.booking_id, override_type=OverrideType.RISK_BAND
+        )
+        assert len(audits) == 1
+        assert audits[0].new_value["risk_band"] == "HIGH"

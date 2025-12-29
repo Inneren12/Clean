@@ -1068,6 +1068,7 @@ async def override_risk_band(
     new_risk_reasons: list[str] | None = None,
     commit: bool = True,
 ) -> Booking:
+    # Only include non-None values in payload to preserve current values
     payload = {"risk_band": new_band}
     if new_risk_score is not None:
         payload["risk_score"] = new_risk_score

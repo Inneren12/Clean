@@ -56,17 +56,20 @@ async def apply_override(
         if override_type == OverrideType.RISK_BAND:
             band_value = payload.get("risk_band")
             band_str = band_value.value if hasattr(band_value, "value") else str(band_value)
-            risk_score = booking.risk_score
-            if "risk_score" in payload and payload.get("risk_score") is not None:
-                risk_score = int(payload.get("risk_score"))
 
-            risk_reasons = list(booking.risk_reasons)
-            if "risk_reasons" in payload and payload.get("risk_reasons") is not None:
-                risk_reasons = list(payload.get("risk_reasons"))
+            # Preserve current values if not provided or None
+            risk_score = booking.risk_score
+            if "risk_score" in payload and payload["risk_score"] is not None:
+                risk_score = int(payload["risk_score"])
+
+            risk_reasons = list(booking.risk_reasons) if booking.risk_reasons else []
+            if "risk_reasons" in payload and payload["risk_reasons"] is not None:
+                risk_reasons = list(payload["risk_reasons"])
+
             old_value = {
                 "risk_band": booking.risk_band,
                 "risk_score": booking.risk_score,
-                "risk_reasons": list(booking.risk_reasons),
+                "risk_reasons": list(booking.risk_reasons) if booking.risk_reasons else [],
             }
             booking.risk_band = band_str
             booking.risk_score = risk_score
@@ -74,7 +77,7 @@ async def apply_override(
             new_value = {
                 "risk_band": booking.risk_band,
                 "risk_score": booking.risk_score,
-                "risk_reasons": list(booking.risk_reasons),
+                "risk_reasons": list(booking.risk_reasons) if booking.risk_reasons else [],
             }
         elif override_type == OverrideType.DEPOSIT_REQUIRED:
             deposit_required = bool(payload.get("deposit_required"))
@@ -158,6 +161,7 @@ async def apply_override(
 
             old_value, new_value = _apply_mutation(booking)
 
+            # Always flush audit row so it's visible after caller commits
             audit = await record_override(
                 session,
                 booking_id=booking.booking_id,
@@ -166,7 +170,7 @@ async def apply_override(
                 reason=reason,
                 old_value=old_value,
                 new_value=new_value,
-                flush=commit,
+                flush=True,
             )
 
             if commit:
@@ -174,7 +178,8 @@ async def apply_override(
                 await session.commit()
                 await session.refresh(booking)
     except Exception:
-        if session.in_transaction():
+        # Only rollback if we started the transaction
+        if started_transaction and session.in_transaction():
             await session.rollback()
         raise
     finally:
