@@ -142,7 +142,7 @@ def _infer_tax_rate(lead: Lead | None) -> Decimal | None:
     for key in ("tax_rate", "gst_rate"):
         if key in snapshot:
             try:
-                return Decimal(str(snapshot[key]))
+                return Decimal(str(snapshot[key])).quantize(Decimal("0.0001"))
             except (InvalidOperation, TypeError, ValueError):
                 continue
 
@@ -152,7 +152,7 @@ def _infer_tax_rate(lead: Lead | None) -> Decimal | None:
         try:
             subtotal_decimal = Decimal(str(subtotal))
             if subtotal_decimal > 0:
-                return Decimal(str(tax_cents)) / subtotal_decimal
+                return (Decimal(str(tax_cents)) / subtotal_decimal).quantize(Decimal("0.0001"))
         except (InvalidOperation, TypeError, ValueError):
             return None
     return None
