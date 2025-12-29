@@ -182,14 +182,15 @@ async def _record_job_event(
     planned_minutes = getattr(booking, "planned_minutes", None)
     duration_minutes = getattr(booking, "duration_minutes", None)
     try:
-        await analytics_service.log_event(
-            session,
-            event_type=event_type,
-            lead=lead,
-            booking=booking,
-            estimated_duration_minutes=planned_minutes if planned_minutes is not None else duration_minutes,
-            actual_duration_minutes=booking.actual_duration_minutes,
-        )
+        async with session.begin_nested():
+            await analytics_service.log_event(
+                session,
+                event_type=event_type,
+                lead=lead,
+                booking=booking,
+                estimated_duration_minutes=planned_minutes if planned_minutes is not None else duration_minutes,
+                actual_duration_minutes=booking.actual_duration_minutes,
+            )
         await session.commit()
     except Exception:
         await session.rollback()
@@ -455,9 +456,10 @@ def _render_job_detail(
 
     planned_minutes = summary.planned_minutes or booking.duration_minutes or 0
     actual_minutes = ceil(summary.effective_seconds / 60) if summary.effective_seconds else 0
-    state = str(summary.state) if summary.state is not None else "NOT_STARTED"
+    not_started = summary.state in {None, getattr(time_service, "NOT_STARTED", "NOT_STARTED")}
+    state = str(summary.state or getattr(time_service, "NOT_STARTED", "NOT_STARTED"))
     controls: list[str] = []
-    if summary.state is None:
+    if not_started:
         controls.append(
             f"<form class='inline' method='post' action='/worker/jobs/{safe_booking_id}/start'>"
             f"<button class='button primary' type='submit'>Start</button></form>"
@@ -801,6 +803,7 @@ async def worker_start_job(
                 from_state=before_state,
                 to_state=after_state,
             )
+            await session.commit()
             await _record_job_event(session, booking, analytics_service.EventType.job_time_started)
         message = "Time tracking started" if after_state != before_state else "Already running"
     except ValueError as exc:
@@ -837,6 +840,7 @@ async def worker_pause_job(
                 from_state=before_state,
                 to_state=after_state,
             )
+            await session.commit()
             await _record_job_event(session, booking, analytics_service.EventType.job_time_paused)
         message = "Paused" if after_state != before_state else "Already paused"
     except ValueError as exc:
@@ -873,6 +877,7 @@ async def worker_resume_job(
                 from_state=before_state,
                 to_state=after_state,
             )
+            await session.commit()
             await _record_job_event(session, booking, analytics_service.EventType.job_time_resumed)
         message = "Resumed" if after_state != before_state else "Already running"
     except ValueError as exc:
@@ -967,6 +972,7 @@ async def worker_finish_job(
                 to_state=after_state,
                 reason=delay_code.value if delay_code else None,
             )
+            await session.commit()
             await _record_job_event(session, booking, analytics_service.EventType.job_time_finished)
         message = "Finished" if after_state != before_state else "Already finished"
     except ValueError as exc:
@@ -1171,6 +1177,8 @@ async def worker_delete_photo(
 ):
     booking = await _load_worker_booking(session, job_id, identity)
     photo = await photos_service.get_photo(session, job_id, photo_id)
+    if photo is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
     if photo.uploaded_by != identity.username:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot delete another worker's upload")
     await photos_service.delete_photo(session, booking.booking_id, photo.photo_id)
