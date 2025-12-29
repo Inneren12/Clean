@@ -86,6 +86,9 @@ class Settings(BaseSettings):
     order_photo_allowed_mimes_raw: str = Field(
         "image/jpeg,image/png,image/webp", env="ORDER_PHOTO_ALLOWED_MIMES"
     )
+    testing: bool = Field(False, env="TESTING")
+    deposits_enabled: bool = Field(True, env="DEPOSITS_ENABLED")
+    metrics_enabled: bool = Field(True, env="METRICS_ENABLED")
 
     model_config = SettingsConfigDict(env_file=".env", enable_decoding=False)
 

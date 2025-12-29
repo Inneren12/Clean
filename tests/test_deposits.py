@@ -147,6 +147,7 @@ class RecordingAdapter:
 
 
 def test_booking_response_includes_deposit_policy(client, async_session_maker, monkeypatch):
+    settings.deposits_enabled = True
     settings.stripe_secret_key = "sk_test"
     settings.stripe_webhook_secret = "whsec_test"
     original_client = getattr(app.state, "stripe_client", None)
@@ -175,6 +176,7 @@ def test_booking_response_includes_deposit_policy(client, async_session_maker, m
 
 
 def test_missing_stripe_key_does_not_create_booking(client, async_session_maker):
+    settings.deposits_enabled = True
     original_secret = settings.stripe_secret_key
     settings.stripe_secret_key = None
     adapter = RecordingAdapter()
@@ -200,6 +202,7 @@ def test_missing_stripe_key_does_not_create_booking(client, async_session_maker)
 
 
 def test_checkout_failure_rolls_back_booking(client, async_session_maker, monkeypatch):
+    settings.deposits_enabled = True
     original_secret = settings.stripe_secret_key
     settings.stripe_secret_key = "sk_test"
     adapter = RecordingAdapter()
@@ -260,6 +263,7 @@ def test_returning_client_can_book_without_deposit(client, async_session_maker):
 
 
 def test_short_notice_policy_snapshot(client, async_session_maker):
+    settings.deposits_enabled = True
     settings.stripe_secret_key = "sk_test"
     settings.stripe_webhook_secret = "whsec_test"
     original_client = getattr(app.state, "stripe_client", None)
@@ -297,6 +301,7 @@ def test_short_notice_policy_snapshot(client, async_session_maker):
 
 
 def test_webhook_confirms_booking(client, async_session_maker):
+    settings.deposits_enabled = True
     settings.stripe_secret_key = "sk_test"
     settings.stripe_webhook_secret = "whsec_test"
     original_client = getattr(app.state, "stripe_client", None)
@@ -342,6 +347,7 @@ def test_webhook_confirms_booking(client, async_session_maker):
 
 
 def test_webhook_requires_paid_status(client, async_session_maker):
+    settings.deposits_enabled = True
     settings.stripe_secret_key = "sk_test"
     settings.stripe_webhook_secret = "whsec_test"
     original_client = getattr(app.state, "stripe_client", None)
@@ -384,6 +390,7 @@ def test_webhook_requires_paid_status(client, async_session_maker):
 
 
 def test_webhook_expired_cancels_pending(client, async_session_maker):
+    settings.deposits_enabled = True
     settings.stripe_secret_key = "sk_test"
     settings.stripe_webhook_secret = "whsec_test"
     original_client = getattr(app.state, "stripe_client", None)

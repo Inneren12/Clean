@@ -65,12 +65,12 @@ def test_admin_cleanup_removes_old_pending_bookings(client, async_session_maker)
     assert response.json()["deleted"] == 1
 
 
-def test_admin_auth_missing_config_returns_503(client):
+def test_admin_auth_missing_config_returns_401(client):
     settings.admin_basic_username = None
     settings.admin_basic_password = None
 
     response = client.get("/v1/admin/leads")
-    assert response.status_code == 503
+    assert response.status_code == 401
 
 
 def _create_lead(client) -> str:

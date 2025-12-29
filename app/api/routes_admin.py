@@ -90,9 +90,21 @@ async def verify_admin_or_dispatcher(credentials: HTTPBasicCredentials | None = 
     dispatcher_password = settings.dispatcher_basic_password
 
     if (not admin_username or not admin_password) and (not dispatcher_username or not dispatcher_password):
+        logger.warning(
+            "admin_auth_unconfigured",
+            extra={
+                "extra": {
+                    "path": "/v1/admin",
+                    "method": "BASIC",
+                    "admin_configured": bool(admin_username and admin_password),
+                    "dispatcher_configured": bool(dispatcher_username and dispatcher_password),
+                }
+            },
+        )
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Admin access not configured",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication",
+            headers={"WWW-Authenticate": "Basic"},
         )
 
     if not credentials:
@@ -549,6 +561,24 @@ async def get_admin_metrics(
     _admin: AdminIdentity = Depends(require_admin),
 ):
     start, end = _normalize_range(from_ts, to_ts)
+    if not settings.metrics_enabled:
+        return analytics_schemas.AdminMetricsResponse(
+            range_start=start,
+            range_end=end,
+            conversions=analytics_schemas.ConversionMetrics(
+                lead_created=0,
+                booking_created=0,
+                booking_confirmed=0,
+                job_completed=0,
+            ),
+            revenue=analytics_schemas.RevenueMetrics(average_estimated_revenue_cents=None),
+            accuracy=analytics_schemas.DurationAccuracy(
+                sample_size=0,
+                average_delta_minutes=None,
+                average_actual_duration_minutes=None,
+                average_estimated_duration_minutes=None,
+            ),
+        )
     conversions = await conversion_counts(session, start, end)
     avg_revenue = await average_revenue_cents(session, start, end)
     avg_estimated, avg_actual, avg_delta, sample_size = await duration_accuracy(session, start, end)

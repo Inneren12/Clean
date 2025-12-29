@@ -318,6 +318,7 @@ async def repeat_order(
         lead=lead,
         starts_at=new_start,
         deposit_percent=settings.deposit_percent,
+        deposits_enabled=settings.deposits_enabled,
         service_type=lead.structured_inputs.get("cleaning_type") if lead and lead.structured_inputs else None,
     )
 

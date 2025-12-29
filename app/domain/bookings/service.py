@@ -302,13 +302,37 @@ async def evaluate_deposit_policy(
     lead: Lead | None,
     starts_at: datetime,
     deposit_percent: float,
+    deposits_enabled: bool = True,
     service_type: str | CleaningType | None = None,
     estimated_total: float | int | None = None,
 ) -> DepositDecision:
+    lead_time_hours = _lead_time_hours(_normalize_datetime(starts_at))
+    if not deposits_enabled:
+        cancellation_policy = _build_cancellation_policy(
+            service_type=None,
+            lead_time_hours=lead_time_hours,
+            total_cents=None,
+            first_time=False,
+        )
+        policy_snapshot = BookingPolicySnapshot(
+            lead_time_hours=lead_time_hours,
+            service_type=None,
+            total_amount_cents=None,
+            first_time_client=False,
+            deposit=DepositSnapshot(required=False, basis="disabled", min_cents=MIN_DEPOSIT_CENTS, max_cents=MAX_DEPOSIT_CENTS),
+            cancellation=cancellation_policy,
+        )
+        return DepositDecision(
+            required=False,
+            reasons=[],
+            deposit_cents=None,
+            policy_snapshot=policy_snapshot,
+            cancellation_policy=cancellation_policy,
+        )
+
     normalized = _normalize_datetime(starts_at)
     service_value = _resolve_service_type(service_type, lead)
     total_cents = _estimate_total_cents(lead, estimated_total)
-    lead_time_hours = _lead_time_hours(normalized)
     first_time = bool(lead) and not await _has_existing_history(session, lead.lead_id)
 
     reasons: list[str] = []

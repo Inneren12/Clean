@@ -12,6 +12,21 @@ from app.settings import settings
 logger = logging.getLogger(__name__)
 
 
+class NoopEmailAdapter:
+    async def send_email(self, recipient: str, subject: str, body: str) -> bool:  # noqa: D401
+        logger.info(
+            "email_send_skipped",
+            extra={"extra": {"recipient": recipient, "subject": subject, "mode": "noop"}},
+        )
+        return False
+
+    async def send_request_received(self, lead: Any) -> None:  # pragma: no cover - passthrough
+        await self.send_email(getattr(lead, "email", ""), "", "")
+
+    async def send_booking_confirmed(self, recipient: str, context: dict[str, str] | None = None) -> None:  # noqa: D401
+        await self.send_email(recipient, "", "")
+
+
 class EmailAdapter:
     def __init__(self, http_client: httpx.AsyncClient | None = None) -> None:
         self.http_client = http_client
@@ -131,3 +146,9 @@ class EmailAdapter:
                     smtp.send_message(message)
 
         await anyio.to_thread.run_sync(_send_blocking)
+
+
+def resolve_email_adapter(app_settings) -> EmailAdapter | NoopEmailAdapter:
+    if app_settings.email_mode == "off" or getattr(app_settings, "testing", False):
+        return NoopEmailAdapter()
+    return EmailAdapter()
