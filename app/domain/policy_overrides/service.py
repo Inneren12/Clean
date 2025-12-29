@@ -23,6 +23,7 @@ async def record_override(
     reason: str,
     old_value: dict[str, Any],
     new_value: dict[str, Any],
+    flush: bool = True,
 ) -> PolicyOverrideAudit:
     audit = PolicyOverrideAudit(
         booking_id=booking_id,
@@ -33,7 +34,8 @@ async def record_override(
         new_value=copy.deepcopy(new_value),
     )
     session.add(audit)
-    await session.flush()
+    if flush:
+        await session.flush()
     return audit
 
 
@@ -45,23 +47,12 @@ async def apply_override(
     actor: str,
     reason: str,
     payload: dict[str, Any],
-    commit: bool = True,
+    commit: bool = False,
 ) -> tuple[Booking, PolicyOverrideAudit]:
     if not reason or not reason.strip():
         raise ValueError("Override reason is required")
 
-    transaction_ctx = session.begin_nested() if session.in_transaction() else session.begin()
-    async with transaction_ctx:
-        stmt = select(Booking).where(Booking.booking_id == booking_id).limit(1).with_for_update()
-        booking = (await session.execute(stmt)).scalar_one_or_none()
-        if booking is None:
-            raise ValueError("Booking not found")
-        if booking.status == "DONE" and override_type != OverrideType.CANCELLATION_EXCEPTION:
-            raise ValueError("Overrides not allowed after booking completion")
-
-        old_value: dict[str, Any] = {}
-        new_value: dict[str, Any] = {}
-
+    def _apply_mutation(booking: Booking) -> tuple[dict[str, Any], dict[str, Any]]:
         if override_type == OverrideType.RISK_BAND:
             band_value = payload.get("risk_band")
             band_str = band_value.value if hasattr(band_value, "value") else str(band_value)
@@ -139,20 +130,52 @@ async def apply_override(
             }
         else:
             raise ValueError("Unsupported override type")
+        return old_value, new_value
 
-        audit = await record_override(
-            session,
-            booking_id=booking.booking_id,
-            override_type=override_type,
-            actor=actor,
-            reason=reason,
-            old_value=old_value,
-            new_value=new_value,
-        )
+    started_transaction = False
+    if not session.in_transaction():
+        await session.begin()
+        started_transaction = True
 
-    if commit:
-        await session.commit()
-        await session.refresh(booking)
+    try:
+        with session.no_autoflush:
+            stmt = (
+                select(Booking)
+                .where(Booking.booking_id == booking_id)
+                .limit(1)
+                .with_for_update()
+            )
+            booking = (await session.execute(stmt)).scalar_one_or_none()
+            if booking is None:
+                raise ValueError("Booking not found")
+            if booking.status == "DONE" and override_type != OverrideType.CANCELLATION_EXCEPTION:
+                raise ValueError("Overrides not allowed after booking completion")
+
+            old_value, new_value = _apply_mutation(booking)
+
+            audit = await record_override(
+                session,
+                booking_id=booking.booking_id,
+                override_type=override_type,
+                actor=actor,
+                reason=reason,
+                old_value=old_value,
+                new_value=new_value,
+                flush=commit,
+            )
+
+            if commit:
+                await session.flush()
+                await session.commit()
+                await session.refresh(booking)
+    except Exception:
+        if session.in_transaction():
+            await session.rollback()
+        raise
+    finally:
+        if started_transaction and commit is False and session.in_transaction():
+            # Keep the transaction open for the caller to finish (commit/rollback)
+            pass
 
     logger.info(
         "policy_override_applied",

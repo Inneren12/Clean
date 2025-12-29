@@ -751,6 +751,8 @@ async def create_booking(
     if resolved_lead is None and lead_id:
         resolved_lead = await session.get(Lead, lead_id)
 
+    normalized_service_type = _resolve_service_type(service_type, resolved_lead)
+
     decision = deposit_decision
     if decision is None:
         decision = await evaluate_deposit_policy(
@@ -759,14 +761,14 @@ async def create_booking(
             starts_at=normalized,
             deposit_percent=settings.deposit_percent,
             deposits_enabled=settings.deposits_enabled,
-            service_type=service_type,
+            service_type=normalized_service_type,
             estimated_total=(resolved_lead.estimate_snapshot or {}).get("total_before_tax") if resolved_lead else None,
         )
 
     snapshot = policy_snapshot or decision.policy_snapshot
     if snapshot is None:
         cancellation_policy = _build_cancellation_policy(
-            service_type=_resolve_service_type(service_type, resolved_lead),
+            service_type=normalized_service_type,
             lead_time_hours=_lead_time_hours(normalized),
             total_cents=_estimate_total_cents(resolved_lead, None),
             first_time=bool(resolved_lead) and not await _has_existing_history(session, resolved_lead.lead_id),
@@ -782,7 +784,7 @@ async def create_booking(
         )
         snapshot = BookingPolicySnapshot(
             lead_time_hours=_lead_time_hours(normalized),
-            service_type=_resolve_service_type(service_type, resolved_lead),
+            service_type=normalized_service_type,
             total_amount_cents=_estimate_total_cents(resolved_lead, None),
             first_time_client=False,
             deposit=fallback_deposit,
@@ -1077,8 +1079,11 @@ async def override_risk_band(
         actor=actor,
         reason=reason,
         payload=payload,
-        commit=commit,
+        commit=False,
     )
+    if commit:
+        await session.commit()
+        await session.refresh(booking)
     return booking
 
 
@@ -1106,8 +1111,11 @@ async def override_deposit_policy(
             "deposit_policy": deposit_policy,
             "deposit_status": deposit_status,
         },
-        commit=commit,
+        commit=False,
     )
+    if commit:
+        await session.commit()
+        await session.refresh(booking)
     return booking
 
 
@@ -1131,6 +1139,9 @@ async def grant_cancellation_exception(
             "cancellation_exception": granted,
             "note": note,
         },
-        commit=commit,
+        commit=False,
     )
+    if commit:
+        await session.commit()
+        await session.refresh(booking)
     return booking
