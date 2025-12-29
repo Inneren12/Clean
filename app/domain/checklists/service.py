@@ -254,13 +254,15 @@ async def resolve_template(
     template = await _latest_active_template(session, service_type)
     if template:
         return template
-    if service_type is not None:
-        fallback = await _latest_active_template(session, None)
-        if fallback:
-            return fallback
+
+    fallback = await _latest_active_template(session, None)
+    if fallback:
+        return fallback
+
     single_active = await _single_active_template(session)
     if single_active:
         return single_active
+
     return await _latest_any_active_template(session)
 
 
