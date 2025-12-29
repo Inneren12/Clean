@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.routes_admin import AdminIdentity, require_admin, verify_admin_or_dispatcher
+from app.api.admin_auth import AdminIdentity, AdminRole, require_admin, require_dispatch
 from app.domain.addons import schemas as addon_schemas
 from app.domain.addons import service as addon_service
 from app.dependencies import get_db_session
@@ -40,7 +40,7 @@ async def update_order_addons(
     order_id: str,
     payload: addon_schemas.OrderAddonUpdateRequest,
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(require_dispatch),
 ) -> list[addon_schemas.OrderAddonResponse]:
     try:
         await addon_service.set_order_addons(session, order_id, payload.addons)
@@ -60,7 +60,7 @@ async def update_order_addons(
 async def list_order_addons(
     order_id: str,
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(require_dispatch),
 ) -> list[addon_schemas.OrderAddonResponse]:
     addons = await addon_service.list_order_addons(session, order_id)
     if not addons:
@@ -79,7 +79,7 @@ async def create_reason_log(
     order_id: str,
     payload: reason_schemas.ReasonCreateRequest,
     session: AsyncSession = Depends(get_db_session),
-    identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    identity: AdminIdentity = Depends(require_dispatch),
 ) -> reason_schemas.ReasonResponse:
     await photos_service.fetch_order(session, order_id)
     try:
@@ -89,7 +89,7 @@ async def create_reason_log(
             kind=payload.kind,
             code=payload.code,
             note=payload.note,
-            created_by=identity.username or identity.role,
+            created_by=identity.username or identity.role.value,
             time_entry_id=payload.time_entry_id,
             invoice_item_id=payload.invoice_item_id,
         )
@@ -107,7 +107,7 @@ async def create_reason_log(
 async def list_order_reasons(
     order_id: str,
     session: AsyncSession = Depends(get_db_session),
-    identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    identity: AdminIdentity = Depends(require_dispatch),
 ) -> reason_schemas.ReasonListResponse:
     await photos_service.fetch_order(session, order_id)
     reasons = await reason_service.list_reasons_for_order(session, order_id)
@@ -124,7 +124,7 @@ async def update_photo_consent(
     order_id: str,
     payload: booking_schemas.ConsentPhotosUpdateRequest,
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(require_dispatch),
 ) -> booking_schemas.ConsentPhotosResponse:
     order = await photos_service.update_consent(session, order_id, payload.consent_photos)
     return booking_schemas.ConsentPhotosResponse(
@@ -143,12 +143,12 @@ async def upload_order_photo(
     admin_override: bool = Form(False),
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_db_session),
-    identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    identity: AdminIdentity = Depends(require_dispatch),
 ) -> booking_schemas.OrderPhotoResponse:
     order = await photos_service.fetch_order(session, order_id)
     parsed_phase = booking_schemas.PhotoPhase.from_any_case(phase)
 
-    if admin_override and identity.role != "admin":
+    if admin_override and identity.role != AdminRole.ADMIN:
         logger.info(
             "order_photo_denied",
             extra={"extra": {"order_id": order_id, "reason": "admin_override_required"}},
@@ -162,7 +162,7 @@ async def upload_order_photo(
         )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Photo consent not granted")
 
-    uploaded_by = identity.role or identity.username
+    uploaded_by = identity.role.value or identity.username
     photo = await photos_service.save_photo(session, order, file, parsed_phase, uploaded_by)
     return booking_schemas.OrderPhotoResponse(
         photo_id=photo.photo_id,
@@ -185,7 +185,7 @@ async def upload_order_photo(
 async def list_order_photos(
     order_id: str,
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(require_dispatch),
 ) -> booking_schemas.OrderPhotoListResponse:
     # Admin/dispatcher can list photos regardless of consent_photos status
     # This allows viewing admin_override uploads even when consent is false
@@ -218,7 +218,7 @@ async def download_order_photo(
     order_id: str,
     photo_id: str,
     session: AsyncSession = Depends(get_db_session),
-    identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    identity: AdminIdentity = Depends(require_dispatch),
 ) -> FileResponse:
     _ = identity
     photo = await photos_service.get_photo(session, order_id, photo_id)
@@ -228,7 +228,13 @@ async def download_order_photo(
 
     logger.info(
         "order_photo_download",
-        extra={"extra": {"order_id": order_id, "photo_id": photo_id, "requested_by": identity.role}},
+        extra={
+            "extra": {
+                "order_id": order_id,
+                "photo_id": photo_id,
+                "requested_by": identity.role.value,
+            }
+        },
     )
     return FileResponse(
         path=file_path,

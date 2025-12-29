@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.api.admin_auth import AdminAccessMiddleware, AdminAuditMiddleware
 from app.api.routes_admin import router as admin_router
 from app.api.routes_bookings import router as bookings_router
 from app.api.routes_chat import router as chat_router
@@ -139,6 +140,8 @@ def create_app(app_settings) -> FastAPI:
     app.add_middleware(RateLimitMiddleware, limiter=rate_limiter, app_settings=app_settings)
     app.add_middleware(LoggingMiddleware)
     app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(AdminAccessMiddleware)
+    app.add_middleware(AdminAuditMiddleware)
 
     app.add_middleware(
         CORSMiddleware,
