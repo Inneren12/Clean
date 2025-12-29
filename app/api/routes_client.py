@@ -318,6 +318,7 @@ async def repeat_order(
         lead=lead,
         starts_at=new_start,
         deposit_percent=settings.deposit_percent,
+        service_type=lead.structured_inputs.get("cleaning_type") if lead and lead.structured_inputs else None,
     )
 
     new_booking = await booking_service.create_booking(
@@ -326,6 +327,7 @@ async def repeat_order(
         lead_id=original.lead_id,
         session=session,
         deposit_decision=deposit_decision,
+        policy_snapshot=deposit_decision.policy_snapshot,
         client_id=identity.client_id,
     )
     logger.info(

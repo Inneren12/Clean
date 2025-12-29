@@ -63,6 +63,7 @@ async def create_booking(
         lead=lead,
         starts_at=start,
         deposit_percent=settings.deposit_percent,
+        service_type=request.service_type.value if request.service_type else None,
     )
 
     if deposit_decision.required and deposit_decision.deposit_cents is None:
@@ -92,6 +93,7 @@ async def create_booking(
                 lead_id=request.lead_id,
                 session=session,
                 deposit_decision=deposit_decision,
+                policy_snapshot=deposit_decision.policy_snapshot,
                 manage_transaction=False,
                 client_id=client_id,
             )
@@ -192,6 +194,7 @@ async def create_booking(
         deposit_policy=booking.deposit_policy,
         deposit_status=booking.deposit_status,
         checkout_url=checkout_url,
+        policy_snapshot=booking.policy_snapshot,
     )
 
 

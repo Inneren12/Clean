@@ -99,22 +99,20 @@ def _seed_returning_lead(async_session_maker) -> str:
     return asyncio.run(_create())
 
 
-def _booking_start_on_weekend() -> str:
+def _booking_start_in_days(days: int, hour: int = 10) -> str:
     now_local = datetime.now(tz=LOCAL_TZ)
-    days_until_saturday = (5 - now_local.weekday()) % 7 or 7
-    saturday_local = (now_local + timedelta(days=days_until_saturday)).replace(
-        hour=10, minute=0, second=0, microsecond=0
+    target_local = (now_local + timedelta(days=days)).replace(
+        hour=hour, minute=0, second=0, microsecond=0
     )
-    return saturday_local.astimezone(timezone.utc).isoformat()
+    return target_local.astimezone(timezone.utc).isoformat()
 
 
-def _booking_start_on_weekday() -> str:
-    today_local = datetime.now(tz=LOCAL_TZ)
-    days_ahead = 1
-    while (today_local + timedelta(days=days_ahead)).weekday() >= 5:
-        days_ahead += 1
-    start_local = (today_local + timedelta(days=days_ahead)).replace(hour=10, minute=0, second=0, microsecond=0)
-    return start_local.astimezone(timezone.utc).isoformat()
+def _booking_start_in_hours(hours: int) -> str:
+    now_local = datetime.now(tz=LOCAL_TZ)
+    target_local = (now_local + timedelta(hours=hours)).replace(minute=0, second=0, microsecond=0)
+    if target_local.hour < 9 or target_local.hour >= 18:
+        target_local = target_local.replace(hour=10, minute=0, second=0, microsecond=0)
+    return target_local.astimezone(timezone.utc).isoformat()
 
 
 def _count_bookings(async_session_maker) -> int:
@@ -157,7 +155,7 @@ def test_booking_response_includes_deposit_policy(client, async_session_maker, m
         lead_id = _seed_lead(async_session_maker)
 
         payload = {
-            "starts_at": _booking_start_on_weekend(),
+            "starts_at": _booking_start_in_days(5),
             "time_on_site_hours": 2,
             "lead_id": lead_id,
         }
@@ -165,8 +163,11 @@ def test_booking_response_includes_deposit_policy(client, async_session_maker, m
         assert response.status_code == 201, response.text
         data = response.json()
         assert data["deposit_required"] is True
-        assert data["deposit_cents"] == 5000
-        assert set(data["deposit_policy"]) >= {"heavy_cleaning", "weekend", "new_client"}
+        assert data["deposit_cents"] == 7000
+        assert set(data["deposit_policy"]) >= {"service_type_deep", "first_time_client"}
+        snapshot = data["policy_snapshot"]
+        assert snapshot["deposit"]["basis"] == "percent_clamped"
+        assert snapshot["cancellation"]["windows"][0]["start_hours_before"] == 72.0
         assert data["checkout_url"] == "https://example.com/checkout"
         assert data["deposit_status"] == "pending"
     finally:
@@ -182,7 +183,7 @@ def test_missing_stripe_key_does_not_create_booking(client, async_session_maker)
 
     lead_id = _seed_lead(async_session_maker)
     payload = {
-        "starts_at": _booking_start_on_weekend(),
+        "starts_at": _booking_start_in_days(4),
         "time_on_site_hours": 2,
         "lead_id": lead_id,
     }
@@ -211,7 +212,7 @@ def test_checkout_failure_rolls_back_booking(client, async_session_maker, monkey
     monkeypatch.setattr(stripe_infra, "create_checkout_session", _raise)
     lead_id = _seed_lead(async_session_maker)
     payload = {
-        "starts_at": _booking_start_on_weekend(),
+        "starts_at": _booking_start_in_days(4),
         "time_on_site_hours": 2,
         "lead_id": lead_id,
     }
@@ -230,7 +231,7 @@ def test_checkout_failure_rolls_back_booking(client, async_session_maker, monkey
 def test_non_deposit_booking_persists(client, async_session_maker):
     original_secret = settings.stripe_secret_key
     settings.stripe_secret_key = None
-    payload = {"starts_at": _booking_start_on_weekday(), "time_on_site_hours": 1}
+    payload = {"starts_at": _booking_start_in_days(5), "time_on_site_hours": 1}
 
     try:
         response = client.post("/v1/bookings", json=payload)
@@ -242,15 +243,10 @@ def test_non_deposit_booking_persists(client, async_session_maker):
         settings.stripe_secret_key = original_secret
 
 
-def test_weekend_policy_uses_edmonton_day(client, async_session_maker):
+def test_returning_client_can_book_without_deposit(client, async_session_maker):
     settings.stripe_secret_key = None
     lead_id = _seed_returning_lead(async_session_maker)
-    today_local = datetime.now(tz=LOCAL_TZ)
-    days_until_friday = (4 - today_local.weekday()) % 7 or 7
-    friday_evening = (today_local + timedelta(days=days_until_friday)).replace(
-        hour=17, minute=0, second=0, microsecond=0
-    )
-    starts_at = friday_evening.astimezone(timezone.utc).isoformat()
+    starts_at = _booking_start_in_days(6)
 
     response = client.post(
         "/v1/bookings",
@@ -260,6 +256,44 @@ def test_weekend_policy_uses_edmonton_day(client, async_session_maker):
     data = response.json()
     assert data["deposit_required"] is False
     assert data["deposit_policy"] == []
+    assert data["policy_snapshot"]["deposit"]["required"] is False
+
+
+def test_short_notice_policy_snapshot(client, async_session_maker):
+    settings.stripe_secret_key = "sk_test"
+    settings.stripe_webhook_secret = "whsec_test"
+    original_client = getattr(app.state, "stripe_client", None)
+    try:
+        app.state.stripe_client = _stub_stripe("cs_short_notice")
+        lead_id = _seed_lead(async_session_maker)
+        payload = {
+            "starts_at": _booking_start_in_hours(12),
+            "time_on_site_hours": 2,
+            "lead_id": lead_id,
+        }
+        response = client.post("/v1/bookings", json=payload)
+        assert response.status_code == 201, response.text
+        data = response.json()
+        assert data["deposit_required"] is True
+        assert "short_notice" in data["deposit_policy"]
+        snapshot = data["policy_snapshot"]
+        assert snapshot["lead_time_hours"] < 24
+        assert "short_notice" in snapshot["cancellation"]["rules"]
+        partial_window = next(w for w in snapshot["cancellation"]["windows"] if w["label"] == "partial")
+        assert partial_window["refund_percent"] == 25
+
+        async def _fetch() -> dict:
+            async with async_session_maker() as session:
+                result = await session.execute(sa.select(Booking).order_by(Booking.created_at.desc()).limit(1))
+                booking = result.scalar_one()
+                return booking.policy_snapshot or {}
+
+        import asyncio
+
+        stored_snapshot = asyncio.run(_fetch())
+        assert stored_snapshot.get("deposit", {}).get("amount_cents") == data["deposit_cents"]
+    finally:
+        app.state.stripe_client = original_client
 
 
 def test_webhook_confirms_booking(client, async_session_maker):
@@ -271,7 +305,7 @@ def test_webhook_confirms_booking(client, async_session_maker):
         lead_id = _seed_lead(async_session_maker)
 
         payload = {
-            "starts_at": _booking_start_on_weekend(),
+            "starts_at": _booking_start_in_days(4),
             "time_on_site_hours": 2,
             "lead_id": lead_id,
         }
@@ -317,7 +351,7 @@ def test_webhook_requires_paid_status(client, async_session_maker):
 
         creation = client.post(
             "/v1/bookings",
-            json={"starts_at": _booking_start_on_weekend(), "time_on_site_hours": 2, "lead_id": lead_id},
+            json={"starts_at": _booking_start_in_days(4), "time_on_site_hours": 2, "lead_id": lead_id},
         )
         assert creation.status_code == 201
 
@@ -359,7 +393,7 @@ def test_webhook_expired_cancels_pending(client, async_session_maker):
 
         creation = client.post(
             "/v1/bookings",
-            json={"starts_at": _booking_start_on_weekend(), "time_on_site_hours": 2, "lead_id": lead_id},
+            json={"starts_at": _booking_start_in_days(4), "time_on_site_hours": 2, "lead_id": lead_id},
         )
         assert creation.status_code == 201
 
