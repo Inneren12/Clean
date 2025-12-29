@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from html import escape
-import io
 import logging
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
@@ -10,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.bookings.db_models import Booking
 from app.domain.clients.db_models import ClientUser
+from app.domain.documents import service as document_service
 from app.domain.invoices import schemas as invoice_schemas, service as invoice_service, statuses as invoice_statuses
 from app.domain.nps import service as nps_service
 from app.infra.db import get_db_session
@@ -37,6 +37,10 @@ def _render_invoice_html(context: dict) -> str:
         rows.append(f"<p><strong>Due Date:</strong> {escape(str(invoice['due_date']))}</p>")
     if token:
         rows.append(f"<p><a href=\"/i/{escape(token)}.pdf\">Download PDF</a></p>")
+    if invoice.get("order_id") and token:
+        rows.append(
+            f"<p><a href=\"/i/{escape(token)}/service-agreement.pdf\">Service agreement</a></p>"
+        )
 
     rows.append("<h2>Bill To</h2>")
     if customer.get("name"):
@@ -75,6 +79,15 @@ def _render_invoice_html(context: dict) -> str:
         )
     if invoice.get("notes"):
         rows.append(f"<h3>Notes</h3><p>{escape(invoice['notes'])}</p>")
+    if token and invoice.get("payments"):
+        succeeded = [p for p in invoice["payments"] if p.get("status") == invoice_statuses.PAYMENT_STATUS_SUCCEEDED]
+        if succeeded:
+            rows.append("<h3>Receipts</h3>")
+            for payment in succeeded:
+                payment_id = escape(payment["payment_id"])
+                rows.append(
+                    f"<p><a href=\"/i/{escape(token)}/receipts/{payment_id}.pdf\">Receipt {payment_id}</a></p>"
+                )
 
     return "\n".join(rows)
 
@@ -133,10 +146,6 @@ def _render_message(title: str, body: str, status_text: str | None = None) -> st
       </body>
     </html>
     """
-
-
-def _escape_pdf_text(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 
 @router.get("/nps/{order_id}", response_class=HTMLResponse, name="nps_form")
@@ -224,92 +233,6 @@ async def submit_nps(
         message = "Thanks for your feedback. Our support team will reach out to resolve this."  # noqa: E501
     else:
         message = "Thanks for your feedback! If you loved the service, feel free to share a Google review."
-    return HTMLResponse(_render_message("Thanks for your feedback", message))
-
-
-def _build_pdf(lines: list[str]) -> bytes:
-    content_lines = ["BT", "/F1 12 Tf", "72 750 Td", "14 TL"]
-    for line in lines:
-        content_lines.append(f"({_escape_pdf_text(line)}) Tj")
-        content_lines.append("T*")
-    content_lines.append("ET")
-    stream_bytes = "\n".join(content_lines).encode("latin-1", "replace")
-
-    buffer = io.BytesIO()
-    buffer.write(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
-    offsets: list[int] = []
-
-    def _write_obj(payload: bytes) -> None:
-        offsets.append(buffer.tell())
-        obj_number = len(offsets)
-        buffer.write(f"{obj_number} 0 obj\n".encode("ascii"))
-        buffer.write(payload)
-        buffer.write(b"\nendobj\n")
-
-    _write_obj(b"<< /Type /Catalog /Pages 2 0 R >>")
-    _write_obj(b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
-    page_dict = (
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
-        b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>"
-    )
-    _write_obj(page_dict)
-    content_header = f"<< /Length {len(stream_bytes)} >>\nstream\n".encode("ascii")
-    _write_obj(content_header + stream_bytes + b"\nendstream")
-    _write_obj(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
-
-    xref_offset = buffer.tell()
-    buffer.write(f"xref\n0 {len(offsets) + 1}\n".encode("ascii"))
-    buffer.write(b"0000000000 65535 f \n")
-    for off in offsets:
-        buffer.write(f"{off:010} 00000 n \n".encode("ascii"))
-    buffer.write(b"trailer\n")
-    buffer.write(f"<< /Size {len(offsets) + 1} /Root 1 0 R >>\n".encode("ascii"))
-    buffer.write(b"startxref\n")
-    buffer.write(f"{xref_offset}\n".encode("ascii"))
-    buffer.write(b"%%EOF")
-    return buffer.getvalue()
-
-
-def _render_invoice_pdf(context: dict) -> bytes:
-    invoice = context["invoice"]
-    customer = context["customer"]
-    lines = [
-        f"Invoice {invoice['invoice_number']}",
-        f"Status: {invoice['status']}",
-        f"Issue Date: {invoice['issue_date']}",
-    ]
-    if invoice.get("due_date"):
-        lines.append(f"Due Date: {invoice['due_date']}")
-    lines.append(" ")
-    lines.append("Bill To:")
-    if customer.get("name"):
-        lines.append(str(customer["name"]))
-    if customer.get("email"):
-        lines.append(str(customer["email"]))
-    if customer.get("address"):
-        lines.append(str(customer["address"]))
-    lines.append(" ")
-    lines.append("Items:")
-    for item in invoice.get("items", []):
-        lines.append(
-            f"- {item['qty']} x {item['description']}: "
-            f"{_format_currency(item['line_total_cents'], invoice['currency'])}"
-        )
-    lines.append(" ")
-    lines.append(f"Subtotal: {_format_currency(invoice['subtotal_cents'], invoice['currency'])}")
-    lines.append(f"Tax: {_format_currency(invoice['tax_cents'], invoice['currency'])}")
-    lines.append(f"Total: {_format_currency(invoice['total_cents'], invoice['currency'])}")
-    if invoice.get("balance_due_cents") is not None:
-        lines.append(
-            f"Balance Due: {_format_currency(invoice['balance_due_cents'], invoice['currency'])}"
-        )
-    if invoice.get("notes"):
-        lines.append(" ")
-        lines.append("Notes:")
-        lines.append(str(invoice["notes"]))
-    return _build_pdf(lines)
-
-
 @router.get(
     "/i/{token}.pdf",
     response_class=Response,
@@ -324,9 +247,62 @@ async def download_invoice_pdf(
     if invoice.status == invoice_statuses.INVOICE_STATUS_VOID:
         raise HTTPException(status_code=400, detail="Invoice is void")
     lead = await invoice_service.fetch_customer(session, invoice)
-    context = invoice_service.build_public_invoice_view(invoice, lead)
-    pdf_bytes = _render_invoice_pdf(context)
+    document = await document_service.get_or_create_invoice_document(session, invoice=invoice, lead=lead)
+    pdf_bytes = document_service.pdf_bytes(document)
     filename = f"{invoice.invoice_number}.pdf"
+    headers = {"Content-Disposition": f"inline; filename=\"{filename}\""}
+    return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
+
+
+@router.get(
+    "/i/{token}/receipts/{payment_id}.pdf",
+    response_class=Response,
+    name="public_receipt_pdf",
+)
+async def download_receipt_pdf(
+    token: str, payment_id: str, session: AsyncSession = Depends(get_db_session)
+) -> Response:
+    invoice = await invoice_service.get_invoice_by_public_token(session, token)
+    if invoice is None:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    payment = next((p for p in invoice.payments if p.payment_id == payment_id), None)
+    if payment is None:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    if payment.status != invoice_statuses.PAYMENT_STATUS_SUCCEEDED:
+        raise HTTPException(status_code=400, detail="Receipt available only for successful payments")
+    lead = await invoice_service.fetch_customer(session, invoice)
+    document = await document_service.get_or_create_receipt_document(
+        session, invoice=invoice, payment=payment, lead=lead
+    )
+    pdf_bytes = document_service.pdf_bytes(document)
+    filename = f"{invoice.invoice_number}-receipt.pdf"
+    headers = {"Content-Disposition": f"inline; filename=\"{filename}\""}
+    return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
+
+
+@router.get(
+    "/i/{token}/service-agreement.pdf",
+    response_class=Response,
+    name="public_service_agreement_pdf",
+)
+async def download_service_agreement_pdf(
+    token: str, session: AsyncSession = Depends(get_db_session)
+) -> Response:
+    invoice = await invoice_service.get_invoice_by_public_token(session, token)
+    if invoice is None:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.order_id is None:
+        raise HTTPException(status_code=404, detail="No related booking for agreement")
+    booking = await session.get(Booking, invoice.order_id)
+    if booking is None:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    lead = await invoice_service.fetch_customer(session, invoice)
+    client = await session.get(ClientUser, booking.client_id) if booking.client_id else None
+    document = await document_service.get_or_create_service_agreement_document(
+        session, booking=booking, lead=lead, client=client
+    )
+    pdf_bytes = document_service.pdf_bytes(document)
+    filename = f"{invoice.invoice_number}-service-agreement.pdf"
     headers = {"Content-Disposition": f"inline; filename=\"{filename}\""}
     return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
 
