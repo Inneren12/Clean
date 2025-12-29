@@ -26,6 +26,7 @@ from app.domain.subscriptions import db_models as subscription_db_models  # noqa
 from app.domain.checklists import db_models as checklist_db_models  # noqa: F401
 from app.domain.clients import db_models as client_db_models  # noqa: F401
 from app.domain.nps import db_models as nps_db_models  # noqa: F401
+from app.domain.disputes import db_models as dispute_db_models  # noqa: F401
 from app.infra.bot_store import InMemoryBotStore
 from app.infra.db import Base, get_db_session
 from app.main import app
