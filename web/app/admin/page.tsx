@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 const STORAGE_USERNAME_KEY = "admin_basic_username";
 const STORAGE_PASSWORD_KEY = "admin_basic_password";
@@ -172,25 +172,13 @@ export default function AdminPage() {
 
   const isReadOnly = (profile?.role ?? "").toLowerCase() === "viewer";
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const storedUsername = window.localStorage.getItem(STORAGE_USERNAME_KEY);
-    const storedPassword = window.localStorage.getItem(STORAGE_PASSWORD_KEY);
-    if (storedUsername) setUsername(storedUsername);
-    if (storedPassword) setPassword(storedPassword);
-  }, []);
-
-  useEffect(() => {
-    void loadProfile();
-  }, [authHeaders]);
-
   const authHeaders = useMemo<Record<string, string>>(() => {
     if (!username || !password) return {} as Record<string, string>;
     const encoded = btoa(`${username}:${password}`);
     return { Authorization: `Basic ${encoded}` };
   }, [username, password]);
 
-  const loadProfile = async () => {
+  const loadProfile = useCallback(async () => {
     if (!username || !password) return;
     const response = await fetch(`${API_BASE}/v1/admin/profile`, {
       headers: authHeaders,
@@ -202,7 +190,19 @@ export default function AdminPage() {
     } else {
       setProfile(null);
     }
-  };
+  }, [authHeaders, password, username]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const storedUsername = window.localStorage.getItem(STORAGE_USERNAME_KEY);
+    const storedPassword = window.localStorage.getItem(STORAGE_PASSWORD_KEY);
+    if (storedUsername) setUsername(storedUsername);
+    if (storedPassword) setPassword(storedPassword);
+  }, []);
+
+  useEffect(() => {
+    void loadProfile();
+  }, [loadProfile]);
 
   const loadMetrics = async () => {
     if (!username || !password) return;
