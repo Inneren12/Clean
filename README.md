@@ -2,6 +2,10 @@
 
 FastAPI backend for the Economy MVP pricing and chat system.
 
+## Documentation
+
+- [Учебное пособие по порталам Worker/Admin](docs/user_manual.md)
+
 ## Setup (Docker-first, Sprint 2 canonical flow)
 
 1. Copy the environment file (Docker uses the `postgres` hostname):
