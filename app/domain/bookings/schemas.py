@@ -80,6 +80,9 @@ class BookingResponse(BaseModel):
     deposit_status: str | None = None
     checkout_url: str | None = None
     policy_snapshot: BookingPolicySnapshot | None = None
+    risk_score: int
+    risk_band: str
+    risk_reasons: list[str]
 
 
 class BookingCompletionRequest(BaseModel):

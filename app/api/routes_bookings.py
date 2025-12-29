@@ -58,6 +58,21 @@ async def create_booking(
     if request.lead_id:
         lead = await session.get(Lead, request.lead_id)
 
+    client_id: str | None = None
+    if lead and lead.email:
+        client_user = await client_service.get_or_create_client(
+            session, lead.email, name=lead.name, commit=False
+        )
+        client_id = client_user.client_id
+
+    risk_assessment = await booking_service.evaluate_risk(
+        session=session,
+        lead=lead,
+        client_id=client_id,
+        starts_at=start,
+        postal_code=lead.postal_code if lead else None,
+    )
+
     deposit_decision = await booking_service.evaluate_deposit_policy(
         session=session,
         lead=lead,
@@ -65,6 +80,10 @@ async def create_booking(
         deposit_percent=settings.deposit_percent,
         deposits_enabled=settings.deposits_enabled,
         service_type=request.service_type.value if request.service_type else None,
+        force_deposit=risk_assessment.requires_deposit,
+        extra_reasons=[f"risk_{risk_assessment.band.value.lower()}"]
+        if risk_assessment.requires_deposit
+        else None,
     )
 
     if deposit_decision.required and deposit_decision.deposit_cents is None:
@@ -100,13 +119,6 @@ async def create_booking(
     email_adapter = getattr(http_request.app.state, "email_adapter", None)
     booking: Booking | None = None
 
-    client_id: str | None = None
-    if lead and lead.email:
-        client_user = await client_service.get_or_create_client(
-            session, lead.email, name=lead.name, commit=False
-        )
-        client_id = client_user.client_id
-
     try:
         transaction_ctx = session.begin_nested() if session.in_transaction() else session.begin()
         async with transaction_ctx:
@@ -117,6 +129,7 @@ async def create_booking(
                 session=session,
                 deposit_decision=deposit_decision,
                 policy_snapshot=deposit_decision.policy_snapshot,
+                risk_assessment=risk_assessment,
                 manage_transaction=False,
                 client_id=client_id,
             )
@@ -218,6 +231,9 @@ async def create_booking(
         deposit_status=booking.deposit_status,
         checkout_url=checkout_url,
         policy_snapshot=booking.policy_snapshot,
+        risk_score=booking.risk_score,
+        risk_band=booking.risk_band,
+        risk_reasons=booking.risk_reasons,
     )
 
 
