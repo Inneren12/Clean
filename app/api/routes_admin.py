@@ -32,6 +32,7 @@ from app.domain.analytics.service import (
     average_revenue_cents,
     conversion_counts,
     duration_accuracy,
+    kpi_aggregates,
     estimated_duration_from_booking,
     estimated_revenue_from_lead,
     log_event,
@@ -540,10 +541,24 @@ async def get_admin_metrics(
                 average_actual_duration_minutes=None,
                 average_estimated_duration_minutes=None,
             ),
+            financial=analytics_schemas.FinancialKpis(
+                total_revenue_cents=0,
+                revenue_per_day_cents=0.0,
+                margin_cents=0,
+                average_order_value_cents=None,
+            ),
+            operational=analytics_schemas.OperationalKpis(
+                crew_utilization=None,
+                cancellation_rate=0.0,
+                retention_30_day=0.0,
+                retention_60_day=0.0,
+                retention_90_day=0.0,
+            ),
         )
     conversions = await conversion_counts(session, start, end)
     avg_revenue = await average_revenue_cents(session, start, end)
     avg_estimated, avg_actual, avg_delta, sample_size = await duration_accuracy(session, start, end)
+    kpis = await kpi_aggregates(session, start, end)
 
     response_body = analytics_schemas.AdminMetricsResponse(
         range_start=start,
@@ -563,6 +578,8 @@ async def get_admin_metrics(
             average_actual_duration_minutes=avg_actual,
             average_delta_minutes=avg_delta,
         ),
+        financial=analytics_schemas.FinancialKpis(**kpis["financial"]),
+        operational=analytics_schemas.OperationalKpis(**kpis["operational"]),
     )
 
     if format == "csv":
@@ -578,6 +595,15 @@ async def get_admin_metrics(
             _csv_line("average_actual_duration_minutes", response_body.accuracy.average_actual_duration_minutes),
             _csv_line("average_delta_minutes", response_body.accuracy.average_delta_minutes),
             _csv_line("accuracy_sample_size", response_body.accuracy.sample_size),
+            _csv_line("total_revenue_cents", response_body.financial.total_revenue_cents),
+            _csv_line("revenue_per_day_cents", response_body.financial.revenue_per_day_cents),
+            _csv_line("margin_cents", response_body.financial.margin_cents),
+            _csv_line("average_order_value_cents", response_body.financial.average_order_value_cents),
+            _csv_line("crew_utilization", response_body.operational.crew_utilization),
+            _csv_line("cancellation_rate", response_body.operational.cancellation_rate),
+            _csv_line("retention_30_day", response_body.operational.retention_30_day),
+            _csv_line("retention_60_day", response_body.operational.retention_60_day),
+            _csv_line("retention_90_day", response_body.operational.retention_90_day),
         ]
         return Response("\n".join(lines), media_type="text/csv")
 
