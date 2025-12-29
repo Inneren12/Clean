@@ -19,7 +19,7 @@ async def record_action(
     log = AdminAuditLog(
         action=action,
         actor=identity.username,
-        role=identity.role.value,
+        role=getattr(identity.role, "value", identity.role),
         resource_type=resource_type,
         resource_id=resource_id,
         before=before,

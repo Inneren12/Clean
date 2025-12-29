@@ -21,6 +21,8 @@ from app.api.routes_client import router as client_router
 from app.api.routes_payments import router as payments_router
 from app.api.routes_orders import router as orders_router
 from app.api.routes_time_tracking import router as time_tracking_router
+from app.api.routes_worker import router as worker_router
+from app.api.worker_auth import WorkerAccessMiddleware
 from app.api.routes_public import router as public_router
 from app.api.routes_leads import router as leads_router
 from app.domain.errors import DomainError
@@ -142,6 +144,7 @@ def create_app(app_settings) -> FastAPI:
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(AdminAccessMiddleware)
     app.add_middleware(AdminAuditMiddleware)
+    app.add_middleware(WorkerAccessMiddleware)
 
     app.add_middleware(
         CORSMiddleware,
@@ -217,6 +220,7 @@ def create_app(app_settings) -> FastAPI:
     app.include_router(orders_router)
     app.include_router(checklists_router)
     app.include_router(time_tracking_router)
+    app.include_router(worker_router)
     app.include_router(bookings_router)
     app.include_router(leads_router)
     app.include_router(admin_router)
