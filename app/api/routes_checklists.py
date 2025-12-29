@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.routes_admin import require_admin, verify_admin_or_dispatcher
+from app.api.admin_auth import require_admin, require_dispatch
 from app.dependencies import get_db_session
 from app.domain.checklists import schemas as checklist_schemas
 from app.domain.checklists import service as checklist_service
@@ -136,7 +136,7 @@ async def init_checklist(
     order_id: str,
     request: checklist_schemas.ChecklistInitRequest,
     session: AsyncSession = Depends(get_db_session),
-    identity=Depends(verify_admin_or_dispatcher),
+    identity=Depends(require_dispatch),
 ) -> checklist_schemas.ChecklistRunResponse:
     try:
         run = await checklist_service.init_checklist(
@@ -157,7 +157,7 @@ async def init_checklist(
 async def get_checklist(
     order_id: str,
     session: AsyncSession = Depends(get_db_session),
-    identity=Depends(verify_admin_or_dispatcher),
+    identity=Depends(require_dispatch),
 ) -> checklist_schemas.ChecklistRunResponse:
     run = await checklist_service.find_run_by_order(session, order_id)
     if run is None:
@@ -175,7 +175,7 @@ async def update_checklist_item(
     run_item_id: str,
     patch: checklist_schemas.ChecklistRunItemPatch,
     session: AsyncSession = Depends(get_db_session),
-    identity=Depends(verify_admin_or_dispatcher),
+    identity=Depends(require_dispatch),
 ) -> checklist_schemas.ChecklistRunResponse:
     try:
         item = await checklist_service.toggle_item(session, order_id, run_item_id, patch)
@@ -197,7 +197,7 @@ async def update_checklist_item(
 async def complete_checklist(
     order_id: str,
     session: AsyncSession = Depends(get_db_session),
-    identity=Depends(verify_admin_or_dispatcher),
+    identity=Depends(require_dispatch),
 ) -> checklist_schemas.ChecklistRunResponse:
     try:
         run = await checklist_service.complete_checklist(session, order_id)

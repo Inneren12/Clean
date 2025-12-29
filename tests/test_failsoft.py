@@ -43,9 +43,16 @@ def test_metrics_endpoint_returns_empty_when_disabled(client):
     assert body["accuracy"]["sample_size"] == 0
 
 
-def test_auth_failure_returns_401_not_503(client):
+def test_auth_failure_returns_401_not_503(client_no_raise):
+    original_username = settings.admin_basic_username
+    original_password = settings.admin_basic_password
     settings.admin_basic_username = "admin"
     settings.admin_basic_password = "secret"
 
-    response = client.get("/v1/admin/leads")
-    assert response.status_code == 401
+    try:
+        response = client_no_raise.get("/v1/admin/leads")
+        assert response.status_code == 401
+        assert response.headers.get("WWW-Authenticate") == "Basic"
+    finally:
+        settings.admin_basic_username = original_username
+        settings.admin_basic_password = original_password

@@ -14,18 +14,24 @@ def _basic_auth_header(username: str, password: str) -> dict[str, str]:
     return {"Authorization": f"Basic {token}"}
 
 
-def test_admin_leads_requires_auth(client):
+def test_admin_leads_requires_auth(client_no_raise):
+    original_username = settings.admin_basic_username
+    original_password = settings.admin_basic_password
     settings.admin_basic_username = "admin"
     settings.admin_basic_password = "secret"
 
-    response = client.get("/v1/admin/leads")
-    assert response.status_code == 401
-    assert response.headers.get("WWW-Authenticate") == "Basic"
+    try:
+        response = client_no_raise.get("/v1/admin/leads")
+        assert response.status_code == 401
+        assert response.headers.get("WWW-Authenticate") == "Basic"
 
-    auth_headers = _basic_auth_header("admin", "secret")
-    authorized = client.get("/v1/admin/leads", headers=auth_headers)
-    assert authorized.status_code == 200
-    assert isinstance(authorized.json(), list)
+        auth_headers = _basic_auth_header("admin", "secret")
+        authorized = client_no_raise.get("/v1/admin/leads", headers=auth_headers)
+        assert authorized.status_code == 200
+        assert isinstance(authorized.json(), list)
+    finally:
+        settings.admin_basic_username = original_username
+        settings.admin_basic_password = original_password
 
 
 def test_admin_cleanup_removes_old_pending_bookings(client, async_session_maker):
@@ -65,12 +71,25 @@ def test_admin_cleanup_removes_old_pending_bookings(client, async_session_maker)
     assert response.json()["deleted"] == 1
 
 
-def test_admin_auth_missing_config_returns_401(client):
+def test_admin_auth_missing_config_returns_401(client_no_raise):
+    original_admin_username = settings.admin_basic_username
+    original_admin_password = settings.admin_basic_password
+    original_dispatcher_username = settings.dispatcher_basic_username
+    original_dispatcher_password = settings.dispatcher_basic_password
     settings.admin_basic_username = None
     settings.admin_basic_password = None
+    settings.dispatcher_basic_username = None
+    settings.dispatcher_basic_password = None
 
-    response = client.get("/v1/admin/leads")
-    assert response.status_code == 401
+    try:
+        response = client_no_raise.get("/v1/admin/leads")
+        assert response.status_code == 401
+        assert response.headers.get("WWW-Authenticate") == "Basic"
+    finally:
+        settings.admin_basic_username = original_admin_username
+        settings.admin_basic_password = original_admin_password
+        settings.dispatcher_basic_username = original_dispatcher_username
+        settings.dispatcher_basic_password = original_dispatcher_password
 
 
 def _create_lead(client) -> str:

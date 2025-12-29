@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.routes_admin import require_admin, verify_admin_or_dispatcher
+from app.api.admin_auth import require_admin, require_dispatch
 from app.dependencies import get_db_session
 from app.domain.bookings.db_models import Booking
 from app.domain.reason_logs import schemas as reason_schemas
@@ -36,7 +36,7 @@ def _serialize_summary(summary: dict[str, object]) -> time_schemas.TimeTrackingR
 async def start_order_time_tracking(
     booking_id: str,
     session: AsyncSession = Depends(get_db_session),
-    identity=Depends(verify_admin_or_dispatcher),
+    identity=Depends(require_dispatch),
 ) -> time_schemas.TimeTrackingResponse:
     await _ensure_booking(session, booking_id)
     try:
@@ -59,7 +59,7 @@ async def start_order_time_tracking(
 async def pause_order_time_tracking(
     booking_id: str,
     session: AsyncSession = Depends(get_db_session),
-    identity=Depends(verify_admin_or_dispatcher),
+    identity=Depends(require_dispatch),
 ) -> time_schemas.TimeTrackingResponse:
     await _ensure_booking(session, booking_id)
     try:
@@ -80,7 +80,7 @@ async def pause_order_time_tracking(
 async def resume_order_time_tracking(
     booking_id: str,
     session: AsyncSession = Depends(get_db_session),
-    identity=Depends(verify_admin_or_dispatcher),
+    identity=Depends(require_dispatch),
 ) -> time_schemas.TimeTrackingResponse:
     await _ensure_booking(session, booking_id)
     try:
@@ -101,7 +101,7 @@ async def resume_order_time_tracking(
 async def finish_order_time_tracking(
     booking_id: str,
     session: AsyncSession = Depends(get_db_session),
-    identity=Depends(verify_admin_or_dispatcher),
+    identity=Depends(require_dispatch),
 ) -> time_schemas.TimeTrackingResponse:
     await _ensure_booking(session, booking_id)
     entry = await time_service.fetch_time_entry(session, booking_id)
@@ -134,7 +134,7 @@ async def finish_order_time_tracking(
 async def get_order_time_tracking(
     booking_id: str,
     session: AsyncSession = Depends(get_db_session),
-    identity=Depends(verify_admin_or_dispatcher),
+    identity=Depends(require_dispatch),
 ) -> time_schemas.TimeTrackingResponse:
     await _ensure_booking(session, booking_id)
     summary = await time_service.fetch_time_tracking_summary(session, booking_id)

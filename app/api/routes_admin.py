@@ -4,19 +4,24 @@ import csv
 import io
 import logging
 import math
-import secrets
-from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from typing import Iterable, List, Optional
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.admin_auth import (
+    AdminIdentity,
+    require_admin,
+    require_dispatch,
+    require_finance,
+    require_viewer,
+    verify_admin_or_dispatcher,
+)
 from app.dependencies import get_bot_store
 from app.domain.addons import schemas as addon_schemas
 from app.domain.addons import service as addon_service
@@ -56,18 +61,12 @@ from app.domain.retention import cleanup_retention
 from app.domain.subscriptions import schemas as subscription_schemas
 from app.domain.subscriptions import service as subscription_service
 from app.domain.subscriptions.db_models import Subscription
+from app.domain.admin_audit import service as audit_service
 from app.infra.bot_store import BotStore
 from app.settings import settings
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_viewer)])
 logger = logging.getLogger(__name__)
-security = HTTPBasic(auto_error=False)
-
-
-@dataclass
-class AdminIdentity:
-    username: str
-    role: str
 
 
 def _format_dt(value: datetime | None) -> str:
@@ -81,55 +80,6 @@ def _format_ts(value: float | None) -> str:
         return "-"
     dt = datetime.fromtimestamp(value, tz=timezone.utc)
     return _format_dt(dt)
-
-
-async def verify_admin_or_dispatcher(credentials: HTTPBasicCredentials | None = Depends(security)) -> AdminIdentity:
-    admin_username = settings.admin_basic_username
-    admin_password = settings.admin_basic_password
-    dispatcher_username = settings.dispatcher_basic_username
-    dispatcher_password = settings.dispatcher_basic_password
-
-    if (not admin_username or not admin_password) and (not dispatcher_username or not dispatcher_password):
-        logger.warning(
-            "admin_auth_unconfigured",
-            extra={
-                "extra": {
-                    "path": "/v1/admin",
-                    "method": "BASIC",
-                    "admin_configured": bool(admin_username and admin_password),
-                    "dispatcher_configured": bool(dispatcher_username and dispatcher_password),
-                }
-            },
-        )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-
-    if not credentials:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-
-    if admin_username and admin_password and secrets.compare_digest(credentials.username, admin_username) and secrets.compare_digest(credentials.password, admin_password):
-        return AdminIdentity(username=credentials.username, role="admin")
-    if dispatcher_username and dispatcher_password and secrets.compare_digest(credentials.username, dispatcher_username) and secrets.compare_digest(credentials.password, dispatcher_password):
-        return AdminIdentity(username=credentials.username, role="dispatcher")
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid authentication",
-        headers={"WWW-Authenticate": "Basic"},
-    )
-
-
-async def require_admin(identity: AdminIdentity = Depends(verify_admin_or_dispatcher)) -> AdminIdentity:
-    if identity.role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
-    return identity
 
 
 def _filter_badge(filter_key: str, active_filters: set[str]) -> str:
@@ -374,7 +324,7 @@ async def list_leads(
     status_filter: Optional[str] = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(require_viewer),
 ) -> List[AdminLeadResponse]:
     stmt = (
         select(Lead)
@@ -403,11 +353,13 @@ async def update_lead_status(
     lead_id: str,
     request: AdminLeadStatusUpdateRequest,
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    identity: AdminIdentity = Depends(require_dispatch),
 ) -> AdminLeadResponse:
     lead = await session.get(Lead, lead_id)
     if lead is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
+
+    before = admin_lead_from_model(lead).model_dump(mode="json")
 
     try:
         assert_valid_transition(lead.status, request.status)
@@ -415,19 +367,29 @@ async def update_lead_status(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     lead.status = request.status
-    await session.commit()
-    await session.refresh(lead)
     credit_count = await session.scalar(
         select(func.count()).select_from(ReferralCredit).where(ReferralCredit.referrer_lead_id == lead.lead_id)
     )
-    return admin_lead_from_model(lead, referral_credit_count=int(credit_count or 0))
+    response_body = admin_lead_from_model(lead, referral_credit_count=int(credit_count or 0))
+
+    await audit_service.record_action(
+        session,
+        identity=identity,
+        action="lead_status_update",
+        resource_type="lead",
+        resource_id=lead.lead_id,
+        before=before,
+        after=response_body.model_dump(mode="json"),
+    )
+    await session.commit()
+    return response_body
 
 
 @router.post("/v1/admin/email-scan", status_code=status.HTTP_202_ACCEPTED)
 async def email_scan(
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(require_dispatch),
 ) -> dict[str, int]:
     adapter = getattr(http_request.app.state, "email_adapter", None)
     result = await email_service.scan_and_send_reminders(session, adapter)
@@ -439,7 +401,7 @@ async def resend_last_email(
     booking_id: str,
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(require_dispatch),
 ) -> dict[str, str]:
     booking = await session.get(Booking, booking_id)
     if booking is None:
@@ -458,7 +420,7 @@ async def resend_last_email(
 async def list_export_dead_letter(
     limit: int = Query(default=100, ge=1, le=500),
     session: AsyncSession = Depends(get_db_session),
-    _principal: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    _principal: AdminIdentity = Depends(require_viewer),
 ) -> List[ExportEventResponse]:
     result = await session.execute(
         select(ExportEvent).order_by(ExportEvent.created_at.desc()).limit(limit)
@@ -634,7 +596,7 @@ async def list_bookings(
     to_date: date | None = Query(default=None, alias="to"),
     status_filter: str | None = Query(default=None, alias="status"),
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(require_viewer),
 ):
     today = datetime.now(tz=booking_service.LOCAL_TZ).date()
     start_date = from_date or today
@@ -670,11 +632,29 @@ async def list_bookings(
 async def confirm_booking(
     booking_id: str,
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    identity: AdminIdentity = Depends(require_dispatch),
 ):
     booking = await session.get(Booking, booking_id)
     if booking is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+
+    before_state = booking_schemas.BookingResponse(
+        booking_id=booking.booking_id,
+        status=booking.status,
+        starts_at=booking.starts_at,
+        duration_minutes=booking.duration_minutes,
+        actual_duration_minutes=booking.actual_duration_minutes,
+        deposit_required=booking.deposit_required,
+        deposit_cents=booking.deposit_cents,
+        deposit_policy=booking.deposit_policy,
+        deposit_status=booking.deposit_status,
+        checkout_url=None,
+        risk_score=booking.risk_score,
+        risk_band=booking.risk_band,
+        risk_reasons=booking.risk_reasons,
+        cancellation_exception=booking.cancellation_exception,
+        cancellation_exception_note=booking.cancellation_exception_note,
+    ).model_dump(mode="json")
 
     try:
         booking_service.assert_valid_booking_transition(booking.status, "CONFIRMED")
@@ -724,10 +704,33 @@ async def confirm_booking(
                     }
                 },
             )
-    await session.commit()
-    await session.refresh(booking)
+    await audit_service.record_action(
+        session,
+        identity=identity,
+        action="booking_confirm",
+        resource_type="booking",
+        resource_id=booking.booking_id,
+        before=booking_schemas.BookingResponse(
+            booking_id=booking.booking_id,
+            status="PENDING" if booking.status != "CONFIRMED" else booking.status,
+            starts_at=booking.starts_at,
+            duration_minutes=booking.duration_minutes,
+            actual_duration_minutes=booking.actual_duration_minutes,
+            deposit_required=booking.deposit_required,
+            deposit_cents=booking.deposit_cents,
+            deposit_policy=booking.deposit_policy,
+            deposit_status=booking.deposit_status,
+            checkout_url=None,
+            risk_score=booking.risk_score,
+            risk_band=booking.risk_band,
+            risk_reasons=booking.risk_reasons,
+            cancellation_exception=booking.cancellation_exception,
+            cancellation_exception_note=booking.cancellation_exception_note,
+        ).model_dump(mode="json"),
+        after=None,
+    )
 
-    return booking_schemas.BookingResponse(
+    response_body = booking_schemas.BookingResponse(
         booking_id=booking.booking_id,
         status=booking.status,
         starts_at=booking.starts_at,
@@ -744,6 +747,17 @@ async def confirm_booking(
         cancellation_exception=booking.cancellation_exception,
         cancellation_exception_note=booking.cancellation_exception_note,
     )
+    await audit_service.record_action(
+        session,
+        identity=identity,
+        action="booking_confirm",
+        resource_type="booking",
+        resource_id=booking.booking_id,
+        before=before_state,
+        after=response_body.model_dump(mode="json"),
+    )
+    await session.commit()
+    return response_body
 
 
 @router.get("/v1/admin/observability", response_class=HTMLResponse)
@@ -751,7 +765,7 @@ async def admin_observability(
     filters: list[str] = Query(default=[]),
     session: AsyncSession = Depends(get_db_session),
     store: BotStore = Depends(get_bot_store),
-    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(require_viewer),
 ) -> HTMLResponse:
     active_filters = {value.lower() for value in filters if value}
     lead_stmt = (
@@ -786,7 +800,7 @@ async def admin_observability(
 async def admin_case_detail(
     case_id: str,
     store: BotStore = Depends(get_bot_store),
-    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    _identity: AdminIdentity = Depends(require_viewer),
 ) -> HTMLResponse:
     cases = await store.list_cases()
     case = next((item for item in cases if getattr(item, "case_id", None) == case_id), None)
@@ -898,11 +912,29 @@ async def admin_case_detail(
 async def cancel_booking(
     booking_id: str,
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    identity: AdminIdentity = Depends(require_dispatch),
 ):
     booking = await session.get(Booking, booking_id)
     if booking is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+
+    before_state = booking_schemas.BookingResponse(
+        booking_id=booking.booking_id,
+        status=booking.status,
+        starts_at=booking.starts_at,
+        duration_minutes=booking.duration_minutes,
+        actual_duration_minutes=booking.actual_duration_minutes,
+        deposit_required=booking.deposit_required,
+        deposit_cents=booking.deposit_cents,
+        deposit_policy=booking.deposit_policy,
+        deposit_status=booking.deposit_status,
+        checkout_url=None,
+        risk_score=booking.risk_score,
+        risk_band=booking.risk_band,
+        risk_reasons=booking.risk_reasons,
+        cancellation_exception=booking.cancellation_exception,
+        cancellation_exception_note=booking.cancellation_exception_note,
+    ).model_dump(mode="json")
 
     try:
         booking_service.assert_valid_booking_transition(booking.status, "CANCELLED")
@@ -910,9 +942,7 @@ async def cancel_booking(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     booking.status = "CANCELLED"
-    await session.commit()
-    await session.refresh(booking)
-    return booking_schemas.BookingResponse(
+    response_body = booking_schemas.BookingResponse(
         booking_id=booking.booking_id,
         status=booking.status,
         starts_at=booking.starts_at,
@@ -929,6 +959,17 @@ async def cancel_booking(
         cancellation_exception=booking.cancellation_exception,
         cancellation_exception_note=booking.cancellation_exception_note,
     )
+    await audit_service.record_action(
+        session,
+        identity=identity,
+        action="booking_cancel",
+        resource_type="booking",
+        resource_id=booking.booking_id,
+        before=before_state,
+        after=response_body.model_dump(mode="json"),
+    )
+    await session.commit()
+    return response_body
 
 
 @router.post("/v1/admin/bookings/{booking_id}/reschedule", response_model=booking_schemas.BookingResponse)
@@ -936,13 +977,31 @@ async def reschedule_booking(
     booking_id: str,
     request: booking_schemas.BookingRescheduleRequest,
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    identity: AdminIdentity = Depends(require_dispatch),
 ):
     booking = await session.get(Booking, booking_id)
     if booking is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
     if booking.status in {"DONE", "CANCELLED"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Booking is no longer active")
+
+    before_state = booking_schemas.BookingResponse(
+        booking_id=booking.booking_id,
+        status=booking.status,
+        starts_at=booking.starts_at,
+        duration_minutes=booking.duration_minutes,
+        actual_duration_minutes=booking.actual_duration_minutes,
+        deposit_required=booking.deposit_required,
+        deposit_cents=booking.deposit_cents,
+        deposit_policy=booking.deposit_policy,
+        deposit_status=booking.deposit_status,
+        checkout_url=None,
+        risk_score=booking.risk_score,
+        risk_band=booking.risk_band,
+        risk_reasons=booking.risk_reasons,
+        cancellation_exception=booking.cancellation_exception,
+        cancellation_exception_note=booking.cancellation_exception_note,
+    ).model_dump(mode="json")
 
     try:
         booking = await booking_service.reschedule_booking(
@@ -954,7 +1013,7 @@ async def reschedule_booking(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    return booking_schemas.BookingResponse(
+    response_body = booking_schemas.BookingResponse(
         booking_id=booking.booking_id,
         status=booking.status,
         starts_at=booking.starts_at,
@@ -971,6 +1030,17 @@ async def reschedule_booking(
         cancellation_exception=booking.cancellation_exception,
         cancellation_exception_note=booking.cancellation_exception_note,
     )
+    await audit_service.record_action(
+        session,
+        identity=identity,
+        action="booking_reschedule",
+        resource_type="booking",
+        resource_id=booking.booking_id,
+        before=before_state,
+        after=response_body.model_dump(mode="json"),
+    )
+    await session.commit()
+    return response_body
 
 
 @router.post(
@@ -982,8 +1052,28 @@ async def complete_booking(
     request: booking_schemas.BookingCompletionRequest,
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity = Depends(verify_admin_or_dispatcher),
+    identity: AdminIdentity = Depends(require_dispatch),
 ):
+    existing = await session.get(Booking, booking_id)
+    before_state = None
+    if existing:
+        before_state = booking_schemas.BookingResponse(
+            booking_id=existing.booking_id,
+            status=existing.status,
+            starts_at=existing.starts_at,
+            duration_minutes=existing.duration_minutes,
+            actual_duration_minutes=existing.actual_duration_minutes,
+            deposit_required=existing.deposit_required,
+            deposit_cents=existing.deposit_cents,
+            deposit_policy=existing.deposit_policy,
+            deposit_status=existing.deposit_status,
+            checkout_url=None,
+            risk_score=existing.risk_score,
+            risk_band=existing.risk_band,
+            risk_reasons=existing.risk_reasons,
+            cancellation_exception=existing.cancellation_exception,
+            cancellation_exception_note=existing.cancellation_exception_note,
+        ).model_dump(mode="json")
     try:
         booking = await booking_service.mark_booking_completed(
             session, booking_id, request.actual_duration_minutes
@@ -1018,7 +1108,7 @@ async def complete_booking(
             extra={"extra": {"order_id": booking.booking_id, "reason": type(exc).__name__}},
         )
 
-    return booking_schemas.BookingResponse(
+    response_body = booking_schemas.BookingResponse(
         booking_id=booking.booking_id,
         status=booking.status,
         starts_at=booking.starts_at,
@@ -1035,6 +1125,17 @@ async def complete_booking(
         cancellation_exception=booking.cancellation_exception,
         cancellation_exception_note=booking.cancellation_exception_note,
     )
+    await audit_service.record_action(
+        session,
+        identity=identity,
+        action="booking_complete",
+        resource_type="booking",
+        resource_id=booking.booking_id,
+        before=before_state,
+        after=response_body.model_dump(mode="json"),
+    )
+    await session.commit()
+    return response_body
 
 
 def _invoice_response(invoice: Invoice) -> invoice_schemas.InvoiceResponse:
@@ -1113,7 +1214,7 @@ async def list_invoices(
     q: str | None = None,
     page: int = Query(default=1, ge=1),
     session: AsyncSession = Depends(get_db_session),
-    _admin: AdminIdentity = Depends(require_admin),
+    _admin: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.InvoiceListResponse:
     return await _query_invoice_list(
         session=session,
@@ -1133,7 +1234,7 @@ async def admin_invoice_list_ui(
     q: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     session: AsyncSession = Depends(get_db_session),
-    _admin: AdminIdentity = Depends(require_admin),
+    _admin: AdminIdentity = Depends(require_finance),
 ) -> HTMLResponse:
     invoice_list = await _query_invoice_list(
         session=session,
@@ -1271,7 +1372,7 @@ async def admin_invoice_list_ui(
 async def get_invoice(
     invoice_id: str,
     session: AsyncSession = Depends(get_db_session),
-    _admin: AdminIdentity = Depends(require_admin),
+    _admin: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.InvoiceResponse:
     invoice = await session.get(
         Invoice,
@@ -1288,7 +1389,7 @@ async def get_invoice(
 async def admin_invoice_detail_ui(
     invoice_id: str,
     session: AsyncSession = Depends(get_db_session),
-    _admin: AdminIdentity = Depends(require_admin),
+    _admin: AdminIdentity = Depends(require_finance),
 ) -> HTMLResponse:
     invoice_model = await session.get(
         Invoice,
@@ -1810,7 +1911,7 @@ async def send_invoice(
     invoice_id: str,
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
-    _admin: AdminIdentity = Depends(require_admin),
+    _admin: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.InvoiceSendResponse:
     invoice = await session.get(
         Invoice,
@@ -1888,7 +1989,7 @@ async def create_invoice_from_order(
     order_id: str,
     request: invoice_schemas.InvoiceCreateRequest,
     session: AsyncSession = Depends(get_db_session),
-    admin: AdminIdentity = Depends(require_admin),
+    admin: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.InvoiceResponse:
     order = await session.get(
         Booking, order_id, options=(selectinload(Booking.lead),)
@@ -1947,7 +2048,7 @@ async def mark_invoice_paid(
     invoice_id: str,
     request: invoice_schemas.ManualPaymentRequest,
     session: AsyncSession = Depends(get_db_session),
-    _admin: AdminIdentity = Depends(require_admin),
+    _admin: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.ManualPaymentResult:
     return await _record_manual_invoice_payment(invoice_id, request, session)
 
@@ -1961,7 +2062,7 @@ async def record_manual_invoice_payment(
     invoice_id: str,
     request: invoice_schemas.ManualPaymentRequest,
     session: AsyncSession = Depends(get_db_session),
-    _admin: AdminIdentity = Depends(require_admin),
+    _admin: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.ManualPaymentResult:
     return await _record_manual_invoice_payment(invoice_id, request, session)
 

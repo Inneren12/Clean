@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Request, status
 from fastapi.exceptions import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.routes_admin import require_admin
+from app.api.admin_auth import require_admin
 from app.domain.analytics.service import (
     EventType,
     estimated_duration_from_booking,
