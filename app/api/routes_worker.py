@@ -349,9 +349,13 @@ async def _sync_invoice_addons(
         and any(item.item_id == reason.invoice_item_id for item in invoice.items)
     }
 
+    removed_items: list[InvoiceItem] = []
+
     if tracked_ids:
-        for item in list(invoice.items):
-            if item.item_id in tracked_ids:
+        removed_items = [item for item in invoice.items if item.item_id in tracked_ids]
+        if removed_items:
+            invoice.items[:] = [item for item in invoice.items if item.item_id not in tracked_ids]
+            for item in removed_items:
                 session.delete(item)
         for reason in reasons:
             if reason.code == reason_schemas.ReasonCode.ADDON_ADDED.value and reason.invoice_item_id in tracked_ids:
