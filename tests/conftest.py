@@ -28,6 +28,7 @@ from app.domain.clients import db_models as client_db_models  # noqa: F401
 from app.domain.nps import db_models as nps_db_models  # noqa: F401
 from app.domain.disputes import db_models as dispute_db_models  # noqa: F401
 from app.domain.policy_overrides import db_models as policy_override_db_models  # noqa: F401
+from app.domain.admin_audit import db_models as admin_audit_db_models  # noqa: F401
 from app.domain.documents import db_models as document_db_models  # noqa: F401
 from app.infra.bot_store import InMemoryBotStore
 from app.infra.db import Base, get_db_session

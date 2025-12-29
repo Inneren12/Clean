@@ -751,32 +751,6 @@ async def confirm_booking(
                     }
                 },
             )
-    await audit_service.record_action(
-        session,
-        identity=identity,
-        action="booking_confirm",
-        resource_type="booking",
-        resource_id=booking.booking_id,
-        before=booking_schemas.BookingResponse(
-            booking_id=booking.booking_id,
-            status="PENDING" if booking.status != "CONFIRMED" else booking.status,
-            starts_at=booking.starts_at,
-            duration_minutes=booking.duration_minutes,
-            actual_duration_minutes=booking.actual_duration_minutes,
-            deposit_required=booking.deposit_required,
-            deposit_cents=booking.deposit_cents,
-            deposit_policy=booking.deposit_policy,
-            deposit_status=booking.deposit_status,
-            checkout_url=None,
-            risk_score=booking.risk_score,
-            risk_band=booking.risk_band,
-            risk_reasons=booking.risk_reasons,
-            cancellation_exception=booking.cancellation_exception,
-            cancellation_exception_note=booking.cancellation_exception_note,
-        ).model_dump(mode="json"),
-        after=None,
-    )
-
     response_body = booking_schemas.BookingResponse(
         booking_id=booking.booking_id,
         status=booking.status,

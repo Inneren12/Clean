@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable, Optional
 
+from contextvars import ContextVar
+
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -14,6 +16,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+_explicit_admin_audit: ContextVar[bool] = ContextVar("explicit_admin_audit", default=False)
 
 
 class AdminRole(str, Enum):
@@ -234,9 +239,12 @@ class AdminAuditMiddleware(BaseHTTPMiddleware):
             body_bytes = await request.body()
             request._body = body_bytes
 
+        token = _explicit_admin_audit.set(False)
         response = await call_next(request)
+        already_logged = _explicit_admin_audit.get()
+        _explicit_admin_audit.reset(token)
 
-        if should_audit:
+        if should_audit and not already_logged:
             from app.domain.admin_audit import service as audit_service
 
             identity: AdminIdentity | None = getattr(request.state, "admin_identity", None)
@@ -244,7 +252,8 @@ class AdminAuditMiddleware(BaseHTTPMiddleware):
                 return response
 
             before = _safe_json(body_bytes)
-            after = _safe_json(getattr(response, "body", b""))
+            raw_after = getattr(response, "body", None)
+            after = _safe_json(raw_after if isinstance(raw_after, (bytes, bytearray)) else None)
             session_factory = getattr(request.app.state, "db_session_factory", None)
             if session_factory is None:
                 return response

@@ -248,6 +248,7 @@ async def download_invoice_pdf(
         raise HTTPException(status_code=400, detail="Invoice is void")
     lead = await invoice_service.fetch_customer(session, invoice)
     document = await document_service.get_or_create_invoice_document(session, invoice=invoice, lead=lead)
+    await session.commit()
     pdf_bytes = document_service.pdf_bytes(document)
     filename = f"{invoice.invoice_number}.pdf"
     headers = {"Content-Disposition": f"inline; filename=\"{filename}\""}
@@ -274,6 +275,7 @@ async def download_receipt_pdf(
     document = await document_service.get_or_create_receipt_document(
         session, invoice=invoice, payment=payment, lead=lead
     )
+    await session.commit()
     pdf_bytes = document_service.pdf_bytes(document)
     filename = f"{invoice.invoice_number}-receipt.pdf"
     headers = {"Content-Disposition": f"inline; filename=\"{filename}\""}
@@ -301,6 +303,7 @@ async def download_service_agreement_pdf(
     document = await document_service.get_or_create_service_agreement_document(
         session, booking=booking, lead=lead, client=client
     )
+    await session.commit()
     pdf_bytes = document_service.pdf_bytes(document)
     filename = f"{invoice.invoice_number}-service-agreement.pdf"
     headers = {"Content-Disposition": f"inline; filename=\"{filename}\""}

@@ -2,9 +2,11 @@ import datetime
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.orm import selectinload
 
 from app.domain.bookings.db_models import Booking
 from app.domain.documents.db_models import Document
+from app.domain.documents import service as document_service
 from app.domain.invoices import service as invoice_service, statuses
 from app.domain.invoices.db_models import Invoice, Payment
 from app.domain.invoices.schemas import InvoiceItemCreate
@@ -133,3 +135,46 @@ async def test_service_agreement_downloadable(client, async_session_maker):
         document = result.scalar_one()
         assert document.document_type == "service_agreement"
         assert document.template_version == 1
+
+
+@pytest.mark.anyio
+async def test_document_service_does_not_commit_implicitly(async_session_maker):
+    invoice_id, _, _ = await _seed_invoice(async_session_maker)
+
+    async with async_session_maker() as session:
+        invoice_result = await session.execute(
+            sa.select(Invoice)
+            .options(selectinload(Invoice.items), selectinload(Invoice.payments))
+            .where(Invoice.invoice_id == invoice_id)
+        )
+        invoice = invoice_result.scalar_one()
+        booking = await session.get(Booking, invoice.order_id) if invoice else None
+        lead = await session.get(Lead, booking.lead_id) if booking and booking.lead_id else None
+        await document_service.get_or_create_invoice_document(session, invoice=invoice, lead=lead)
+        await session.rollback()
+
+    async with async_session_maker() as session:
+        count = await session.scalar(
+            sa.select(sa.func.count()).select_from(Document).where(
+                Document.document_type == "invoice", Document.reference_id == invoice_id
+            )
+        )
+        assert count == 0
+
+
+@pytest.mark.anyio
+async def test_public_invoice_pdf_idempotent(client, async_session_maker):
+    invoice_id, _, token = await _seed_invoice(async_session_maker)
+
+    first = client.get(f"/i/{token}.pdf")
+    assert first.status_code == 200
+    second = client.get(f"/i/{token}.pdf")
+    assert second.status_code == 200
+
+    async with async_session_maker() as session:
+        count = await session.scalar(
+            sa.select(sa.func.count()).select_from(Document).where(
+                Document.document_type == "invoice", Document.reference_id == invoice_id
+            )
+        )
+        assert count == 1
