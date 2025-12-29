@@ -56,6 +56,15 @@ class Booking(Base):
     deposit_cents: Mapped[int | None] = mapped_column(Integer)
     deposit_policy: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     deposit_status: Mapped[str | None] = mapped_column(String(32))
+    base_charge_cents: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    refund_total_cents: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    credit_note_total_cents: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     risk_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     risk_band: Mapped[str] = mapped_column(
         String(16), nullable=False, default="LOW", server_default="LOW"
