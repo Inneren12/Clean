@@ -56,8 +56,13 @@ async def apply_override(
         if override_type == OverrideType.RISK_BAND:
             band_value = payload.get("risk_band")
             band_str = band_value.value if hasattr(band_value, "value") else str(band_value)
-            risk_score = int(payload.get("risk_score", booking.risk_score))
-            risk_reasons = list(payload.get("risk_reasons", booking.risk_reasons))
+            risk_score = booking.risk_score
+            if "risk_score" in payload and payload.get("risk_score") is not None:
+                risk_score = int(payload.get("risk_score"))
+
+            risk_reasons = list(booking.risk_reasons)
+            if "risk_reasons" in payload and payload.get("risk_reasons") is not None:
+                risk_reasons = list(payload.get("risk_reasons"))
             old_value = {
                 "risk_band": booking.risk_band,
                 "risk_score": booking.risk_score,

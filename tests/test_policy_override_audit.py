@@ -50,6 +50,48 @@ async def test_risk_override_is_audited(async_session_maker):
 
 
 @pytest.mark.anyio
+async def test_risk_override_preserves_score_and_reasons_when_omitted(async_session_maker):
+    async with async_session_maker() as session:
+        booking = Booking(
+            team_id=1,
+            lead_id=None,
+            starts_at=datetime.now(tz=timezone.utc),
+            duration_minutes=60,
+            planned_minutes=60,
+            status="PENDING",
+            deposit_required=False,
+            deposit_policy=[],
+            deposit_status=None,
+            risk_score=250,
+            risk_reasons=["automated_review", "history"],
+        )
+        session.add(booking)
+        await session.commit()
+        await session.refresh(booking)
+
+        await booking_service.override_risk_band(
+            session,
+            booking.booking_id,
+            actor="admin",
+            reason="manual review",
+            new_band=booking_service.RiskBand.MEDIUM,
+        )
+
+        audits = await override_service.list_overrides(
+            session, booking_id=booking.booking_id, override_type=OverrideType.RISK_BAND
+        )
+
+        assert len(audits) == 1
+        audit = audits[0]
+        assert audit.old_value["risk_band"] == "LOW"
+        assert audit.old_value["risk_score"] == 250
+        assert audit.old_value["risk_reasons"] == ["automated_review", "history"]
+        assert audit.new_value["risk_band"] == "MEDIUM"
+        assert audit.new_value["risk_score"] == 250
+        assert audit.new_value["risk_reasons"] == ["automated_review", "history"]
+
+
+@pytest.mark.anyio
 async def test_deposit_override_is_audited(async_session_maker):
     async with async_session_maker() as session:
         booking = Booking(
