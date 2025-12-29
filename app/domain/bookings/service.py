@@ -1,10 +1,11 @@
 import math
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+from enum import Enum
 import logging
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Select, and_, delete, or_, select
+from sqlalchemy import Select, and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,6 +60,27 @@ class DepositDecision:
     deposit_cents: int | None = None
     policy_snapshot: BookingPolicySnapshot | None = None
     cancellation_policy: CancellationPolicySnapshot | None = None
+
+
+class RiskBand(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
+@dataclass
+class RiskAssessment:
+    score: int
+    band: RiskBand
+    reasons: list[str]
+
+    @property
+    def requires_deposit(self) -> bool:
+        return self.band in {RiskBand.MEDIUM, RiskBand.HIGH}
+
+    @property
+    def requires_manual_confirmation(self) -> bool:
+        return self.band == RiskBand.HIGH
 
 
 @dataclass
@@ -118,6 +140,15 @@ SHORT_NOTICE_HOURS = 24
 HIGH_VALUE_THRESHOLD_CENTS = 30000
 MIN_DEPOSIT_CENTS = 5000
 MAX_DEPOSIT_CENTS = 20000
+RISK_NEW_CLIENT_WEIGHT = 20
+RISK_HIGH_TOTAL_WEIGHT = 25
+RISK_SHORT_NOTICE_WEIGHT = 20
+RISK_AREA_WEIGHT = 15
+RISK_CANCEL_HISTORY_WEIGHT = 45
+RISK_REPEAT_CANCEL_BONUS = 10
+RISK_HIGH_THRESHOLD = 75
+RISK_MEDIUM_THRESHOLD = 45
+HIGH_RISK_POSTAL_PREFIXES = {"X0A", "Z9Z", "T9X"}
 
 
 def apply_duration_constraints(duration_minutes: int, service_type: str | CleaningType | None = None) -> int:
@@ -165,6 +196,27 @@ def _estimate_total_cents(lead: Lead | None, estimated_total: float | int | None
         return math.ceil(float(total) * 100)
     except Exception:  # noqa: BLE001
         return None
+
+
+def _postal_prefix(postal_code: str | None) -> str | None:
+    if not postal_code:
+        return None
+    normalized = postal_code.strip().upper().replace(" ", "")
+    return normalized[:3] if normalized else None
+
+
+async def _count_cancellations(session: AsyncSession, lead_id: str | None, client_id: str | None) -> int:
+    identifiers: list[object] = []
+    if lead_id:
+        identifiers.append(Booking.lead_id == lead_id)
+    if client_id:
+        identifiers.append(Booking.client_id == client_id)
+    if not identifiers:
+        return 0
+
+    stmt = select(func.count()).where(and_(or_(*identifiers), Booking.status == "CANCELLED"))
+    result = await session.execute(stmt)
+    return int(result.scalar_one() or 0)
 
 
 def _build_cancellation_policy(
@@ -217,6 +269,66 @@ def _build_cancellation_policy(
     ]
 
     return CancellationPolicySnapshot(rules=rules, windows=windows)
+
+
+async def evaluate_risk(
+    session: AsyncSession,
+    *,
+    lead: Lead | None,
+    client_id: str | None,
+    starts_at: datetime,
+    postal_code: str | None = None,
+    estimated_total: float | int | None = None,
+) -> RiskAssessment:
+    normalized = _normalize_datetime(starts_at)
+    lead_time_hours = _lead_time_hours(normalized)
+    total_cents = _estimate_total_cents(lead, estimated_total)
+    prefix = _postal_prefix(postal_code or (lead.postal_code if lead else None))
+
+    score = 0
+    reasons: list[str] = []
+
+    has_history = False
+    if lead and await _has_existing_history(session, lead.lead_id):
+        has_history = True
+    elif client_id:
+        stmt = select(Booking.booking_id).where(
+            Booking.client_id == client_id, Booking.status.in_({"CONFIRMED", "DONE"})
+        )
+        history_result = await session.execute(stmt.limit(1))
+        has_history = history_result.scalar_one_or_none() is not None
+
+    if not has_history:
+        reasons.append("new_client")
+        score += RISK_NEW_CLIENT_WEIGHT
+
+    if total_cents is not None and total_cents >= HIGH_VALUE_THRESHOLD_CENTS:
+        reasons.append("high_total")
+        score += RISK_HIGH_TOTAL_WEIGHT
+
+    if lead_time_hours < SHORT_NOTICE_HOURS:
+        reasons.append("short_notice")
+        score += RISK_SHORT_NOTICE_WEIGHT
+
+    if prefix and prefix in HIGH_RISK_POSTAL_PREFIXES:
+        reasons.append("area_flagged")
+        score += RISK_AREA_WEIGHT
+
+    cancel_count = await _count_cancellations(session, lead.lead_id if lead else None, client_id)
+    if cancel_count:
+        reasons.append("cancel_history")
+        score += RISK_CANCEL_HISTORY_WEIGHT
+        if cancel_count > 1:
+            score += RISK_REPEAT_CANCEL_BONUS
+
+    if score >= RISK_HIGH_THRESHOLD:
+        band = RiskBand.HIGH
+    elif score >= RISK_MEDIUM_THRESHOLD:
+        band = RiskBand.MEDIUM
+    else:
+        band = RiskBand.LOW
+
+    return RiskAssessment(score=score, band=band, reasons=reasons)
 
 
 def _build_deposit_snapshot(
@@ -305,9 +417,11 @@ async def evaluate_deposit_policy(
     deposits_enabled: bool = True,
     service_type: str | CleaningType | None = None,
     estimated_total: float | int | None = None,
+    force_deposit: bool = False,
+    extra_reasons: list[str] | None = None,
 ) -> DepositDecision:
     lead_time_hours = _lead_time_hours(_normalize_datetime(starts_at))
-    if not deposits_enabled:
+    if not deposits_enabled and not force_deposit:
         cancellation_policy = _build_cancellation_policy(
             service_type=None,
             lead_time_hours=lead_time_hours,
@@ -346,6 +460,10 @@ async def evaluate_deposit_policy(
         reasons.append("late_booking")
     if total_cents is not None and total_cents >= HIGH_VALUE_THRESHOLD_CENTS:
         reasons.append("high_value_booking")
+    if extra_reasons:
+        reasons.extend(extra_reasons)
+    if force_deposit and not reasons:
+        reasons.append("risk_required")
 
     deposit_snapshot = _build_deposit_snapshot(
         reasons=reasons,
@@ -554,6 +672,7 @@ async def create_booking(
     session: AsyncSession,
     deposit_decision: DepositDecision | None = None,
     policy_snapshot: BookingPolicySnapshot | None = None,
+    risk_assessment: RiskAssessment | None = None,
     manage_transaction: bool = True,
     client_id: str | None = None,
     subscription_id: str | None = None,
@@ -563,6 +682,7 @@ async def create_booking(
     decision = deposit_decision or DepositDecision(required=False, reasons=[], deposit_cents=None)
     snapshot = policy_snapshot or decision.policy_snapshot
 
+    risk = risk_assessment or RiskAssessment(score=0, band=RiskBand.LOW, reasons=[])
     snapshot_payload: dict | None = None
     if snapshot:
         snapshot_payload = snapshot.model_dump(mode="json") if hasattr(snapshot, "model_dump") else snapshot
@@ -586,6 +706,9 @@ async def create_booking(
             deposit_policy=decision.reasons,
             deposit_status="pending" if decision.required else None,
             policy_snapshot=snapshot_payload,
+            risk_score=risk.score,
+            risk_band=risk.band.value,
+            risk_reasons=risk.reasons,
         )
         session.add(booking)
         await session.flush()
@@ -663,13 +786,15 @@ async def mark_deposit_paid(
     if booking is None:
         return None
 
+    manual_confirmation_required = booking.risk_band == RiskBand.HIGH.value
     already_confirmed = booking.deposit_status == "paid" and booking.status == "CONFIRMED"
     booking.deposit_status = "paid"
-    booking.status = "CONFIRMED"
+    if not manual_confirmation_required:
+        booking.status = "CONFIRMED"
     if payment_intent_id:
         booking.stripe_payment_intent_id = payment_intent_id
     lead = await session.get(Lead, booking.lead_id) if booking.lead_id else None
-    if not already_confirmed:
+    if not already_confirmed and not manual_confirmation_required:
         try:
             await log_event(
                 session,
@@ -691,7 +816,7 @@ async def mark_deposit_paid(
                     }
                 },
             )
-    if lead:
+    if lead and not manual_confirmation_required:
         try:
             await grant_referral_credit(session, lead)
         except Exception as exc:  # noqa: BLE001
@@ -708,7 +833,7 @@ async def mark_deposit_paid(
     await session.commit()
     await session.refresh(booking)
 
-    if booking.lead_id:
+    if booking.lead_id and not manual_confirmation_required:
         lead = await session.get(Lead, booking.lead_id)
         if lead:
             await email_service.send_booking_confirmed_email(session, email_adapter, booking, lead)

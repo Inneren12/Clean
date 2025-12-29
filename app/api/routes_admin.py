@@ -681,6 +681,11 @@ async def confirm_booking(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    if booking.deposit_required and booking.deposit_status != "paid":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Deposit required before confirmation"
+        )
+
     lead = await session.get(Lead, booking.lead_id) if booking.lead_id else None
     if booking.status != "CONFIRMED":
         booking.status = "CONFIRMED"
@@ -733,6 +738,9 @@ async def confirm_booking(
         deposit_policy=booking.deposit_policy,
         deposit_status=booking.deposit_status,
         checkout_url=None,
+        risk_score=booking.risk_score,
+        risk_band=booking.risk_band,
+        risk_reasons=booking.risk_reasons,
     )
 
 
@@ -913,6 +921,9 @@ async def cancel_booking(
         deposit_policy=booking.deposit_policy,
         deposit_status=booking.deposit_status,
         checkout_url=None,
+        risk_score=booking.risk_score,
+        risk_band=booking.risk_band,
+        risk_reasons=booking.risk_reasons,
     )
 
 
@@ -950,6 +961,9 @@ async def reschedule_booking(
         deposit_policy=booking.deposit_policy,
         deposit_status=booking.deposit_status,
         checkout_url=None,
+        risk_score=booking.risk_score,
+        risk_band=booking.risk_band,
+        risk_reasons=booking.risk_reasons,
     )
 
 
@@ -1009,6 +1023,9 @@ async def complete_booking(
         deposit_policy=booking.deposit_policy,
         deposit_status=booking.deposit_status,
         checkout_url=None,
+        risk_score=booking.risk_score,
+        risk_band=booking.risk_band,
+        risk_reasons=booking.risk_reasons,
     )
 
 

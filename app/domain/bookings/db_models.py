@@ -56,6 +56,13 @@ class Booking(Base):
     deposit_cents: Mapped[int | None] = mapped_column(Integer)
     deposit_policy: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     deposit_status: Mapped[str | None] = mapped_column(String(32))
+    risk_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    risk_band: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="LOW", server_default="LOW"
+    )
+    risk_reasons: Mapped[list[str]] = mapped_column(
+        JSON, default=list, nullable=False, server_default="[]"
+    )
     policy_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     stripe_checkout_session_id: Mapped[str | None] = mapped_column(String(255))
     stripe_payment_intent_id: Mapped[str | None] = mapped_column(String(255))
