@@ -373,7 +373,8 @@ async def list_leads(
 @router.post("/v1/admin/leads/{lead_id}/status", response_model=AdminLeadResponse)
 async def update_lead_status(
     lead_id: str,
-    request: AdminLeadStatusUpdateRequest,
+    request: Request,
+    payload: AdminLeadStatusUpdateRequest,
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ) -> AdminLeadResponse:
@@ -384,16 +385,17 @@ async def update_lead_status(
     before = admin_lead_from_model(lead).model_dump(mode="json")
 
     try:
-        assert_valid_transition(lead.status, request.status)
+        assert_valid_transition(lead.status, payload.status)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    lead.status = request.status
+    lead.status = payload.status
     credit_count = await session.scalar(
         select(func.count()).select_from(ReferralCredit).where(ReferralCredit.referrer_lead_id == lead.lead_id)
     )
     response_body = admin_lead_from_model(lead, referral_credit_count=int(credit_count or 0))
 
+    request.state.explicit_admin_audit = True
     await audit_service.record_action(
         session,
         identity=identity,
@@ -678,6 +680,7 @@ async def list_bookings(
 @router.post("/v1/admin/bookings/{booking_id}/confirm", response_model=booking_schemas.BookingResponse)
 async def confirm_booking(
     booking_id: str,
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ):
@@ -768,6 +771,7 @@ async def confirm_booking(
         cancellation_exception=booking.cancellation_exception,
         cancellation_exception_note=booking.cancellation_exception_note,
     )
+    request.state.explicit_admin_audit = True
     await audit_service.record_action(
         session,
         identity=identity,
@@ -932,6 +936,7 @@ async def admin_case_detail(
 @router.post("/v1/admin/bookings/{booking_id}/cancel", response_model=booking_schemas.BookingResponse)
 async def cancel_booking(
     booking_id: str,
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ):
@@ -980,6 +985,7 @@ async def cancel_booking(
         cancellation_exception=booking.cancellation_exception,
         cancellation_exception_note=booking.cancellation_exception_note,
     )
+    request.state.explicit_admin_audit = True
     await audit_service.record_action(
         session,
         identity=identity,
@@ -996,7 +1002,8 @@ async def cancel_booking(
 @router.post("/v1/admin/bookings/{booking_id}/reschedule", response_model=booking_schemas.BookingResponse)
 async def reschedule_booking(
     booking_id: str,
-    request: booking_schemas.BookingRescheduleRequest,
+    request: Request,
+    payload: booking_schemas.BookingRescheduleRequest,
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ):
@@ -1028,8 +1035,8 @@ async def reschedule_booking(
         booking = await booking_service.reschedule_booking(
             session,
             booking,
-            request.starts_at,
-            request.duration_minutes,
+            payload.starts_at,
+            payload.duration_minutes,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -1051,6 +1058,7 @@ async def reschedule_booking(
         cancellation_exception=booking.cancellation_exception,
         cancellation_exception_note=booking.cancellation_exception_note,
     )
+    request.state.explicit_admin_audit = True
     await audit_service.record_action(
         session,
         identity=identity,
@@ -1070,7 +1078,7 @@ async def reschedule_booking(
 )
 async def complete_booking(
     booking_id: str,
-    request: booking_schemas.BookingCompletionRequest,
+    payload: booking_schemas.BookingCompletionRequest,
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
@@ -1097,7 +1105,7 @@ async def complete_booking(
         ).model_dump(mode="json")
     try:
         booking = await booking_service.mark_booking_completed(
-            session, booking_id, request.actual_duration_minutes
+            session, booking_id, payload.actual_duration_minutes
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -1146,6 +1154,7 @@ async def complete_booking(
         cancellation_exception=booking.cancellation_exception,
         cancellation_exception_note=booking.cancellation_exception_note,
     )
+    http_request.state.explicit_admin_audit = True
     await audit_service.record_action(
         session,
         identity=identity,

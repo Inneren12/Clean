@@ -72,3 +72,26 @@ async def test_booking_confirm_audited_once(client, async_session_maker):
         log = logs[0]
         assert log.before is not None
         assert log.after is not None
+
+
+@pytest.mark.anyio
+async def test_explicit_audit_flag_is_request_scoped(client, async_session_maker):
+    settings.dispatcher_basic_username = "dispatch"
+    settings.dispatcher_basic_password = "secret"
+    headers = _basic_auth_header("dispatch", "secret")
+
+    booking_id = await _seed_booking(async_session_maker)
+
+    confirm_resp = client.post(f"/v1/admin/bookings/{booking_id}/confirm", headers=headers)
+    assert confirm_resp.status_code == 200
+
+    scan_resp = client.post("/v1/admin/email-scan", headers=headers)
+    assert scan_resp.status_code == 202
+
+    async with async_session_maker() as session:
+        result = await session.execute(sa.select(AdminAuditLog).order_by(AdminAuditLog.created_at))
+        logs = result.scalars().all()
+        actions = [log.action for log in logs]
+        assert "booking_confirm" in actions
+        assert "POST /v1/admin/email-scan" in actions
+        assert len(actions) == 2

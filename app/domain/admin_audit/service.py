@@ -2,8 +2,6 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.admin_auth import _explicit_admin_audit
-
 from app.api.admin_auth import AdminIdentity
 from app.domain.admin_audit.db_models import AdminAuditLog
 
@@ -28,5 +26,4 @@ async def record_action(
         after=after,
     )
     session.add(log)
-    _explicit_admin_audit.set(True)
     return log

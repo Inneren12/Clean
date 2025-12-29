@@ -4,7 +4,14 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.admin_auth import AdminIdentity, AdminPermission, AdminRole, _assert_permissions, require_admin, require_dispatch
+from app.api.admin_auth import (
+    AdminIdentity,
+    AdminPermission,
+    AdminRole,
+    ROLE_PERMISSIONS,
+    require_admin,
+    require_dispatch,
+)
 from app.domain.addons import schemas as addon_schemas
 from app.domain.addons import service as addon_service
 from app.dependencies import get_db_session
@@ -149,9 +156,9 @@ async def upload_order_photo(
     parsed_phase = booking_schemas.PhotoPhase.from_any_case(phase)
 
     if admin_override:
-        try:
-            _assert_permissions(identity, [AdminPermission.ADMIN])
-        except HTTPException:
+        has_admin_permission = AdminPermission.ADMIN in ROLE_PERMISSIONS.get(identity.role, set())
+        is_owner_or_admin = identity.role in {AdminRole.ADMIN, AdminRole.OWNER}
+        if not (has_admin_permission or is_owner_or_admin):
             logger.info(
                 "order_photo_denied",
                 extra={"extra": {"order_id": order_id, "reason": "admin_override_required"}},
