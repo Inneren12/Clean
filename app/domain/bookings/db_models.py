@@ -73,6 +73,10 @@ class Booking(Base):
         JSON, default=list, nullable=False, server_default="[]"
     )
     policy_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    cancellation_exception: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    cancellation_exception_note: Mapped[str | None] = mapped_column(String(255))
     stripe_checkout_session_id: Mapped[str | None] = mapped_column(String(255))
     stripe_payment_intent_id: Mapped[str | None] = mapped_column(String(255))
     consent_photos: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

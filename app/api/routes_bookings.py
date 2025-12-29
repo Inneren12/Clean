@@ -234,6 +234,8 @@ async def create_booking(
         risk_score=booking.risk_score,
         risk_band=booking.risk_band,
         risk_reasons=booking.risk_reasons,
+        cancellation_exception=booking.cancellation_exception,
+        cancellation_exception_note=booking.cancellation_exception_note,
     )
 
 

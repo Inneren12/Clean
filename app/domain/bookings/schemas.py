@@ -83,6 +83,8 @@ class BookingResponse(BaseModel):
     risk_score: int
     risk_band: str
     risk_reasons: list[str]
+    cancellation_exception: bool = False
+    cancellation_exception_note: str | None = None
 
 
 class BookingCompletionRequest(BaseModel):
