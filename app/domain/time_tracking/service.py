@@ -131,6 +131,10 @@ async def start_time_tracking(
     timestamp = now or _utcnow()
     entry = await _load_entry(session, booking_id)
     if entry:
+        if worker_id and not entry.worker_id:
+            entry.worker_id = worker_id
+            await session.commit()
+            await session.refresh(entry)
         if entry.state == RUNNING:
             logger.info(
                 "time_tracking_start_noop",
@@ -191,7 +195,7 @@ async def start_time_tracking(
 
 
 async def pause_time_tracking(
-    session: AsyncSession, booking_id: str, now: datetime | None = None
+    session: AsyncSession, booking_id: str, now: datetime | None = None, *, worker_id: str | None = None
 ) -> WorkTimeEntry | None:
     timestamp = now or _utcnow()
     entry = await _load_entry(session, booking_id)
@@ -203,6 +207,8 @@ async def pause_time_tracking(
     _close_active_segment(entry, timestamp)
     entry.paused_at = timestamp
     entry.state = PAUSED
+    if worker_id and not entry.worker_id:
+        entry.worker_id = worker_id
     booking = await session.get(Booking, booking_id)
     if booking:
         booking.actual_seconds = entry.total_seconds
@@ -224,7 +230,7 @@ async def pause_time_tracking(
 
 
 async def resume_time_tracking(
-    session: AsyncSession, booking_id: str, now: datetime | None = None
+    session: AsyncSession, booking_id: str, now: datetime | None = None, *, worker_id: str | None = None
 ) -> WorkTimeEntry | None:
     timestamp = now or _utcnow()
     entry = await _load_entry(session, booking_id)
@@ -238,6 +244,8 @@ async def resume_time_tracking(
     entry.segments = segments
     entry.state = RUNNING
     entry.paused_at = None
+    if worker_id and not entry.worker_id:
+        entry.worker_id = worker_id
     await session.commit()
     await session.refresh(entry)
     logger.info(
@@ -260,6 +268,7 @@ async def finish_time_tracking(
     *,
     reason_provided: bool = False,
     threshold: float | None = None,
+    worker_id: str | None = None,
 ) -> WorkTimeEntry | None:
     timestamp = now or _utcnow()
     entry = await _load_entry(session, booking_id)
@@ -285,6 +294,8 @@ async def finish_time_tracking(
     entry.finished_at = timestamp
     entry.state = FINISHED
     entry.paused_at = None
+    if worker_id and not entry.worker_id:
+        entry.worker_id = worker_id
 
     if booking:
         booking.actual_seconds = entry.total_seconds
