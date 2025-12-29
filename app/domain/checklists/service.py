@@ -213,6 +213,32 @@ async def _latest_active_template(
     return result.scalar_one_or_none()
 
 
+async def _single_active_template(session: AsyncSession) -> ChecklistTemplate | None:
+    stmt = (
+        select(ChecklistTemplate)
+        .options(selectinload(ChecklistTemplate.items))
+        .where(ChecklistTemplate.is_active.is_(True))
+        .order_by(ChecklistTemplate.created_at.desc(), ChecklistTemplate.template_id.desc())
+    )
+    result = await session.execute(stmt)
+    templates = result.scalars().unique().all()
+    if len(templates) == 1:
+        return templates[0]
+    return None
+
+
+async def _latest_any_active_template(session: AsyncSession) -> ChecklistTemplate | None:
+    stmt = (
+        select(ChecklistTemplate)
+        .options(selectinload(ChecklistTemplate.items))
+        .where(ChecklistTemplate.is_active.is_(True))
+        .order_by(ChecklistTemplate.created_at.desc(), ChecklistTemplate.template_id.desc())
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 async def resolve_template(
     session: AsyncSession, template_id: int | None, service_type: str | None
 ) -> ChecklistTemplate | None:
@@ -229,8 +255,13 @@ async def resolve_template(
     if template:
         return template
     if service_type is not None:
-        return await _latest_active_template(session, None)
-    return None
+        fallback = await _latest_active_template(session, None)
+        if fallback:
+            return fallback
+    single_active = await _single_active_template(session)
+    if single_active:
+        return single_active
+    return await _latest_any_active_template(session)
 
 
 async def find_run_by_order(session: AsyncSession, order_id: str) -> ChecklistRun | None:

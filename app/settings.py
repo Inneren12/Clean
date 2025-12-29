@@ -86,6 +86,7 @@ class Settings(BaseSettings):
         env="STRIPE_INVOICE_CANCEL_URL",
     )
     client_portal_secret: str = Field("dev-client-portal-secret", env="CLIENT_PORTAL_SECRET")
+    worker_portal_secret: str | None = Field(None, env="WORKER_PORTAL_SECRET")
     client_portal_token_ttl_minutes: int = Field(30, env="CLIENT_PORTAL_TOKEN_TTL_MINUTES")
     client_portal_base_url: str | None = Field(None, env="CLIENT_PORTAL_BASE_URL")
     deposit_percent: float = Field(0.25, env="DEPOSIT_PERCENT")

@@ -18,6 +18,22 @@ from app.domain.time_tracking.db_models import WorkTimeEntry
 from app.settings import settings
 
 
+@pytest.fixture(autouse=True)
+def _restore_worker_settings():
+    original = {
+        "worker_basic_username": settings.worker_basic_username,
+        "worker_basic_password": settings.worker_basic_password,
+        "worker_team_id": settings.worker_team_id,
+        "admin_basic_username": settings.admin_basic_username,
+        "admin_basic_password": settings.admin_basic_password,
+        "worker_portal_secret": settings.worker_portal_secret,
+    }
+    settings.worker_portal_secret = "test-worker-secret"
+    yield
+    for key, value in original.items():
+        setattr(settings, key, value)
+
+
 def test_routes_worker_import():
     import importlib
 

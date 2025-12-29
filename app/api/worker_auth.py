@@ -63,8 +63,18 @@ def _build_auth_exception(detail: str = "Invalid authentication") -> HTTPExcepti
     )
 
 
+def _worker_secret() -> str:
+    secret = settings.worker_portal_secret
+    if secret:
+        return secret
+    if settings.app_env == "dev":
+        logger.warning("worker_portal_secret_missing")
+        return "worker-secret"
+    raise RuntimeError("worker_portal_secret not configured; set WORKER_PORTAL_SECRET")
+
+
 def _session_token(username: str, role: str, team_id: int) -> str:
-    secret = settings.client_portal_secret or "worker-secret"
+    secret = _worker_secret()
     msg = f"{username}:{role}:{team_id}".encode()
     signature = hmac.new(secret.encode(), msg=msg, digestmod=hashlib.sha256).hexdigest()
     return base64.b64encode(f"{username}:{role}:{team_id}:{signature}".encode()).decode()
@@ -80,6 +90,8 @@ def _parse_session_token(token: str | None) -> WorkerIdentity:
         if not secrets.compare_digest(token, expected):
             raise ValueError("Invalid token signature")
         return WorkerIdentity(username=username, role=role, team_id=int(team_id_raw))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise _build_auth_exception("Invalid session") from exc
 
