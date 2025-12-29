@@ -116,6 +116,64 @@ async def test_manual_payments_update_status(async_session_maker):
         assert payment_count == 2
 
 
+@pytest.mark.anyio
+async def test_invoice_creation_populates_base_charge_cents(async_session_maker):
+    """Test that creating an invoice sets base_charge_cents on the booking"""
+    async with async_session_maker() as session:
+        # Create a booking with base_charge_cents=0
+        booking = Booking(
+            team_id=1,
+            starts_at=datetime.now(tz=timezone.utc),
+            duration_minutes=120,
+            status="CONFIRMED",
+            base_charge_cents=0,  # Initially 0
+        )
+        session.add(booking)
+        await session.flush()
+
+        # Create invoice from booking
+        items = [
+            InvoiceItemCreate(
+                description="Cleaning Service",
+                qty=1,
+                unit_price_cents=18000,
+                tax_rate=0.13,
+            )
+        ]
+        invoice = await invoice_service.create_invoice_from_order(
+            session=session,
+            order=booking,
+            items=items,
+            issue_date=date.today(),
+        )
+        await session.flush()
+        await session.refresh(booking)
+
+        # Verify base_charge_cents is now set to invoice subtotal
+        assert booking.base_charge_cents == 18000
+        assert invoice.subtotal_cents == 18000
+
+        # Verify that creating a second invoice doesn't overwrite base_charge_cents
+        items2 = [
+            InvoiceItemCreate(
+                description="Additional Service",
+                qty=1,
+                unit_price_cents=5000,
+            )
+        ]
+        invoice2 = await invoice_service.create_invoice_from_order(
+            session=session,
+            order=booking,
+            items=items2,
+            issue_date=date.today(),
+        )
+        await session.flush()
+        await session.refresh(booking)
+
+        # base_charge_cents should remain the same (from first invoice)
+        assert booking.base_charge_cents == 18000
+
+
 def test_admin_invoice_flow(client, async_session_maker):
     settings.admin_basic_username = "admin"
     settings.admin_basic_password = "secret"

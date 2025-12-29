@@ -125,6 +125,11 @@ async def create_invoice_from_order(
     )
     invoice.items = invoice_items
     session.add(invoice)
+
+    # Set base_charge_cents on first invoice creation (if not already set by refunds)
+    if order.base_charge_cents == 0 and order.refund_total_cents == 0:
+        order.base_charge_cents = subtotal
+
     await session.flush()
     return invoice
 
