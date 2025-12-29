@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import Select, and_, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,7 @@ from app.domain.addons import schemas
 from app.domain.addons.db_models import AddonDefinition, OrderAddon
 from app.domain.bookings.db_models import Booking
 from app.domain.invoices.schemas import InvoiceItemCreate
+from app.domain.leads.db_models import Lead
 
 logger = logging.getLogger(__name__)
 
@@ -135,10 +137,36 @@ async def list_order_addons(session: AsyncSession, order_id: str) -> list[OrderA
     return result.scalars().all()
 
 
+def _infer_tax_rate(lead: Lead | None) -> Decimal | None:
+    snapshot = getattr(lead, "estimate_snapshot", None) or {}
+    for key in ("tax_rate", "gst_rate"):
+        if key in snapshot:
+            try:
+                return Decimal(str(snapshot[key]))
+            except (InvalidOperation, TypeError, ValueError):
+                continue
+
+    subtotal = snapshot.get("subtotal_cents") or snapshot.get("price_cents")
+    tax_cents = snapshot.get("tax_cents")
+    if subtotal and tax_cents:
+        try:
+            subtotal_decimal = Decimal(str(subtotal))
+            if subtotal_decimal > 0:
+                return Decimal(str(tax_cents)) / subtotal_decimal
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+    return None
+
+
 async def addon_invoice_items_for_order(
     session: AsyncSession, order_id: str
 ) -> list[InvoiceItemCreate]:
     addons = await list_order_addons(session, order_id)
+    booking_result = await session.execute(
+        select(Booking).options(selectinload(Booking.lead)).where(Booking.booking_id == order_id)
+    )
+    booking = booking_result.scalar_one_or_none()
+    tax_rate = _infer_tax_rate(getattr(booking, "lead", None)) if booking else None
     items: list[InvoiceItemCreate] = []
     for addon in addons:
         name = addon.definition.name if addon.definition else f"Addon {addon.addon_id}"
@@ -147,6 +175,7 @@ async def addon_invoice_items_for_order(
                 description=name,
                 qty=addon.qty,
                 unit_price_cents=addon.unit_price_cents_snapshot,
+                tax_rate=tax_rate,
             )
         )
     return items

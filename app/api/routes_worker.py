@@ -20,10 +20,11 @@ from app.api.worker_auth import (
     require_worker,
 )
 from app.dependencies import get_db_session
+from app.domain.addons import schemas as addon_schemas
 from app.domain.addons import service as addon_service
 from app.domain.analytics import service as analytics_service
 from app.domain.bookings import photos_service
-from app.domain.bookings.db_models import Booking
+from app.domain.bookings.db_models import Booking, EmailEvent
 from app.domain.bookings import schemas as booking_schemas
 from app.domain.addons.db_models import OrderAddon
 from app.domain.admin_audit import service as audit_service
@@ -32,8 +33,12 @@ from app.domain.checklists import service as checklist_service
 from app.domain.disputes import schemas as dispute_schemas
 from app.domain.disputes import service as dispute_service
 from app.domain.disputes.db_models import Dispute
-from app.domain.invoices.db_models import Invoice
+from app.domain.invoices import service as invoice_service, statuses as invoice_statuses
+from app.domain.invoices.db_models import Invoice, InvoiceItem
 from app.domain.leads.db_models import Lead
+from app.domain.nps import service as nps_service
+from app.domain.nps.db_models import NpsResponse, SupportTicket
+from app.domain.notifications import email_service
 from app.domain.reason_logs import schemas as reason_schemas
 from app.domain.reason_logs import service as reason_service
 from app.domain.time_tracking import schemas as time_schemas
@@ -60,6 +65,12 @@ def _format_dt(value: datetime | None) -> str:
 
 def _status_badge(status: str) -> str:
     return f'<span class="badge badge-active">{html.escape(status)}</span>'
+
+
+def _currency(cents: int | None) -> str:
+    if cents is None:
+        return "-"
+    return f"${cents / 100:,.2f}"
 
 
 def _risk_badge(booking: Booking) -> str:
@@ -291,6 +302,20 @@ def _cancellation_summary(booking: Booking) -> str:
     return "; ".join(parts)
 
 
+async def _nps_state(session: AsyncSession, booking: Booking) -> tuple[bool, NpsResponse | None, SupportTicket | None]:
+    survey_sent = await session.scalar(
+        select(EmailEvent.event_id)
+        .where(
+            EmailEvent.booking_id == booking.booking_id,
+            EmailEvent.email_type == email_service.EMAIL_TYPE_NPS_SURVEY,
+        )
+        .limit(1)
+    )
+    response = await nps_service.get_existing_response(session, booking.booking_id)
+    ticket = await nps_service.get_existing_ticket(session, booking.booking_id)
+    return bool(survey_sent), response, ticket
+
+
 def _reason_options(codes: set[reason_schemas.ReasonCode]) -> str:
     options = ['<option value="">No reason</option>']
     for code in sorted(codes, key=lambda c: c.value):
@@ -299,11 +324,61 @@ def _reason_options(codes: set[reason_schemas.ReasonCode]) -> str:
     return "".join(options)
 
 
+async def _sync_invoice_addons(
+    session: AsyncSession, booking: Booking, invoice: Invoice, worker_id: str
+) -> None:
+    await session.refresh(invoice, attribute_names=["items"])
+    addon_items = await addon_service.addon_invoice_items_for_order(session, booking.booking_id)
+    reasons = await reason_service.list_reasons_for_order(session, booking.booking_id)
+    tracked_ids = {
+        reason.invoice_item_id
+        for reason in reasons
+        if reason.invoice_item_id
+        and reason.code == reason_schemas.ReasonCode.ADDON_ADDED.value
+        and any(item.item_id == reason.invoice_item_id for item in invoice.items)
+    }
+
+    if tracked_ids:
+        invoice.items = [item for item in invoice.items if item.item_id not in tracked_ids]
+        for reason in reasons:
+            if reason.code == reason_schemas.ReasonCode.ADDON_ADDED.value and reason.invoice_item_id in tracked_ids:
+                session.delete(reason)
+        await session.flush()
+
+    for payload in addon_items:
+        line_total = payload.qty * payload.unit_price_cents
+        item = InvoiceItem(
+            invoice_id=invoice.invoice_id,
+            description=payload.description,
+            qty=payload.qty,
+            unit_price_cents=payload.unit_price_cents,
+            line_total_cents=line_total,
+            tax_rate=payload.tax_rate,
+        )
+        invoice.items.append(item)
+        await session.flush()
+        await reason_service.create_reason(
+            session,
+            booking.booking_id,
+            kind=reason_schemas.ReasonKind.PRICE_ADJUST,
+            code=reason_schemas.ReasonCode.ADDON_ADDED,
+            note=f"Worker added {payload.description}",
+            created_by=worker_id,
+            invoice_item_id=item.item_id,
+        )
+
+    invoice_service.recalculate_totals(invoice)
+
+
 def _render_job_detail(
     booking: Booking,
     invoice: Invoice | None,
     summary: time_schemas.TimeTrackingResponse,
     reasons: list,
+    addon_definitions: list[addon_schemas.AddonDefinitionResponse] | list,
+    nps_sent: bool,
+    nps_response: NpsResponse | None,
+    support_ticket: SupportTicket | None,
     *,
     message: str | None = None,
     error: bool = False,
@@ -321,12 +396,51 @@ def _render_job_detail(
         f"<li>{html.escape(getattr(addon.definition, 'name', f'Addon {addon.addon_id}'))} × {addon.qty}</li>"
         for addon in addons
     ) or "<li>No add-ons planned.</li>"
+    addon_options = "".join(
+        f"<option value='{definition.addon_id}'>{html.escape(getattr(definition, 'name', 'Addon'))} — {_currency(getattr(definition, 'price_cents', 0))}</option>"
+        for definition in addon_definitions
+        if getattr(definition, "is_active", True)
+    )
+    addon_form = "<p class=\"muted\">No add-ons available.</p>"
+    if addon_options:
+        addon_form = f"""
+        <form method=\"post\" action=\"/worker/jobs/{booking.booking_id}/addons\" class=\"stack-tight\" style=\"margin-top:8px;\">
+          <label class=\"muted\">Add add-on</label>
+          <select name=\"addon_id\" required>{addon_options}</select>
+          <label class=\"muted\">Quantity</label>
+          <input type=\"number\" name=\"qty\" value=\"1\" min=\"1\" step=\"1\" />
+          <button class=\"button primary\" type=\"submit\">Add add-on</button>
+        </form>
+        """
     evidence_note = booking.risk_reasons or []
     if booking.deposit_required:
         evidence_note.append("Deposit confirmation may be required.")
     invoice_block = "<p class=\"muted\">Invoice not issued.</p>"
     if invoice:
-        invoice_block = f"Invoice {html.escape(invoice.invoice_number)} — {html.escape(invoice.status)}"
+        invoice_block = (
+            f"Invoice {html.escape(invoice.invoice_number)} — {html.escape(invoice.status.title())}"
+            f" · Subtotal {_currency(invoice.subtotal_cents)} · Tax {_currency(invoice.tax_cents)} · Total {_currency(invoice.total_cents)}"
+        )
+
+    nps_badges = ["<span class=\"badge\">Survey not sent</span>"]
+    if nps_sent:
+        nps_badges = ["<span class=\"badge\">Survey sent</span>"]
+    nps_comment = "<p class=\"muted\">No response yet.</p>"
+    if nps_response:
+        nps_badges.append(f"<span class=\"badge badge-active\">Score {nps_response.score}</span>")
+        if nps_response.comment:
+            nps_comment = f"<p class=\"muted\">Comment: {html.escape(nps_response.comment)}</p>"
+        else:
+            nps_comment = "<p class=\"muted\">No comment left.</p>"
+
+    ticket_badge = ""
+    ticket_summary = ""
+    if support_ticket and (not nps_response or nps_response.score <= 3):
+        ticket_badge = "<span class=\"chip danger\">Issue opened</span>"
+        ticket_summary = (
+            f"<p class=\"muted\">Ticket {html.escape(support_ticket.status.title())} — "
+            f"{html.escape(support_ticket.subject)}</p>"
+        )
 
     planned_minutes = summary.planned_minutes or booking.duration_minutes or 0
     actual_minutes = ceil(summary.effective_seconds / 60) if summary.effective_seconds else 0
@@ -410,6 +524,14 @@ def _render_job_detail(
       {reasons_block}
     </div>
     <div class="card">
+      <h3>Policies & risk</h3>
+      <div class="stack-tight">
+        {_risk_badge(booking) or '<span class="muted">Low risk</span>'}
+        <div class="pill">Deposit: {'Yes' if booking.deposit_required else 'No'} {_deposit_badge(booking, invoice)}</div>
+        <div class="pill">Cancellation: {_cancellation_summary(booking)}</div>
+      </div>
+    </div>
+    <div class="card">
       <h3>Scope & notes</h3>
       <table>{scope_html}</table>
       <p class="muted">Customer notes: {html.escape(lead_notes)}</p>
@@ -417,6 +539,17 @@ def _render_job_detail(
     <div class="card">
       <h3>Add-ons planned</h3>
       <ul>{addon_rows}</ul>
+      {addon_form}
+    </div>
+    <div class="card">
+      <h3>Customer experience</h3>
+      <div class="stack-tight">
+        <div class="actions">{''.join(nps_badges)}</div>
+        {nps_comment}
+        <p class="muted">Refunds or credits must be requested via support; workers cannot issue them directly.</p>
+        {ticket_badge}
+        {ticket_summary}
+      </div>
     </div>
     <div class="card">
       <h3>Evidence required</h3>
@@ -436,6 +569,7 @@ async def _render_job_page(
 ) -> HTMLResponse:
     await addon_service.list_order_addons(session, booking.booking_id)
     await session.refresh(booking, attribute_names=["lead", "order_addons"])
+    addon_catalog = await addon_service.list_definitions(session, include_inactive=False)
     invoice_map = await _latest_invoices(session, [booking.booking_id])
     invoice = invoice_map.get(booking.booking_id)
     summary_raw = await time_service.fetch_time_tracking_summary(session, booking.booking_id)
@@ -443,6 +577,7 @@ async def _render_job_page(
         summary_raw = time_service.summarize_order_time(booking, None)
     summary = time_schemas.TimeTrackingResponse(**summary_raw)
     reasons = await reason_service.list_reasons_for_order(session, booking.booking_id)
+    nps_sent, nps_response, support_ticket = await _nps_state(session, booking)
     if log_view:
         await _audit(
             session,
@@ -456,6 +591,10 @@ async def _render_job_page(
         invoice,
         summary,
         reasons,
+        addon_catalog,
+        nps_sent,
+        nps_response,
+        support_ticket,
         message=message,
         error=error,
     )
@@ -545,6 +684,77 @@ async def worker_job_detail(
 ) -> HTMLResponse:
     booking = await _load_worker_booking(session, job_id, identity)
     return await _render_job_page(session, booking, identity)
+
+
+@router.post("/worker/jobs/{job_id}/addons", response_class=HTMLResponse)
+async def worker_update_addons(
+    job_id: str,
+    addon_id: int = Form(...),
+    qty: int = Form(1),
+    identity: WorkerIdentity = Depends(require_worker),
+    session: AsyncSession = Depends(get_db_session),
+) -> HTMLResponse:
+    booking = await _load_worker_booking(session, job_id, identity)
+    await addon_service.list_order_addons(session, booking.booking_id)
+    await session.refresh(booking, attribute_names=["lead", "order_addons"])
+
+    try:
+        parsed_qty = int(qty)
+    except (TypeError, ValueError):
+        parsed_qty = 0
+    if parsed_qty <= 0:
+        return await _render_job_page(
+            session, booking, identity, message="Quantity must be positive", error=True, log_view=False
+        )
+
+    definitions = await addon_service.list_definitions(session, include_inactive=False)
+    catalog = {definition.addon_id: definition for definition in definitions}
+    if addon_id not in catalog:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Addon not found")
+
+    before_snapshot = [
+        {"addon_id": addon.addon_id, "qty": addon.qty} for addon in getattr(booking, "order_addons", [])
+    ]
+    existing = await addon_service.list_order_addons(session, booking.booking_id)
+    updated: list[addon_schemas.OrderAddonSelection] = []
+    found = False
+    for addon in existing:
+        selection_qty = parsed_qty if addon.addon_id == addon_id else addon.qty
+        updated.append(addon_schemas.OrderAddonSelection(addon_id=addon.addon_id, qty=selection_qty))
+        if addon.addon_id == addon_id:
+            found = True
+    if not found:
+        updated.append(addon_schemas.OrderAddonSelection(addon_id=addon_id, qty=parsed_qty))
+
+    try:
+        await addon_service.set_order_addons(session, booking.booking_id, updated)
+    except ValueError as exc:
+        return await _render_job_page(session, booking, identity, message=str(exc), error=True, log_view=False)
+
+    invoice_map = await _latest_invoices(session, [booking.booking_id])
+    invoice = invoice_map.get(booking.booking_id)
+    invoice_message = "Add-ons saved for invoice creation."
+    if invoice and invoice.status == invoice_statuses.INVOICE_STATUS_DRAFT:
+        await _sync_invoice_addons(session, booking, invoice, identity.username)
+        invoice_message = "Invoice draft updated with add-ons."
+    elif invoice:
+        invoice_message = "Add-ons saved. Invoice already issued; admin review required."
+
+    await _audit(
+        session,
+        identity,
+        action="WORKER_ADDON_UPDATE",
+        resource_type="booking",
+        resource_id=booking.booking_id,
+        before={"addons": before_snapshot},
+        after={
+            "addons": [selection.model_dump() for selection in updated],
+            "invoice_id": getattr(invoice, "invoice_id", None),
+        },
+    )
+    await session.commit()
+
+    return await _render_job_page(session, booking, identity, message=invoice_message, log_view=False)
 
 
 @router.post("/worker/jobs/{job_id}/start", response_class=HTMLResponse)
@@ -692,12 +902,18 @@ async def worker_finish_job(
                 price_code = reason_schemas.ReasonCode(price_adjust_reason)
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid price adjust reason") from exc
+            price_note = (price_adjust_note or "").strip()
+            if not price_note:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Pricing adjustment note is required",
+                )
             await reason_service.create_reason(
                 session,
                 booking.booking_id,
                 kind=reason_schemas.ReasonKind.PRICE_ADJUST,
                 code=price_code,
-                note=(price_adjust_note or "").strip() or None,
+                note=price_note,
                 created_by=identity.username,
                 time_entry_id=getattr(entry, "entry_id", None),
             )
