@@ -17,6 +17,10 @@ class EventType(StrEnum):
     booking_created = "booking_created"
     booking_confirmed = "booking_confirmed"
     job_completed = "job_completed"
+    job_time_started = "job_time_started"
+    job_time_paused = "job_time_paused"
+    job_time_resumed = "job_time_resumed"
+    job_time_finished = "job_time_finished"
 
 
 def _normalize_dt(value: datetime | None, default: datetime | None = None) -> datetime:

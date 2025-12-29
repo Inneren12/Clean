@@ -6,9 +6,19 @@ import pytest
 import sqlalchemy as sa
 
 from app.domain.admin_audit.db_models import AdminAuditLog
+from app.domain.analytics.db_models import EventLog
 from app.domain.bookings.db_models import Booking
 from app.domain.leads.db_models import Lead
+from app.domain.reason_logs.db_models import ReasonLog
+from app.domain.time_tracking.db_models import WorkTimeEntry
 from app.settings import settings
+
+
+def test_routes_worker_import():
+    import importlib
+
+    importlib.invalidate_caches()
+    importlib.import_module("app.api.routes_worker")
 
 
 def _basic_auth(username: str, password: str) -> dict[str, str]:
@@ -102,4 +112,80 @@ async def test_admin_cannot_access_worker_portal_without_worker_login(client_no_
 
     resp = client_no_raise.get("/worker")
     assert resp.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_worker_tracks_time_with_reasons(client, async_session_maker):
+    settings.worker_basic_username = "worker"
+    settings.worker_basic_password = "secret"
+    settings.worker_team_id = 1
+    booking_id = await _seed_booking(async_session_maker, team_id=1)
+
+    client.post("/worker/login", headers=_basic_auth("worker", "secret"))
+
+    start = client.post(f"/worker/jobs/{booking_id}/start")
+    assert start.status_code == 200
+
+    pause = client.post(f"/worker/jobs/{booking_id}/pause")
+    assert pause.status_code == 200
+
+    resume = client.post(f"/worker/jobs/{booking_id}/resume")
+    assert resume.status_code == 200
+
+    finish = client.post(
+        f"/worker/jobs/{booking_id}/finish",
+        data={
+            "delay_reason": "ACCESS_DELAY",
+            "delay_note": "Gate code issue",
+            "price_adjust_reason": "EXTRA_SERVICE",
+            "price_adjust_note": "Added fridge cleaning",
+        },
+    )
+    assert finish.status_code == 200
+
+    async with async_session_maker() as session:
+        entry = (
+            await session.execute(sa.select(WorkTimeEntry).where(WorkTimeEntry.booking_id == booking_id))
+        ).scalar_one()
+        booking = await session.get(Booking, booking_id)
+        reasons = (
+            await session.execute(sa.select(ReasonLog).where(ReasonLog.order_id == booking_id))
+        ).scalars().all()
+        audits = (
+            await session.execute(sa.select(AdminAuditLog).where(AdminAuditLog.resource_id == booking_id))
+        ).scalars().all()
+        events = (
+            await session.execute(sa.select(EventLog).where(EventLog.booking_id == booking_id))
+        ).scalars().all()
+
+        assert entry.state == "FINISHED"
+        assert entry.worker_id == "worker"
+        assert booking.actual_seconds is not None
+        assert {reason.kind for reason in reasons} == {"TIME_OVERRUN", "PRICE_ADJUST"}
+        assert any(log.action == "WORKER_TIME_UPDATE" for log in audits)
+        assert any(event.event_type == "job_time_finished" for event in events)
+
+
+@pytest.mark.anyio
+async def test_worker_cannot_finish_without_start(client, async_session_maker):
+    settings.worker_basic_username = "worker"
+    settings.worker_basic_password = "secret"
+    settings.worker_team_id = 1
+    booking_id = await _seed_booking(async_session_maker, team_id=1)
+
+    client.post("/worker/login", headers=_basic_auth("worker", "secret"))
+    finish = client.post(f"/worker/jobs/{booking_id}/finish")
+    assert finish.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_worker_cannot_mutate_other_team_job(client, async_session_maker):
+    settings.worker_basic_username = "worker"
+    settings.worker_basic_password = "secret"
+    settings.worker_team_id = 1
+    other_booking = await _seed_booking(async_session_maker, team_id=2)
+
+    client.post("/worker/login", headers=_basic_auth("worker", "secret"))
+    resp = client.post(f"/worker/jobs/{other_booking}/start")
+    assert resp.status_code == 404
 
