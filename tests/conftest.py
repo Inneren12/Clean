@@ -61,11 +61,27 @@ def restore_admin_settings():
     original_password = settings.admin_basic_password
     original_dispatcher_username = settings.dispatcher_basic_username
     original_dispatcher_password = settings.dispatcher_basic_password
+    original_testing = getattr(settings, "testing", False)
+    original_deposits = getattr(settings, "deposits_enabled", True)
+    original_metrics = getattr(settings, "metrics_enabled", True)
     yield
     settings.admin_basic_username = original_username
     settings.admin_basic_password = original_password
     settings.dispatcher_basic_username = original_dispatcher_username
     settings.dispatcher_basic_password = original_dispatcher_password
+    settings.testing = original_testing
+    settings.deposits_enabled = original_deposits
+    settings.metrics_enabled = original_metrics
+
+
+@pytest.fixture(autouse=True)
+def enable_test_mode():
+    settings.testing = True
+    settings.deposits_enabled = False
+    from app.infra.email import resolve_email_adapter
+
+    app.state.email_adapter = resolve_email_adapter(settings)
+    yield
 
 
 @pytest.fixture(autouse=True)

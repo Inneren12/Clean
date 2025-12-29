@@ -63,13 +63,37 @@ async def create_booking(
         lead=lead,
         starts_at=start,
         deposit_percent=settings.deposit_percent,
+        deposits_enabled=settings.deposits_enabled,
+        service_type=request.service_type.value if request.service_type else None,
     )
 
     if deposit_decision.required and deposit_decision.deposit_cents is None:
+        logger.warning(
+            "booking_dependency_unavailable",
+            extra={
+                "extra": {
+                    "dependency": "deposit_estimator",
+                    "path": http_request.url.path,
+                    "method": http_request.method,
+                    "deposits_enabled": settings.deposits_enabled,
+                }
+            },
+        )
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Deposit estimate unavailable")
 
     if deposit_decision.required:
         if not settings.stripe_secret_key:
+            logger.warning(
+                "booking_dependency_unavailable",
+                extra={
+                    "extra": {
+                        "dependency": "stripe_checkout",
+                        "path": http_request.url.path,
+                        "method": http_request.method,
+                        "deposits_enabled": settings.deposits_enabled,
+                    }
+                },
+            )
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Deposits unavailable")
 
     checkout_url: str | None = None
@@ -92,6 +116,7 @@ async def create_booking(
                 lead_id=request.lead_id,
                 session=session,
                 deposit_decision=deposit_decision,
+                policy_snapshot=deposit_decision.policy_snapshot,
                 manage_transaction=False,
                 client_id=client_id,
             )
@@ -192,6 +217,7 @@ async def create_booking(
         deposit_policy=booking.deposit_policy,
         deposit_status=booking.deposit_status,
         checkout_url=checkout_url,
+        policy_snapshot=booking.policy_snapshot,
     )
 
 
@@ -209,6 +235,16 @@ async def stripe_webhook(http_request: Request, session: AsyncSession = Depends(
     payload = await http_request.body()
     sig_header = http_request.headers.get("Stripe-Signature")
     if not settings.stripe_webhook_secret:
+        logger.warning(
+            "booking_dependency_unavailable",
+            extra={
+                "extra": {
+                    "dependency": "stripe_webhook",
+                    "path": http_request.url.path,
+                    "method": http_request.method,
+                }
+            },
+        )
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Stripe webhook disabled")
 
     stripe_client = stripe_infra.resolve_client(http_request.app.state)

@@ -15,6 +15,12 @@ from app.domain.analytics.service import (
     log_event,
 )
 from app.domain.bookings.db_models import Booking, Team
+from app.domain.bookings.policy import (
+    BookingPolicySnapshot,
+    CancellationPolicySnapshot,
+    CancellationWindow,
+    DepositSnapshot,
+)
 from app.domain.notifications import email_service
 from app.domain.pricing.models import CleaningType
 from app.domain.leads.db_models import Lead
@@ -51,6 +57,8 @@ class DepositDecision:
     required: bool
     reasons: list[str]
     deposit_cents: int | None = None
+    policy_snapshot: BookingPolicySnapshot | None = None
+    cancellation_policy: CancellationPolicySnapshot | None = None
 
 
 @dataclass
@@ -100,6 +108,17 @@ DEFAULT_DURATION_RULE = DurationRule(
     max_minutes=(WORK_END_HOUR - WORK_START_HOUR) * 60,
 )
 
+HEAVY_SERVICES = {
+    CleaningType.deep.value,
+    CleaningType.move_out_empty.value,
+    CleaningType.move_in_empty.value,
+}
+LATE_NOTICE_HOURS = 48
+SHORT_NOTICE_HOURS = 24
+HIGH_VALUE_THRESHOLD_CENTS = 30000
+MIN_DEPOSIT_CENTS = 5000
+MAX_DEPOSIT_CENTS = 20000
+
 
 def apply_duration_constraints(duration_minutes: int, service_type: str | CleaningType | None = None) -> int:
     key = None
@@ -118,6 +137,128 @@ def _normalize_datetime(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _lead_time_hours(starts_at: datetime) -> float:
+    now = datetime.now(timezone.utc)
+    delta = starts_at - now
+    return max(0.0, round(delta.total_seconds() / 3600, 2))
+
+
+def _resolve_service_type(service_type: str | CleaningType | None, lead: Lead | None) -> str | None:
+    if isinstance(service_type, CleaningType):
+        return service_type.value
+    if isinstance(service_type, str):
+        return service_type
+    if lead:
+        return (lead.structured_inputs or {}).get("cleaning_type")
+    return None
+
+
+def _estimate_total_cents(lead: Lead | None, estimated_total: float | int | None) -> int | None:
+    total = estimated_total
+    if total is None and lead:
+        total = (lead.estimate_snapshot or {}).get("total_before_tax")
+    if total is None:
+        return None
+    try:
+        return math.ceil(float(total) * 100)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _build_cancellation_policy(
+    service_type: str | None,
+    lead_time_hours: float,
+    total_cents: int | None,
+    first_time: bool,
+) -> CancellationPolicySnapshot:
+    heavy_service = service_type in HEAVY_SERVICES
+    free_cutoff = 72 if heavy_service else 48
+    partial_start = 48 if heavy_service else 24
+    partial_refund = 50
+    rules: list[str] = []
+
+    if heavy_service:
+        rules.append("heavy_service")
+    if first_time:
+        rules.append("first_time_client")
+        partial_refund = min(partial_refund, 40)
+    if total_cents is not None and total_cents >= HIGH_VALUE_THRESHOLD_CENTS:
+        rules.append("high_value_booking")
+        partial_refund = min(partial_refund, 25)
+    if lead_time_hours < LATE_NOTICE_HOURS:
+        rules.append("late_booking")
+    if lead_time_hours < SHORT_NOTICE_HOURS:
+        rules.append("short_notice")
+        partial_refund = min(partial_refund, 25)
+
+    partial_start = min(partial_start, free_cutoff)
+
+    windows = [
+        CancellationWindow(
+            label="free",
+            start_hours_before=float(free_cutoff),
+            end_hours_before=None,
+            refund_percent=100,
+        ),
+        CancellationWindow(
+            label="partial",
+            start_hours_before=float(partial_start),
+            end_hours_before=float(free_cutoff),
+            refund_percent=int(partial_refund),
+        ),
+        CancellationWindow(
+            label="late",
+            start_hours_before=0.0,
+            end_hours_before=float(partial_start),
+            refund_percent=0,
+        ),
+    ]
+
+    return CancellationPolicySnapshot(rules=rules, windows=windows)
+
+
+def _build_deposit_snapshot(
+    reasons: list[str],
+    deposit_percent: float,
+    service_type: str | None,
+    total_cents: int | None,
+    lead_time_hours: float,
+) -> DepositSnapshot:
+    required = bool(reasons)
+    percent = deposit_percent
+    heavy_service = service_type in HEAVY_SERVICES
+
+    if heavy_service:
+        percent = max(percent, 0.35)
+    if lead_time_hours < SHORT_NOTICE_HOURS:
+        percent = max(percent, 0.5)
+    elif lead_time_hours < LATE_NOTICE_HOURS:
+        percent = max(percent, 0.4)
+    if total_cents is not None and total_cents >= HIGH_VALUE_THRESHOLD_CENTS:
+        percent = max(percent, 0.3)
+
+    basis = "none"
+    amount_cents: int | None = None
+    if required:
+        basis = "percent_clamped"
+        estimated = total_cents if total_cents is not None else MIN_DEPOSIT_CENTS
+        amount_cents = math.ceil(estimated * percent)
+        amount_cents = max(MIN_DEPOSIT_CENTS, amount_cents)
+        amount_cents = min(MAX_DEPOSIT_CENTS, amount_cents)
+        if total_cents is None:
+            basis = "fixed_minimum"
+
+    return DepositSnapshot(
+        required=required,
+        amount_cents=amount_cents,
+        percent_applied=percent if required else None,
+        min_cents=MIN_DEPOSIT_CENTS,
+        max_cents=MAX_DEPOSIT_CENTS,
+        reasons=reasons,
+        basis=basis,
+    )
 
 
 def assert_valid_booking_transition(current: str, target: str) -> None:
@@ -157,31 +298,85 @@ async def _has_existing_history(session: AsyncSession, lead_id: str) -> bool:
 
 
 async def evaluate_deposit_policy(
-    session: AsyncSession, lead: Lead | None, starts_at: datetime, deposit_percent: float
+    session: AsyncSession,
+    lead: Lead | None,
+    starts_at: datetime,
+    deposit_percent: float,
+    deposits_enabled: bool = True,
+    service_type: str | CleaningType | None = None,
+    estimated_total: float | int | None = None,
 ) -> DepositDecision:
+    lead_time_hours = _lead_time_hours(_normalize_datetime(starts_at))
+    if not deposits_enabled:
+        cancellation_policy = _build_cancellation_policy(
+            service_type=None,
+            lead_time_hours=lead_time_hours,
+            total_cents=None,
+            first_time=False,
+        )
+        policy_snapshot = BookingPolicySnapshot(
+            lead_time_hours=lead_time_hours,
+            service_type=None,
+            total_amount_cents=None,
+            first_time_client=False,
+            deposit=DepositSnapshot(required=False, basis="disabled", min_cents=MIN_DEPOSIT_CENTS, max_cents=MAX_DEPOSIT_CENTS),
+            cancellation=cancellation_policy,
+        )
+        return DepositDecision(
+            required=False,
+            reasons=[],
+            deposit_cents=None,
+            policy_snapshot=policy_snapshot,
+            cancellation_policy=cancellation_policy,
+        )
+
     normalized = _normalize_datetime(starts_at)
+    service_value = _resolve_service_type(service_type, lead)
+    total_cents = _estimate_total_cents(lead, estimated_total)
+    first_time = bool(lead) and not await _has_existing_history(session, lead.lead_id)
+
     reasons: list[str] = []
+    if first_time:
+        reasons.append("first_time_client")
+    if service_value in HEAVY_SERVICES:
+        reasons.append(f"service_type_{service_value}")
+    if lead_time_hours < SHORT_NOTICE_HOURS:
+        reasons.append("short_notice")
+    elif lead_time_hours < LATE_NOTICE_HOURS:
+        reasons.append("late_booking")
+    if total_cents is not None and total_cents >= HIGH_VALUE_THRESHOLD_CENTS:
+        reasons.append("high_value_booking")
 
-    if normalized.astimezone(LOCAL_TZ).weekday() >= 5:
-        reasons.append("weekend")
+    deposit_snapshot = _build_deposit_snapshot(
+        reasons=reasons,
+        deposit_percent=deposit_percent,
+        service_type=service_value,
+        total_cents=total_cents,
+        lead_time_hours=lead_time_hours,
+    )
+    cancellation_policy = _build_cancellation_policy(
+        service_type=service_value,
+        lead_time_hours=lead_time_hours,
+        total_cents=total_cents,
+        first_time=first_time,
+    )
 
-    estimated_total = None
-    if lead:
-        cleaning_type = (lead.structured_inputs or {}).get("cleaning_type")
-        if cleaning_type in {CleaningType.deep.value, CleaningType.move_out_empty.value}:
-            reasons.append("heavy_cleaning")
+    policy_snapshot = BookingPolicySnapshot(
+        lead_time_hours=lead_time_hours,
+        service_type=service_value,
+        total_amount_cents=total_cents,
+        first_time_client=first_time,
+        deposit=deposit_snapshot,
+        cancellation=cancellation_policy,
+    )
 
-        if not await _has_existing_history(session, lead.lead_id):
-            reasons.append("new_client")
-
-        estimated_total = (lead.estimate_snapshot or {}).get("total_before_tax")
-
-    required = bool(reasons)
-    deposit_cents = None
-    if required and estimated_total is not None:
-        deposit_cents = max(0, math.ceil(float(estimated_total) * deposit_percent * 100))
-
-    return DepositDecision(required=required, reasons=reasons, deposit_cents=deposit_cents)
+    return DepositDecision(
+        required=deposit_snapshot.required,
+        reasons=reasons,
+        deposit_cents=deposit_snapshot.amount_cents,
+        policy_snapshot=policy_snapshot,
+        cancellation_policy=cancellation_policy,
+    )
 
 
 async def ensure_default_team(session: AsyncSession, lock: bool = False) -> Team:
@@ -358,6 +553,7 @@ async def create_booking(
     lead_id: str | None,
     session: AsyncSession,
     deposit_decision: DepositDecision | None = None,
+    policy_snapshot: BookingPolicySnapshot | None = None,
     manage_transaction: bool = True,
     client_id: str | None = None,
     subscription_id: str | None = None,
@@ -365,6 +561,11 @@ async def create_booking(
 ) -> Booking:
     normalized = _normalize_datetime(starts_at)
     decision = deposit_decision or DepositDecision(required=False, reasons=[], deposit_cents=None)
+    snapshot = policy_snapshot or decision.policy_snapshot
+
+    snapshot_payload: dict | None = None
+    if snapshot:
+        snapshot_payload = snapshot.model_dump(mode="json") if hasattr(snapshot, "model_dump") else snapshot
 
     async def _create(team: Team) -> Booking:
         if not await is_slot_available(normalized, duration_minutes, session, team_id=team.team_id):
@@ -384,6 +585,7 @@ async def create_booking(
             deposit_cents=decision.deposit_cents,
             deposit_policy=decision.reasons,
             deposit_status="pending" if decision.required else None,
+            policy_snapshot=snapshot_payload,
         )
         session.add(booking)
         await session.flush()

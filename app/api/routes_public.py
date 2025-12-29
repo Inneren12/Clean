@@ -364,6 +364,16 @@ async def create_invoice_payment(
     if invoice.status == invoice_statuses.INVOICE_STATUS_DRAFT:
         raise HTTPException(status_code=409, detail="Invoice not sent yet")
     if not settings.stripe_secret_key:
+        logger.warning(
+            "public_dependency_unavailable",
+            extra={
+                "extra": {
+                    "dependency": "stripe_checkout",
+                    "path": http_request.url.path,
+                    "method": http_request.method,
+                }
+            },
+        )
         raise HTTPException(status_code=503, detail="Stripe not configured")
 
     outstanding = invoice_service.outstanding_balance_cents(invoice)

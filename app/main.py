@@ -24,7 +24,7 @@ from app.api.routes_public import router as public_router
 from app.api.routes_leads import router as leads_router
 from app.domain.errors import DomainError
 from app.infra.db import get_session_factory
-from app.infra.email import EmailAdapter
+from app.infra.email import EmailAdapter, resolve_email_adapter
 from app.infra.logging import configure_logging
 from app.infra.security import RateLimiter, create_rate_limiter, resolve_client_key
 from app.settings import settings
@@ -129,7 +129,7 @@ def create_app(app_settings) -> FastAPI:
     app.state.db_session_factory = get_session_factory()
     app.state.export_transport = None
     app.state.export_resolver = None
-    app.state.email_adapter = EmailAdapter()
+    app.state.email_adapter = resolve_email_adapter(app_settings)
     app.state.stripe_client = None
 
     @app.on_event("shutdown")

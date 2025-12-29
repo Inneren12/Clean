@@ -3,6 +3,7 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.domain.bookings.policy import BookingPolicySnapshot
 from app.domain.bookings.service import (
     LOCAL_TZ,
     TimeWindowPreference,
@@ -78,6 +79,7 @@ class BookingResponse(BaseModel):
     deposit_policy: list[str]
     deposit_status: str | None = None
     checkout_url: str | None = None
+    policy_snapshot: BookingPolicySnapshot | None = None
 
 
 class BookingCompletionRequest(BaseModel):
