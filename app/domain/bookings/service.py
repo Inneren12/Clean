@@ -22,6 +22,8 @@ from app.domain.bookings.policy import (
     CancellationWindow,
     DepositSnapshot,
 )
+from app.domain.policy_overrides.schemas import OverrideType
+from app.domain.policy_overrides import service as override_service
 from app.domain.notifications import email_service
 from app.domain.pricing.models import CleaningType
 from app.domain.leads.db_models import Lead
@@ -924,4 +926,150 @@ async def mark_booking_completed(
         )
     await session.commit()
     await session.refresh(booking)
+    return booking
+
+
+async def override_risk_band(
+    session: AsyncSession,
+    booking_id: str,
+    *,
+    actor: str,
+    reason: str,
+    new_band: RiskBand | str,
+    new_risk_score: int | None = None,
+    new_risk_reasons: list[str] | None = None,
+    commit: bool = True,
+) -> Booking:
+    booking = await session.get(Booking, booking_id)
+    if booking is None:
+        raise ValueError("Booking not found")
+
+    band_value = new_band.value if isinstance(new_band, RiskBand) else str(new_band)
+    old_snapshot = {
+        "risk_band": booking.risk_band,
+        "risk_score": booking.risk_score,
+        "risk_reasons": list(booking.risk_reasons),
+    }
+
+    booking.risk_band = band_value
+    if new_risk_score is not None:
+        booking.risk_score = new_risk_score
+    if new_risk_reasons is not None:
+        booking.risk_reasons = new_risk_reasons
+
+    await session.flush()
+    new_snapshot = {
+        "risk_band": booking.risk_band,
+        "risk_score": booking.risk_score,
+        "risk_reasons": list(booking.risk_reasons),
+    }
+    await override_service.record_override(
+        session,
+        booking_id=booking.booking_id,
+        override_type=OverrideType.RISK_BAND,
+        actor=actor,
+        reason=reason,
+        old_value=old_snapshot,
+        new_value=new_snapshot,
+    )
+    if commit:
+        await session.commit()
+        await session.refresh(booking)
+    return booking
+
+
+async def override_deposit_policy(
+    session: AsyncSession,
+    booking_id: str,
+    *,
+    actor: str,
+    reason: str,
+    deposit_required: bool,
+    deposit_cents: int | None = None,
+    deposit_policy: list[str] | None = None,
+    deposit_status: str | None = None,
+    commit: bool = True,
+) -> Booking:
+    booking = await session.get(Booking, booking_id)
+    if booking is None:
+        raise ValueError("Booking not found")
+
+    old_snapshot = {
+        "deposit_required": booking.deposit_required,
+        "deposit_cents": booking.deposit_cents,
+        "deposit_policy": list(booking.deposit_policy),
+        "deposit_status": booking.deposit_status,
+    }
+
+    booking.deposit_required = deposit_required
+    booking.deposit_cents = deposit_cents
+    booking.deposit_policy = deposit_policy or []
+    booking.deposit_status = deposit_status
+
+    await session.flush()
+    new_snapshot = {
+        "deposit_required": booking.deposit_required,
+        "deposit_cents": booking.deposit_cents,
+        "deposit_policy": list(booking.deposit_policy),
+        "deposit_status": booking.deposit_status,
+    }
+
+    await override_service.record_override(
+        session,
+        booking_id=booking.booking_id,
+        override_type=OverrideType.DEPOSIT,
+        actor=actor,
+        reason=reason,
+        old_value=old_snapshot,
+        new_value=new_snapshot,
+    )
+
+    if commit:
+        await session.commit()
+        await session.refresh(booking)
+    return booking
+
+
+async def grant_cancellation_exception(
+    session: AsyncSession,
+    booking_id: str,
+    *,
+    actor: str,
+    reason: str,
+    granted: bool = True,
+    note: str | None = None,
+    commit: bool = True,
+) -> Booking:
+    booking = await session.get(Booking, booking_id)
+    if booking is None:
+        raise ValueError("Booking not found")
+
+    old_snapshot = {
+        "cancellation_exception": booking.cancellation_exception,
+        "note": booking.cancellation_exception_note,
+    }
+
+    booking.cancellation_exception = granted
+    if note is not None:
+        booking.cancellation_exception_note = note
+
+    await session.flush()
+    new_snapshot = {
+        "cancellation_exception": booking.cancellation_exception,
+        "note": booking.cancellation_exception_note,
+    }
+
+    await override_service.record_override(
+        session,
+        booking_id=booking.booking_id,
+        override_type=OverrideType.CANCELLATION_EXCEPTION,
+        actor=actor,
+        reason=reason,
+        old_value=old_snapshot,
+        new_value=new_snapshot,
+    )
+
+    if commit:
+        await session.commit()
+        await session.refresh(booking)
     return booking
