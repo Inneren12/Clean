@@ -170,13 +170,13 @@ export default function AdminPage() {
   });
   const [message, setMessage] = useState<string | null>(null);
 
-  const isReadOnly = (profile?.role ?? "").toLowerCase() === "viewer";
-
   const authHeaders = useMemo<Record<string, string>>(() => {
     if (!username || !password) return {} as Record<string, string>;
     const encoded = btoa(`${username}:${password}`);
     return { Authorization: `Basic ${encoded}` };
   }, [username, password]);
+
+  const isReadOnly = (profile?.role ?? "").toLowerCase() === "viewer";
 
   const loadProfile = useCallback(async () => {
     if (!username || !password) return;
