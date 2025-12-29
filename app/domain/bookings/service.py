@@ -1067,11 +1067,11 @@ async def override_risk_band(
     new_risk_reasons: list[str] | None = None,
     commit: bool = True,
 ) -> Booking:
-    payload = {
-        "risk_band": new_band,
-        "risk_score": new_risk_score,
-        "risk_reasons": new_risk_reasons,
-    }
+    payload = {"risk_band": new_band}
+    if new_risk_score is not None:
+        payload["risk_score"] = new_risk_score
+    if new_risk_reasons is not None:
+        payload["risk_reasons"] = new_risk_reasons
     booking, _ = await override_service.apply_override(
         session,
         booking_id=booking_id,
