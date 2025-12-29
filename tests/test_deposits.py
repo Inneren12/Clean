@@ -175,7 +175,7 @@ def test_booking_response_includes_deposit_policy(client, async_session_maker, m
         app.state.stripe_client = original_client
 
 
-def test_missing_stripe_key_does_not_create_booking(client, async_session_maker):
+def test_missing_stripe_key_downgrades_deposit(client, async_session_maker):
     settings.deposits_enabled = True
     original_secret = settings.stripe_secret_key
     settings.stripe_secret_key = None
@@ -192,16 +192,19 @@ def test_missing_stripe_key_does_not_create_booking(client, async_session_maker)
 
     try:
         response = client.post("/v1/bookings", json=payload)
-        assert response.status_code == 503
-        assert _count_bookings(async_session_maker) == 0
-        assert _count_email_events(async_session_maker) == 0
-        assert adapter.sent == []
+        assert response.status_code == 201, response.text
+        data = response.json()
+        assert data["deposit_required"] is False
+        assert any("stripe_unavailable" in reason for reason in data["deposit_policy"])
+        assert data["deposit_status"] is None
+        assert data["policy_snapshot"]["deposit"]["downgraded_reason"] == "stripe_unavailable"
+        assert _count_bookings(async_session_maker) == 1
     finally:
         app.state.email_adapter = original_adapter
         settings.stripe_secret_key = original_secret
 
 
-def test_checkout_failure_rolls_back_booking(client, async_session_maker, monkeypatch):
+def test_checkout_failure_downgrades_booking(client, async_session_maker, monkeypatch):
     settings.deposits_enabled = True
     original_secret = settings.stripe_secret_key
     settings.stripe_secret_key = "sk_test"
@@ -222,10 +225,11 @@ def test_checkout_failure_rolls_back_booking(client, async_session_maker, monkey
 
     try:
         response = client.post("/v1/bookings", json=payload)
-        assert response.status_code == 503
-        assert _count_bookings(async_session_maker) == 0
-        assert _count_email_events(async_session_maker) == 0
-        assert adapter.sent == []
+        assert response.status_code == 201, response.text
+        data = response.json()
+        assert data["deposit_required"] is False
+        assert any("checkout_unavailable" in reason for reason in data["deposit_policy"])
+        assert data["policy_snapshot"]["deposit"]["downgraded_reason"] == "checkout_unavailable"
     finally:
         app.state.email_adapter = original_adapter
         settings.stripe_secret_key = original_secret

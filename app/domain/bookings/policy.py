@@ -17,6 +17,7 @@ class DepositSnapshot(BaseModel):
     max_cents: int = 0
     reasons: list[str] = Field(default_factory=list)
     basis: Literal["percent_clamped", "fixed_minimum", "none", "disabled"] = "none"
+    downgraded_reason: str | None = None
 
 
 class CancellationWindow(BaseModel):

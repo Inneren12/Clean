@@ -330,6 +330,8 @@ async def repeat_order(
         deposit_decision=deposit_decision,
         policy_snapshot=deposit_decision.policy_snapshot,
         client_id=identity.client_id,
+        lead=lead,
+        service_type=lead.structured_inputs.get("cleaning_type") if lead and lead.structured_inputs else None,
     )
     logger.info(
         "client_portal_repeat",

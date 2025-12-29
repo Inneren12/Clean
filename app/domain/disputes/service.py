@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from datetime import datetime, timezone
+import logging
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +11,8 @@ from app.domain.bookings.db_models import Booking
 from app.domain.disputes.db_models import Dispute, FinancialAdjustmentEvent
 from app.domain.disputes.schemas import DecisionType, DisputeFacts, DisputeState
 from app.domain.errors import DomainError
+
+logger = logging.getLogger(__name__)
 
 
 def _deepcopy(data: object) -> object:
@@ -111,6 +114,8 @@ async def decide_dispute(
     booking = await session.get(Booking, dispute.booking_id)
     if not booking:
         raise DomainError(detail="Booking not found for dispute")
+    if not dispute.facts_snapshot:
+        raise DomainError(detail="Cannot decide dispute without evidence snapshot")
 
     decision_amount = _decision_amount(booking, decision, amount_cents)
     now = datetime.now(timezone.utc)
@@ -159,6 +164,18 @@ async def decide_dispute(
     session.add(event)
 
     await session.flush()
+    logger.info(
+        "dispute_decided",
+        extra={
+            "extra": {
+                "event": "dispute_decided",
+                "dispute_id": dispute.dispute_id,
+                "booking_id": dispute.booking_id,
+                "decision": decision.value,
+                "amount_cents": decision_amount,
+            }
+        },
+    )
     return dispute
 
 

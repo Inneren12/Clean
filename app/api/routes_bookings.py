@@ -85,35 +85,14 @@ async def create_booking(
         if risk_assessment.requires_deposit
         else None,
     )
-
     if deposit_decision.required and deposit_decision.deposit_cents is None:
-        logger.warning(
-            "booking_dependency_unavailable",
-            extra={
-                "extra": {
-                    "dependency": "deposit_estimator",
-                    "path": http_request.url.path,
-                    "method": http_request.method,
-                    "deposits_enabled": settings.deposits_enabled,
-                }
-            },
+        deposit_decision = booking_service.downgrade_deposit_requirement(
+            deposit_decision, reason="deposit_estimate_unavailable"
         )
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Deposit estimate unavailable")
-
-    if deposit_decision.required:
-        if not settings.stripe_secret_key:
-            logger.warning(
-                "booking_dependency_unavailable",
-                extra={
-                    "extra": {
-                        "dependency": "stripe_checkout",
-                        "path": http_request.url.path,
-                        "method": http_request.method,
-                        "deposits_enabled": settings.deposits_enabled,
-                    }
-                },
-            )
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Deposits unavailable")
+    if deposit_decision.required and not settings.stripe_secret_key:
+        deposit_decision = booking_service.downgrade_deposit_requirement(
+            deposit_decision, reason="stripe_unavailable"
+        )
 
     checkout_url: str | None = None
     email_adapter = getattr(http_request.app.state, "email_adapter", None)
@@ -132,6 +111,8 @@ async def create_booking(
                 risk_assessment=risk_assessment,
                 manage_transaction=False,
                 client_id=client_id,
+                lead=lead,
+                service_type=request.service_type,
             )
 
             try:
@@ -189,20 +170,25 @@ async def create_booking(
                         commit=False,
                     )
                 except Exception as exc:  # noqa: BLE001
+                    deposit_decision = booking_service.downgrade_deposit_requirement(
+                        deposit_decision, reason="checkout_unavailable"
+                    )
+                    booking.deposit_required = False
+                    booking.deposit_status = None
+                    booking.deposit_policy = deposit_decision.reasons
+                    booking.deposit_cents = None
+                    booking.policy_snapshot = deposit_decision.policy_snapshot.model_dump(mode="json")
                     logger.warning(
                         "stripe_checkout_creation_failed",
                         extra={
                             "extra": {
+                                "event": "policy_downgraded",
                                 "booking_id": booking.booking_id,
                                 "lead_id": booking.lead_id,
                                 "reason": type(exc).__name__,
                             }
                         },
                     )
-                    raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail="Failed to create deposit session",
-                    ) from exc
 
         if booking is not None:
             await session.refresh(booking)

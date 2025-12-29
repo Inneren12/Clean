@@ -90,9 +90,6 @@ def test_referral_credit_created_after_confirmation(client, async_session_maker)
                 duration_minutes=120,
                 lead_id=referred_id,
                 session=session,
-                deposit_decision=booking_service.DepositDecision(
-                    required=False, reasons=[], deposit_cents=None
-                ),
                 manage_transaction=True,
             )
             return booking.booking_id
@@ -165,15 +162,27 @@ def test_referral_credit_created_on_deposit_paid(client, async_session_maker):
 
     async def _create_deposit_booking() -> str:
         async with async_session_maker() as session:
+            starts_at = _next_available_start()
+            lead = await session.get(Lead, referred_id)
+            decision = await booking_service.evaluate_deposit_policy(
+                session=session,
+                lead=lead,
+                starts_at=starts_at,
+                deposit_percent=settings.deposit_percent,
+                deposits_enabled=True,
+                service_type=lead.structured_inputs.get("cleaning_type") if lead and lead.structured_inputs else None,
+                force_deposit=True,
+                extra_reasons=["referral_deposit"],
+            )
             booking = await booking_service.create_booking(
-                starts_at=_next_available_start(),
+                starts_at=starts_at,
                 duration_minutes=180,
                 lead_id=referred_id,
                 session=session,
-                deposit_decision=booking_service.DepositDecision(
-                    required=True, reasons=["new_client"], deposit_cents=5000
-                ),
+                deposit_decision=decision,
+                policy_snapshot=decision.policy_snapshot,
                 manage_transaction=True,
+                lead=lead,
             )
             await booking_service.attach_checkout_session(
                 session,
@@ -242,9 +251,6 @@ def test_admin_lists_referral_metadata(client, async_session_maker):
                 duration_minutes=120,
                 lead_id=referred_response.json()["lead_id"],
                 session=session,
-                deposit_decision=booking_service.DepositDecision(
-                    required=False, reasons=[], deposit_cents=None
-                ),
                 manage_transaction=True,
             )
             return booking.booking_id

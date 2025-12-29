@@ -81,7 +81,7 @@ async def test_deposit_override_is_audited(async_session_maker):
         audits = await override_service.list_overrides(
             session,
             booking_id=booking.booking_id,
-            override_type=OverrideType.DEPOSIT,
+            override_type=OverrideType.DEPOSIT_REQUIRED,
         )
         assert len(audits) == 1
         audit = audits[0]
