@@ -3,6 +3,7 @@ import asyncio
 from datetime import datetime, timezone
 from uuid import uuid4
 
+import pytest
 import sqlalchemy as sa
 
 from app.domain.bookings.db_models import Booking
@@ -71,6 +72,19 @@ def _seed_order(session_factory, order_id: str = "order-nps-1", *, email: str) -
     return asyncio.run(_create())
 
 
+@pytest.fixture()
+def admin_credentials():
+    original_username = settings.admin_basic_username
+    original_password = settings.admin_basic_password
+    settings.admin_basic_username = "admin"
+    settings.admin_basic_password = "secret"
+    try:
+        yield
+    finally:
+        settings.admin_basic_username = original_username
+        settings.admin_basic_password = original_password
+
+
 def test_nps_token_validation_and_single_response(client, async_session_maker):
     email = f"survey-{uuid4()}@example.com"
     order_id, client_id, _ = _seed_order(async_session_maker, "order-nps-1", email=email)
@@ -113,7 +127,7 @@ def test_nps_token_validation_and_single_response(client, async_session_maker):
     assert saved.order_id == order_id
 
 
-def test_low_score_creates_ticket_and_admin_api(client, async_session_maker):
+def test_low_score_creates_ticket_and_admin_api(client, async_session_maker, admin_credentials):
     email = f"survey-low-{uuid4()}@example.com"
     order_id, client_id, _ = _seed_order(async_session_maker, "order-nps-2", email=email)
     token = nps_service.issue_nps_token(
@@ -140,8 +154,6 @@ def test_low_score_creates_ticket_and_admin_api(client, async_session_maker):
     assert ticket is not None
     assert ticket.status == "OPEN"
 
-    settings.admin_basic_username = "admin"
-    settings.admin_basic_password = "secret"
     list_resp = client.get(
         "/api/admin/tickets",
         headers=_auth_headers(settings.admin_basic_username, settings.admin_basic_password),
@@ -160,8 +172,6 @@ def test_low_score_creates_ticket_and_admin_api(client, async_session_maker):
     assert update.json()["status"] == "IN_PROGRESS"
 
 
-def test_admin_ticket_requires_auth(client):
-    settings.admin_basic_username = "admin"
-    settings.admin_basic_password = "secret"
+def test_admin_ticket_requires_auth(client, admin_credentials):
     response = client.get("/api/admin/tickets")
     assert response.status_code == 401
