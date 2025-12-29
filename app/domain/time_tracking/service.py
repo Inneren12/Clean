@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 RUNNING = "RUNNING"
 PAUSED = "PAUSED"
 FINISHED = "FINISHED"
+NOT_STARTED = "NOT_STARTED"
 
 
 def _utcnow() -> datetime:
@@ -319,6 +320,8 @@ async def finish_time_tracking(
 def summarize_order_time(
     booking: Booking, entry: WorkTimeEntry | None, now: datetime | None = None
 ) -> dict[str, object]:
+    raw_state = getattr(entry, "state", None)
+    state = raw_state or NOT_STARTED
     planned_seconds = _planned_seconds(booking)
     effective_seconds = _derive_actual_seconds(booking, entry, now)
     stored_total_seconds = (
@@ -340,7 +343,7 @@ def summarize_order_time(
     return {
         "booking_id": booking.booking_id,
         "entry_id": getattr(entry, "entry_id", None),
-        "state": getattr(entry, "state", None),
+        "state": state,
         "started_at": getattr(entry, "started_at", None),
         "paused_at": getattr(entry, "paused_at", None),
         "finished_at": getattr(entry, "finished_at", None),
