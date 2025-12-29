@@ -6,6 +6,12 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.domain.bookings.db_models import Booking
+from app.domain.bookings.policy import (
+    BookingPolicySnapshot,
+    CancellationPolicySnapshot,
+    CancellationWindow,
+    DepositSnapshot,
+)
 from app.domain.bookings.service import DepositDecision
 from app.domain.clients.db_models import ClientUser
 from app.domain.clients.service import issue_magic_token, verify_magic_token
@@ -158,10 +164,34 @@ def test_repeat_order_reevaluates_deposit_policy(client, async_session_maker, mo
     # Monkeypatch evaluate_deposit_policy to return a decision requiring deposit
     # This simulates the case where the new booking date triggers deposit rules
     # (e.g., weekend, heavy cleaning, or new client policies)
+    mock_policy_snapshot = BookingPolicySnapshot(
+        lead_time_hours=48.0,
+        service_type=None,
+        total_amount_cents=15000,
+        first_time_client=True,
+        deposit=DepositSnapshot(
+            required=True,
+            amount_cents=3750,
+            percent_applied=0.25,
+            min_cents=5000,
+            max_cents=20000,
+            reasons=["weekend"],
+            basis="percent_clamped",
+        ),
+        cancellation=CancellationPolicySnapshot(
+            rules=[],
+            windows=[
+                CancellationWindow(
+                    label="free", start_hours_before=24.0, end_hours_before=None, refund_percent=100
+                )
+            ],
+        ),
+    )
     mock_deposit_decision = DepositDecision(
         required=True,
         reasons=["weekend"],
         deposit_cents=3750,  # 25% of $150 = $37.50
+        policy_snapshot=mock_policy_snapshot,
     )
 
     async def mock_evaluate_deposit_policy(*args, **kwargs):

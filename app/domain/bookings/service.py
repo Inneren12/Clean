@@ -1,4 +1,5 @@
 import math
+import copy
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from enum import Enum
@@ -59,8 +60,8 @@ BOOKING_TRANSITIONS = {
 class DepositDecision:
     required: bool
     reasons: list[str]
-    deposit_cents: int | None = None
-    policy_snapshot: BookingPolicySnapshot | None = None
+    deposit_cents: int | None
+    policy_snapshot: BookingPolicySnapshot
     cancellation_policy: CancellationPolicySnapshot | None = None
 
 
@@ -72,17 +73,23 @@ class RiskBand(str, Enum):
 
 @dataclass
 class RiskAssessment:
-    score: int
-    band: RiskBand
-    reasons: list[str]
+    risk_score: int
+    risk_band: RiskBand
+    risk_reasons: list[str]
+    requires_deposit: bool
+    requires_manual_confirmation: bool
 
     @property
-    def requires_deposit(self) -> bool:
-        return self.band in {RiskBand.MEDIUM, RiskBand.HIGH}
+    def score(self) -> int:
+        return self.risk_score
 
     @property
-    def requires_manual_confirmation(self) -> bool:
-        return self.band == RiskBand.HIGH
+    def band(self) -> RiskBand:
+        return self.risk_band
+
+    @property
+    def reasons(self) -> list[str]:
+        return self.risk_reasons
 
 
 @dataclass
@@ -323,14 +330,33 @@ async def evaluate_risk(
         if cancel_count > 1:
             score += RISK_REPEAT_CANCEL_BONUS
 
-    if score >= RISK_HIGH_THRESHOLD:
+    bounded_score = min(max(score, 0), 100)
+    if bounded_score >= RISK_HIGH_THRESHOLD:
         band = RiskBand.HIGH
-    elif score >= RISK_MEDIUM_THRESHOLD:
+    elif bounded_score >= RISK_MEDIUM_THRESHOLD:
         band = RiskBand.MEDIUM
     else:
         band = RiskBand.LOW
 
-    return RiskAssessment(score=score, band=band, reasons=reasons)
+    assessment = RiskAssessment(
+        risk_score=bounded_score,
+        risk_band=band,
+        risk_reasons=reasons,
+        requires_deposit=band in {RiskBand.MEDIUM, RiskBand.HIGH},
+        requires_manual_confirmation=band == RiskBand.HIGH,
+    )
+    logger.info(
+        "risk_assessed",
+        extra={
+            "extra": {
+                "event": "risk_assessed",
+                "score": bounded_score,
+                "band": band.value,
+                "reasons": reasons,
+            }
+        },
+    )
+    return assessment
 
 
 def _build_deposit_snapshot(
@@ -496,6 +522,44 @@ async def evaluate_deposit_policy(
         deposit_cents=deposit_snapshot.amount_cents,
         policy_snapshot=policy_snapshot,
         cancellation_policy=cancellation_policy,
+    )
+
+
+def downgrade_deposit_requirement(decision: DepositDecision, *, reason: str) -> DepositDecision:
+    deposit_snapshot = decision.policy_snapshot.deposit
+    updated_reasons = list(decision.reasons)
+    downgrade_marker = f"downgraded:{reason}"
+    if downgrade_marker not in updated_reasons:
+        updated_reasons.append(downgrade_marker)
+
+    updated_deposit = deposit_snapshot.model_copy(
+        update={
+            "required": False,
+            "amount_cents": None,
+            "percent_applied": None,
+            "basis": "disabled",
+            "downgraded_reason": reason,
+            "reasons": list(deposit_snapshot.reasons) + [downgrade_marker],
+        }
+    )
+    updated_policy = decision.policy_snapshot.model_copy(update={"deposit": updated_deposit})
+
+    logger.info(
+        "policy_downgraded",
+        extra={
+            "extra": {
+                "event": "policy_downgraded",
+                "reason": reason,
+                "original_reasons": decision.reasons,
+            }
+        },
+    )
+    return DepositDecision(
+        required=False,
+        reasons=updated_reasons,
+        deposit_cents=None,
+        policy_snapshot=updated_policy,
+        cancellation_policy=decision.cancellation_policy,
     )
 
 
@@ -679,15 +743,65 @@ async def create_booking(
     client_id: str | None = None,
     subscription_id: str | None = None,
     scheduled_date: date | None = None,
+    lead: Lead | None = None,
+    service_type: str | CleaningType | None = None,
 ) -> Booking:
     normalized = _normalize_datetime(starts_at)
-    decision = deposit_decision or DepositDecision(required=False, reasons=[], deposit_cents=None)
-    snapshot = policy_snapshot or decision.policy_snapshot
+    resolved_lead = lead
+    if resolved_lead is None and lead_id:
+        resolved_lead = await session.get(Lead, lead_id)
 
-    risk = risk_assessment or RiskAssessment(score=0, band=RiskBand.LOW, reasons=[])
-    snapshot_payload: dict | None = None
-    if snapshot:
-        snapshot_payload = snapshot.model_dump(mode="json") if hasattr(snapshot, "model_dump") else snapshot
+    decision = deposit_decision
+    if decision is None:
+        decision = await evaluate_deposit_policy(
+            session=session,
+            lead=resolved_lead,
+            starts_at=normalized,
+            deposit_percent=settings.deposit_percent,
+            deposits_enabled=settings.deposits_enabled,
+            service_type=service_type,
+            estimated_total=(resolved_lead.estimate_snapshot or {}).get("total_before_tax") if resolved_lead else None,
+        )
+
+    snapshot = policy_snapshot or decision.policy_snapshot
+    if snapshot is None:
+        cancellation_policy = _build_cancellation_policy(
+            service_type=_resolve_service_type(service_type, resolved_lead),
+            lead_time_hours=_lead_time_hours(normalized),
+            total_cents=_estimate_total_cents(resolved_lead, None),
+            first_time=bool(resolved_lead) and not await _has_existing_history(session, resolved_lead.lead_id),
+        )
+        fallback_deposit = DepositSnapshot(
+            required=False,
+            amount_cents=None,
+            percent_applied=None,
+            min_cents=MIN_DEPOSIT_CENTS,
+            max_cents=MAX_DEPOSIT_CENTS,
+            reasons=[],
+            basis="disabled",
+        )
+        snapshot = BookingPolicySnapshot(
+            lead_time_hours=_lead_time_hours(normalized),
+            service_type=_resolve_service_type(service_type, resolved_lead),
+            total_amount_cents=_estimate_total_cents(resolved_lead, None),
+            first_time_client=False,
+            deposit=fallback_deposit,
+            cancellation=cancellation_policy,
+        )
+
+    risk = risk_assessment
+    if risk is None:
+        risk = await evaluate_risk(
+            session=session,
+            lead=resolved_lead,
+            client_id=client_id,
+            starts_at=normalized,
+            postal_code=resolved_lead.postal_code if resolved_lead else None,
+            estimated_total=(resolved_lead.estimate_snapshot or {}).get("total_before_tax") if resolved_lead else None,
+        )
+    snapshot_payload: dict | None = copy.deepcopy(
+        snapshot.model_dump(mode="json") if hasattr(snapshot, "model_dump") else snapshot
+    )
 
     async def _create(team: Team) -> Booking:
         if not await is_slot_available(normalized, duration_minutes, session, team_id=team.team_id):
@@ -708,9 +822,9 @@ async def create_booking(
             deposit_policy=decision.reasons,
             deposit_status="pending" if decision.required else None,
             policy_snapshot=snapshot_payload,
-            risk_score=risk.score,
-            risk_band=risk.band.value,
-            risk_reasons=risk.reasons,
+            risk_score=risk.risk_score,
+            risk_band=risk.risk_band.value,
+            risk_reasons=risk.risk_reasons,
         )
         session.add(booking)
         await session.flush()
@@ -790,6 +904,17 @@ async def mark_deposit_paid(
 
     manual_confirmation_required = booking.risk_band == RiskBand.HIGH.value
     already_confirmed = booking.deposit_status == "paid" and booking.status == "CONFIRMED"
+    if manual_confirmation_required:
+        logger.info(
+            "risk_blocked_confirmation",
+            extra={
+                "extra": {
+                    "event": "risk_blocked_confirmation",
+                    "booking_id": booking.booking_id,
+                    "risk_band": booking.risk_band,
+                }
+            },
+        )
     booking.deposit_status = "paid"
     if not manual_confirmation_required:
         booking.status = "CONFIRMED"
@@ -940,41 +1065,20 @@ async def override_risk_band(
     new_risk_reasons: list[str] | None = None,
     commit: bool = True,
 ) -> Booking:
-    booking = await session.get(Booking, booking_id)
-    if booking is None:
-        raise ValueError("Booking not found")
-
-    band_value = new_band.value if isinstance(new_band, RiskBand) else str(new_band)
-    old_snapshot = {
-        "risk_band": booking.risk_band,
-        "risk_score": booking.risk_score,
-        "risk_reasons": list(booking.risk_reasons),
+    payload = {
+        "risk_band": new_band,
+        "risk_score": new_risk_score,
+        "risk_reasons": new_risk_reasons,
     }
-
-    booking.risk_band = band_value
-    if new_risk_score is not None:
-        booking.risk_score = new_risk_score
-    if new_risk_reasons is not None:
-        booking.risk_reasons = new_risk_reasons
-
-    await session.flush()
-    new_snapshot = {
-        "risk_band": booking.risk_band,
-        "risk_score": booking.risk_score,
-        "risk_reasons": list(booking.risk_reasons),
-    }
-    await override_service.record_override(
+    booking, _ = await override_service.apply_override(
         session,
-        booking_id=booking.booking_id,
+        booking_id=booking_id,
         override_type=OverrideType.RISK_BAND,
         actor=actor,
         reason=reason,
-        old_value=old_snapshot,
-        new_value=new_snapshot,
+        payload=payload,
+        commit=commit,
     )
-    if commit:
-        await session.commit()
-        await session.refresh(booking)
     return booking
 
 
@@ -990,43 +1094,20 @@ async def override_deposit_policy(
     deposit_status: str | None = None,
     commit: bool = True,
 ) -> Booking:
-    booking = await session.get(Booking, booking_id)
-    if booking is None:
-        raise ValueError("Booking not found")
-
-    old_snapshot = {
-        "deposit_required": booking.deposit_required,
-        "deposit_cents": booking.deposit_cents,
-        "deposit_policy": list(booking.deposit_policy),
-        "deposit_status": booking.deposit_status,
-    }
-
-    booking.deposit_required = deposit_required
-    booking.deposit_cents = deposit_cents
-    booking.deposit_policy = deposit_policy or []
-    booking.deposit_status = deposit_status
-
-    await session.flush()
-    new_snapshot = {
-        "deposit_required": booking.deposit_required,
-        "deposit_cents": booking.deposit_cents,
-        "deposit_policy": list(booking.deposit_policy),
-        "deposit_status": booking.deposit_status,
-    }
-
-    await override_service.record_override(
+    booking, _ = await override_service.apply_override(
         session,
-        booking_id=booking.booking_id,
-        override_type=OverrideType.DEPOSIT,
+        booking_id=booking_id,
+        override_type=OverrideType.DEPOSIT_REQUIRED,
         actor=actor,
         reason=reason,
-        old_value=old_snapshot,
-        new_value=new_snapshot,
+        payload={
+            "deposit_required": deposit_required,
+            "deposit_cents": deposit_cents,
+            "deposit_policy": deposit_policy,
+            "deposit_status": deposit_status,
+        },
+        commit=commit,
     )
-
-    if commit:
-        await session.commit()
-        await session.refresh(booking)
     return booking
 
 
@@ -1040,36 +1121,16 @@ async def grant_cancellation_exception(
     note: str | None = None,
     commit: bool = True,
 ) -> Booking:
-    booking = await session.get(Booking, booking_id)
-    if booking is None:
-        raise ValueError("Booking not found")
-
-    old_snapshot = {
-        "cancellation_exception": booking.cancellation_exception,
-        "note": booking.cancellation_exception_note,
-    }
-
-    booking.cancellation_exception = granted
-    if note is not None:
-        booking.cancellation_exception_note = note
-
-    await session.flush()
-    new_snapshot = {
-        "cancellation_exception": booking.cancellation_exception,
-        "note": booking.cancellation_exception_note,
-    }
-
-    await override_service.record_override(
+    booking, _ = await override_service.apply_override(
         session,
-        booking_id=booking.booking_id,
+        booking_id=booking_id,
         override_type=OverrideType.CANCELLATION_EXCEPTION,
         actor=actor,
         reason=reason,
-        old_value=old_snapshot,
-        new_value=new_snapshot,
+        payload={
+            "cancellation_exception": granted,
+            "note": note,
+        },
+        commit=commit,
     )
-
-    if commit:
-        await session.commit()
-        await session.refresh(booking)
     return booking
