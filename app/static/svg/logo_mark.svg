@@ -1,0 +1,6 @@
+<svg width="88" height="88" viewBox="0 0 88 88" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="PaniDobro emblem">
+  <rect x="8" y="8" width="72" height="72" rx="16" fill="#1F2933"/>
+  <path d="M44 22L62 33L62 55L44 66L26 55V33L44 22Z" fill="white" fill-opacity="0.9"/>
+  <path d="M44 32L54 38V50L44 56L34 50V38L44 32Z" fill="#1F2933"/>
+  <circle cx="44" cy="44" r="6" fill="white" fill-opacity="0.92"/>
+</svg>

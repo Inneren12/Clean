@@ -1,0 +1,7 @@
+<svg width="220" height="72" viewBox="0 0 220 72" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="PaniDobro wordmark">
+  <rect x="4" y="12" width="48" height="48" rx="12" fill="#1F2933"/>
+  <path d="M28 24L40 31V41L28 48L16 41V31L28 24Z" fill="white" fill-opacity="0.92"/>
+  <path d="M28 31L34 35V37L28 41L22 37V35L28 31Z" fill="#1F2933"/>
+  <circle cx="28" cy="36" r="3" fill="white" fill-opacity="0.94"/>
+  <text x="62" y="42" fill="#1F2933" font-family="'IBM Plex Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-weight="600" font-size="28">PaniDobro</text>
+</svg>

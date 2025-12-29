@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.admin_auth import AdminAccessMiddleware, AdminAuditMiddleware
@@ -25,6 +26,7 @@ from app.api.routes_worker import router as worker_router
 from app.api.worker_auth import WorkerAccessMiddleware
 from app.api.routes_public import router as public_router
 from app.api.routes_leads import router as leads_router
+from app.api.routes_style_guide import router as style_guide_router
 from app.domain.errors import DomainError
 from app.infra.db import get_session_factory
 from app.infra.email import EmailAdapter, resolve_email_adapter
@@ -126,6 +128,8 @@ def create_app(app_settings) -> FastAPI:
     configure_logging()
     app = FastAPI(title="Cleaning Economy Bot", version="1.0.0")
 
+    app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
     rate_limiter = create_rate_limiter(app_settings)
     app.state.rate_limiter = rate_limiter
     app.state.app_settings = app_settings
@@ -224,6 +228,7 @@ def create_app(app_settings) -> FastAPI:
     app.include_router(bookings_router)
     app.include_router(leads_router)
     app.include_router(admin_router)
+    app.include_router(style_guide_router)
     return app
 
 
