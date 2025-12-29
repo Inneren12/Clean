@@ -5,6 +5,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -334,15 +335,20 @@ async def ensure_default_templates(session: AsyncSession) -> None:
         )
         if existing:
             continue
-        template = DocumentTemplate(
-            document_type=document_type,
-            name=spec["name"],
-            version=spec["version"],
-            content=spec["content"],
-            is_active=True,
-        )
-        session.add(template)
-    await session.flush()
+        try:
+            async with session.begin_nested():
+                template = DocumentTemplate(
+                    document_type=document_type,
+                    name=spec["name"],
+                    version=spec["version"],
+                    content=spec["content"],
+                    is_active=True,
+                )
+                session.add(template)
+                await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            continue
 
 
 async def _latest_template(session: AsyncSession, document_type: str) -> DocumentTemplate:
@@ -412,8 +418,7 @@ async def get_or_create_invoice_document(
         snapshot=snapshot,
         template=template,
     )
-    await session.commit()
-    await session.refresh(document)
+    await session.flush()
     return document
 
 
@@ -433,8 +438,7 @@ async def get_or_create_receipt_document(
         snapshot=snapshot,
         template=template,
     )
-    await session.commit()
-    await session.refresh(document)
+    await session.flush()
     return document
 
 
@@ -454,8 +458,7 @@ async def get_or_create_service_agreement_document(
         snapshot=snapshot,
         template=template,
     )
-    await session.commit()
-    await session.refresh(document)
+    await session.flush()
     return document
 
 

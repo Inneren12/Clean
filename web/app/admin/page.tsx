@@ -176,7 +176,9 @@ export default function AdminPage() {
     return { Authorization: `Basic ${encoded}` };
   }, [username, password]);
 
-  const isReadOnly = (profile?.role ?? "").toLowerCase() === "viewer";
+  const isReadOnly = !profile?.permissions?.some((permission) =>
+    ["dispatch", "admin"].includes(permission)
+  );
 
   const loadProfile = useCallback(async () => {
     if (!username || !password) return;
@@ -223,7 +225,7 @@ export default function AdminPage() {
       } else {
         setMetrics(null);
         if (response.status === 403) {
-          setMetricsError("Metrics require an admin role");
+          setMetricsError("Metrics require an admin permission");
         } else {
           setMetricsError("Failed to load metrics");
         }
@@ -252,7 +254,9 @@ export default function AdminPage() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `kpis-${metricsRange.from}-${metricsRange.to}.csv`;
+    const safeFrom = metricsRange.from.split("T")[0];
+    const safeTo = metricsRange.to.split("T")[0];
+    link.download = `kpis-${safeFrom}-${safeTo}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -436,7 +440,7 @@ export default function AdminPage() {
       {profile ? (
         <div className={`alert ${isReadOnly ? "alert-warning" : "alert-info"}`}>
           Signed in as <strong>{profile.username}</strong> ({profile.role})
-          {isReadOnly ? " · Viewer role is read-only." : ""}
+          {isReadOnly ? " · Your account is read-only without dispatch/admin permissions." : ""}
         </div>
       ) : null}
 

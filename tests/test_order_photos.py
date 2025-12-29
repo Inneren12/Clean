@@ -94,6 +94,17 @@ def dispatcher_headers():
     settings.dispatcher_basic_password = original_dispatcher_password
 
 
+@pytest.fixture()
+def viewer_headers():
+    original_username = settings.viewer_basic_username
+    original_password = settings.viewer_basic_password
+    settings.viewer_basic_username = "viewer"
+    settings.viewer_basic_password = "secret"
+    yield _basic_auth_header("viewer", "secret")
+    settings.viewer_basic_username = original_username
+    settings.viewer_basic_password = original_password
+
+
 def test_upload_requires_consent(client, async_session_maker, upload_root, admin_headers):
     booking_id = asyncio.run(_create_booking(async_session_maker, consent=False))
     files = {"file": ("before.jpg", b"abc", "image/jpeg")}
@@ -181,6 +192,20 @@ def test_dispatcher_cannot_admin_override(client, async_session_maker, upload_ro
         data={"phase": "before", "admin_override": "true"},
         files=files,
         headers=dispatcher_headers,
+    )
+
+    assert response.status_code == 403
+
+
+def test_viewer_cannot_admin_override(client, async_session_maker, upload_root, viewer_headers):
+    booking_id = asyncio.run(_create_booking(async_session_maker, consent=False))
+    files = {"file": ("before.jpg", b"abc", "image/jpeg")}
+
+    response = client.post(
+        f"/v1/orders/{booking_id}/photos",
+        data={"phase": "before", "admin_override": "true"},
+        files=files,
+        headers=viewer_headers,
     )
 
     assert response.status_code == 403
