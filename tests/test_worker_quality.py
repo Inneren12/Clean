@@ -5,9 +5,11 @@ import io
 import pytest
 import sqlalchemy as sa
 from fastapi import status
+import uuid
 
 from app.domain.admin_audit.db_models import AdminAuditLog
 from app.domain.bookings.db_models import Booking
+from app.domain.leads.db_models import Lead
 from app.domain.disputes.db_models import Dispute
 from app.settings import settings
 
@@ -17,10 +19,41 @@ def _basic_auth(username: str, password: str) -> dict[str, str]:
     return {"Authorization": f"Basic {token}"}
 
 
+@pytest.fixture(autouse=True)
+def _restore_worker_settings():
+    original = {
+        "worker_basic_username": settings.worker_basic_username,
+        "worker_basic_password": settings.worker_basic_password,
+        "worker_team_id": settings.worker_team_id,
+        "admin_basic_username": settings.admin_basic_username,
+        "admin_basic_password": settings.admin_basic_password,
+        "worker_portal_secret": settings.worker_portal_secret,
+    }
+    settings.worker_portal_secret = "test-worker-secret"
+    yield
+    for key, value in original.items():
+        setattr(settings, key, value)
+
+
 async def _seed_booking(async_session_maker, *, team_id: int = 1, consent: bool = True) -> str:
     async with async_session_maker() as session:
+        lead = Lead(
+            name="Quality Lead",
+            phone="000-000-0000",
+            email="quality@example.com",
+            postal_code="T1T1T1",
+            address="123 Test St",
+            structured_inputs={},
+            estimate_snapshot={},
+            pricing_config_version="v1",
+            config_hash="hash",
+            referral_code=uuid.uuid4().hex[:16],
+        )
+        session.add(lead)
+        await session.flush()
         booking = Booking(
             team_id=team_id,
+            lead_id=lead.lead_id,
             starts_at=datetime.datetime.now(tz=datetime.timezone.utc),
             duration_minutes=60,
             status="PENDING",

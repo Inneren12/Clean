@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from math import ceil
 from typing import Iterable
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import select
@@ -113,7 +113,7 @@ async def _audit(
         before=before,
         after=after,
     )
-    await session.commit()
+    await session.flush()
 
 
 async def _load_team_bookings(session: AsyncSession, team_id: int) -> list[Booking]:
@@ -149,8 +149,17 @@ async def _latest_invoices(session: AsyncSession, order_ids: list[str]) -> dict[
 async def _load_worker_booking(
     session: AsyncSession, job_id: str, identity: WorkerIdentity
 ) -> Booking:
-    booking = await session.get(Booking, job_id)
-    if booking is None or booking.team_id != identity.team_id:
+    stmt = (
+        select(Booking)
+        .where(Booking.booking_id == job_id, Booking.team_id == identity.team_id)
+        .options(
+            selectinload(Booking.lead),
+            selectinload(Booking.order_addons).selectinload(OrderAddon.definition),
+        )
+    )
+    result = await session.execute(stmt)
+    booking = result.scalar_one_or_none()
+    if booking is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
     return booking
 
@@ -169,16 +178,16 @@ def _infer_service_type(booking: Booking) -> str | None:
 async def _record_job_event(
     session: AsyncSession, booking: Booking, event_type: analytics_service.EventType
 ) -> None:
-    lead = booking.__dict__.get("lead") if hasattr(booking, "__dict__") else None
+    lead = getattr(booking, "lead", None)
+    planned_minutes = getattr(booking, "planned_minutes", None)
+    duration_minutes = getattr(booking, "duration_minutes", None)
     try:
         await analytics_service.log_event(
             session,
             event_type=event_type,
             lead=lead,
             booking=booking,
-            estimated_duration_minutes=booking.planned_minutes
-            if booking.planned_minutes is not None
-            else booking.duration_minutes,
+            estimated_duration_minutes=planned_minutes if planned_minutes is not None else duration_minutes,
             actual_duration_minutes=booking.actual_duration_minutes,
         )
         await session.commit()
@@ -253,11 +262,12 @@ def _render_job_card(booking: Booking, invoice: Invoice | None) -> str:
     lead: Lead | None = getattr(booking, "lead", None)
     badges = " ".join(filter(None, [_status_badge(booking.status), _risk_badge(booking), _deposit_badge(booking, invoice)]))
     address = lead.address if lead else "Address on file"
+    safe_booking_id = html.escape(str(booking.booking_id), quote=True)
     return f"""
     <div class="card">
       <div class="row">
         <div>
-          <div class="title"><a href="/worker/jobs/{booking.booking_id}">{booking.booking_id}</a></div>
+          <div class="title"><a href="/worker/jobs/{safe_booking_id}">{html.escape(str(booking.booking_id))}</a></div>
           <div class="muted">{html.escape(address or 'Address pending')}</div>
           <div class="muted">{_format_dt(booking.starts_at)} · {booking.duration_minutes} mins</div>
         </div>
@@ -387,6 +397,7 @@ def _render_job_detail(
     lead_name = getattr(lead, "name", "Unknown") or "Unknown"
     lead_address = getattr(lead, "address", "On file") or "On file"
     lead_notes = getattr(lead, "notes", "None") or "None"
+    safe_booking_id = html.escape(str(booking.booking_id), quote=True)
     scope_bits = []
     if lead and isinstance(lead.structured_inputs, dict):
         for key, value in lead.structured_inputs.items():
@@ -404,7 +415,7 @@ def _render_job_detail(
     addon_form = "<p class=\"muted\">No add-ons available.</p>"
     if addon_options:
         addon_form = f"""
-        <form method=\"post\" action=\"/worker/jobs/{booking.booking_id}/addons\" class=\"stack-tight\" style=\"margin-top:8px;\">
+        <form method=\"post\" action=\"/worker/jobs/{safe_booking_id}/addons\" class=\"stack-tight\" style=\"margin-top:8px;\">
           <label class=\"muted\">Add add-on</label>
           <select name=\"addon_id\" required>{addon_options}</select>
           <label class=\"muted\">Quantity</label>
@@ -412,10 +423,10 @@ def _render_job_detail(
           <button class=\"button primary\" type=\"submit\">Add add-on</button>
         </form>
         """
-    evidence_note = booking.risk_reasons or []
+    evidence_note = list(booking.risk_reasons or [])
     if booking.deposit_required:
         evidence_note.append("Deposit confirmation may be required.")
-    invoice_block = "<p class=\"muted\">Invoice not issued.</p>"
+    invoice_block = "Invoice not issued."
     if invoice:
         invoice_block = (
             f"Invoice {html.escape(invoice.invoice_number)} — {html.escape(invoice.status.title())}"
@@ -444,28 +455,28 @@ def _render_job_detail(
 
     planned_minutes = summary.planned_minutes or booking.duration_minutes or 0
     actual_minutes = ceil(summary.effective_seconds / 60) if summary.effective_seconds else 0
-    state = summary.state or "NOT_STARTED"
+    state = str(summary.state) if summary.state is not None else "NOT_STARTED"
     controls: list[str] = []
     if summary.state is None:
         controls.append(
-            f"<form class='inline' method='post' action='/worker/jobs/{booking.booking_id}/start'>"
+            f"<form class='inline' method='post' action='/worker/jobs/{safe_booking_id}/start'>"
             f"<button class='button primary' type='submit'>Start</button></form>"
         )
     elif summary.state == time_service.RUNNING:
         controls.append(
-            f"<form class='inline' method='post' action='/worker/jobs/{booking.booking_id}/pause'>"
+            f"<form class='inline' method='post' action='/worker/jobs/{safe_booking_id}/pause'>"
             f"<button class='button secondary' type='submit'>Pause</button></form>"
         )
     elif summary.state == time_service.PAUSED:
         controls.append(
-            f"<form class='inline' method='post' action='/worker/jobs/{booking.booking_id}/resume'>"
+            f"<form class='inline' method='post' action='/worker/jobs/{safe_booking_id}/resume'>"
             f"<button class='button primary' type='submit'>Resume</button></form>"
         )
 
     finish_form = ""
     if summary.state in {time_service.RUNNING, time_service.PAUSED}:
         finish_form = f"""
-        <form method="post" action="/worker/jobs/{booking.booking_id}/finish" class="stack-tight" style="margin-top:8px;">
+        <form method="post" action="/worker/jobs/{safe_booking_id}/finish" class="stack-tight" style="margin-top:8px;">
           <label class="muted">Why did it take longer?</label>
           <select name="delay_reason">{_reason_options(reason_schemas.TIME_OVERRUN_CODES)}</select>
           <textarea name="delay_note" rows="2" placeholder="Optional note"></textarea>
@@ -479,7 +490,7 @@ def _render_job_detail(
         controls.append("<span class=\"pill\">Finished</span>")
 
     reason_rows = "".join(
-        f"<li><strong>{html.escape(reason.kind)}</strong>: {html.escape(reason.code)}"
+        f"<li><strong>{html.escape(str(reason.kind))}</strong>: {html.escape(str(reason.code))}"
         f" — {html.escape(reason.note or 'No note')}</li>"
         for reason in reasons
     )
@@ -567,15 +578,18 @@ async def _render_job_page(
     error: bool = False,
     log_view: bool = True,
 ) -> HTMLResponse:
-    await addon_service.list_order_addons(session, booking.booking_id)
-    await session.refresh(booking, attribute_names=["lead", "order_addons"])
     addon_catalog = await addon_service.list_definitions(session, include_inactive=False)
     invoice_map = await _latest_invoices(session, [booking.booking_id])
     invoice = invoice_map.get(booking.booking_id)
     summary_raw = await time_service.fetch_time_tracking_summary(session, booking.booking_id)
     if summary_raw is None:
         summary_raw = time_service.summarize_order_time(booking, None)
-    summary = time_schemas.TimeTrackingResponse(**summary_raw)
+    if isinstance(summary_raw, time_schemas.TimeTrackingResponse):
+        summary = summary_raw
+    elif isinstance(summary_raw, dict):
+        summary = time_schemas.TimeTrackingResponse(**summary_raw)
+    else:
+        summary = time_schemas.TimeTrackingResponse.model_validate(summary_raw)
     reasons = await reason_service.list_reasons_for_order(session, booking.booking_id)
     nps_sent, nps_response, support_ticket = await _nps_state(session, booking)
     if log_view:
@@ -586,6 +600,7 @@ async def _render_job_page(
             resource_type="booking",
             resource_id=booking.booking_id,
         )
+        await session.commit()
     body = _render_job_detail(
         booking,
         invoice,
@@ -631,7 +646,10 @@ async def _audit_transition(
 
 @router.post("/worker/login")
 async def worker_login(request: Request, identity: WorkerIdentity = Depends(get_worker_identity)) -> JSONResponse:
-    token = _session_token(identity.username, identity.role, identity.team_id)
+    try:
+        token = _session_token(identity.username, identity.role, identity.team_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
     secure = settings.app_env != "dev" and request.url.scheme == "https"
     response = JSONResponse({"status": "ok"})
     response.set_cookie(
@@ -662,6 +680,7 @@ async def worker_dashboard(
             next_job = booking
             break
     await _audit(session, identity, action="VIEW_DASHBOARD", resource_type="portal", resource_id=None)
+    await session.commit()
     return HTMLResponse(_wrap_page(_render_dashboard(next_job, counts), title="Worker dashboard", active="dashboard"))
 
 
@@ -673,6 +692,7 @@ async def worker_jobs(
     invoices = await _latest_invoices(session, [b.booking_id for b in bookings])
     cards = "".join(_render_job_card(booking, invoices.get(booking.booking_id)) for booking in bookings) or "<p class=\"muted\">No jobs yet.</p>"
     await _audit(session, identity, action="VIEW_JOBS", resource_type="portal", resource_id=None)
+    await session.commit()
     return HTMLResponse(_wrap_page(cards, title="My jobs", active="jobs"))
 
 
@@ -695,8 +715,6 @@ async def worker_update_addons(
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
     booking = await _load_worker_booking(session, job_id, identity)
-    await addon_service.list_order_addons(session, booking.booking_id)
-    await session.refresh(booking, attribute_names=["lead", "order_addons"])
 
     try:
         parsed_qty = int(qty)
@@ -887,6 +905,8 @@ async def worker_finish_job(
                 delay_code = reason_schemas.ReasonCode(delay_reason)
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid delay reason") from exc
+            if delay_code not in reason_schemas.TIME_OVERRUN_CODES:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid delay reason")
             await reason_service.create_reason(
                 session,
                 booking.booking_id,
@@ -902,6 +922,8 @@ async def worker_finish_job(
                 price_code = reason_schemas.ReasonCode(price_adjust_reason)
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid price adjust reason") from exc
+            if price_code not in reason_schemas.PRICE_ADJUST_CODES:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid price adjust reason")
             price_note = (price_adjust_note or "").strip()
             if not price_note:
                 raise HTTPException(
@@ -1020,6 +1042,7 @@ async def worker_toggle_checklist_item(
     run = await checklist_service.find_run_by_order(session, booking.booking_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Checklist not found")
+    await session.commit()
     return checklist_service.serialize_run(run)
 
 
@@ -1048,6 +1071,7 @@ async def worker_complete_checklist(
         before=None,
         after={"status": run.status},
     )
+    await session.commit()
     return checklist_service.serialize_run(run)
 
 
@@ -1069,7 +1093,10 @@ async def worker_upload_photo(
     if not booking.consent_photos:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Photo consent not granted")
 
-    parsed_phase = booking_schemas.PhotoPhase.from_any_case(phase)
+    try:
+        parsed_phase = booking_schemas.PhotoPhase.from_any_case(phase)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     photo = await photos_service.save_photo(
         session,
         booking,
@@ -1086,10 +1113,11 @@ async def worker_upload_photo(
         before=None,
         after={"phase": parsed_phase.value, "order_id": booking.booking_id},
     )
+    await session.commit()
     return booking_schemas.OrderPhotoResponse(
         photo_id=photo.photo_id,
         order_id=photo.order_id,
-        phase=booking_schemas.PhotoPhase(photo.phase),
+        phase=booking_schemas.PhotoPhase.from_any_case(photo.phase),
         filename=photo.filename,
         original_filename=photo.original_filename,
         content_type=photo.content_type,
@@ -1117,7 +1145,7 @@ async def worker_list_photos(
             booking_schemas.OrderPhotoResponse(
                 photo_id=p.photo_id,
                 order_id=p.order_id,
-                phase=booking_schemas.PhotoPhase(p.phase),
+                phase=booking_schemas.PhotoPhase.from_any_case(p.phase),
                 filename=p.filename,
                 original_filename=p.original_filename,
                 content_type=p.content_type,
@@ -1155,7 +1183,8 @@ async def worker_delete_photo(
         before=None,
         after={"order_id": booking.booking_id},
     )
-    return JSONResponse(status_code=status.HTTP_204_NO_CONTENT, content={"status": "deleted"})
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
