@@ -347,7 +347,6 @@ async def ensure_default_templates(session: AsyncSession) -> None:
                 session.add(template)
                 await session.flush()
         except IntegrityError:
-            await session.rollback()
             continue
 
 

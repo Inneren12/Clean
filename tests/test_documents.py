@@ -2,10 +2,12 @@ import datetime
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from app.domain.bookings.db_models import Booking
 from app.domain.documents.db_models import Document
+from app.domain.documents.db_models import DocumentTemplate
 from app.domain.documents import service as document_service
 from app.domain.invoices import service as invoice_service, statuses
 from app.domain.invoices.db_models import Invoice, Payment
@@ -178,3 +180,38 @@ async def test_public_invoice_pdf_idempotent(client, async_session_maker):
             )
         )
         assert count == 1
+
+
+@pytest.mark.anyio
+async def test_default_template_integrity_error_does_not_rollback(async_session_maker):
+    async with async_session_maker() as session:
+        await document_service.ensure_default_templates(session)
+        await session.commit()
+
+    async with async_session_maker() as session:
+        async with session.begin():
+            lead = Lead(**_lead_payload("Rollback Safe"))
+            session.add(lead)
+            await session.flush()
+
+            original_flush = session.flush
+            triggered = False
+
+            async def flush_with_error(*args, **kwargs):
+                nonlocal triggered
+                if not triggered and any(isinstance(obj, DocumentTemplate) for obj in session.new):
+                    triggered = True
+                    raise IntegrityError("mock", {}, None)
+                return await original_flush(*args, **kwargs)
+
+            session.flush = flush_with_error  # type: ignore[assignment]
+            try:
+                await document_service.ensure_default_templates(session)
+            finally:
+                session.flush = original_flush
+
+    async with async_session_maker() as session:
+        persisted = await session.scalar(
+            sa.select(sa.func.count()).select_from(Lead).where(Lead.name == "Rollback Safe")
+        )
+        assert persisted == 1
