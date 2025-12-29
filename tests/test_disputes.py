@@ -183,9 +183,14 @@ async def test_refund_with_lead_estimate_fallback(async_session_maker):
         # Create lead with estimate snapshot
         lead = Lead(
             name="Test Client",
+            phone="780-555-9876",
             email="test@example.com",
             postal_code="M5V3A8",
             estimate_snapshot={"total_before_tax": 180.00, "bedrooms": 2},
+            structured_inputs={"beds": 2, "baths": 1},
+            pricing_config_version="v1",
+            config_hash="test-hash",
+            referral_code="TESTREF01",
         )
         session.add(lead)
         await session.flush()
@@ -253,13 +258,14 @@ async def test_refund_fails_without_base_charge_or_fallback(async_session_maker)
         )
 
         # Should raise error when trying to decide refund without any base charge source
-        with pytest.raises(
-            DomainError,
-            match="Cannot determine refundable amount; base charge missing and no invoice/estimate found",
-        ):
+        with pytest.raises(DomainError) as exc_info:
             await dispute_service.decide_dispute(
                 session,
                 dispute.dispute_id,
                 decision=DecisionType.PARTIAL_REFUND,
                 amount_cents=5000,
             )
+
+        # Verify the error detail contains the expected message
+        assert "Cannot determine refundable amount" in exc_info.value.detail
+        assert "base charge missing and no invoice/estimate found" in exc_info.value.detail
