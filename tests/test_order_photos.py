@@ -62,6 +62,17 @@ def upload_root(tmp_path) -> Path:
 
 
 @pytest.fixture()
+def owner_headers():
+    original_owner_username = settings.owner_basic_username
+    original_owner_password = settings.owner_basic_password
+    settings.owner_basic_username = "owner"
+    settings.owner_basic_password = "secret"
+    yield _basic_auth_header("owner", "secret")
+    settings.owner_basic_username = original_owner_username
+    settings.owner_basic_password = original_owner_password
+
+
+@pytest.fixture()
 def admin_headers():
     original_admin_username = settings.admin_basic_username
     original_admin_password = settings.admin_basic_password
@@ -141,6 +152,21 @@ def test_admin_override_uploads_without_consent(client, async_session_maker, upl
         data={"phase": "before", "admin_override": "true"},
         files=files,
         headers=admin_headers,
+    )
+
+    assert response.status_code == 201
+
+
+def test_owner_can_admin_override(client, async_session_maker, upload_root, owner_headers):
+    """OWNER role has ADMIN permission and can use admin_override."""
+    booking_id = asyncio.run(_create_booking(async_session_maker, consent=False))
+    files = {"file": ("before.jpg", b"abc", "image/jpeg")}
+
+    response = client.post(
+        f"/v1/orders/{booking_id}/photos",
+        data={"phase": "before", "admin_override": "true"},
+        files=files,
+        headers=owner_headers,
     )
 
     assert response.status_code == 201
