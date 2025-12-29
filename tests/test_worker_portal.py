@@ -14,6 +14,13 @@ from app.domain.time_tracking.db_models import WorkTimeEntry
 from app.settings import settings
 
 
+def test_routes_worker_import():
+    import importlib
+
+    importlib.invalidate_caches()
+    importlib.import_module("app.api.routes_worker")
+
+
 def _basic_auth(username: str, password: str) -> dict[str, str]:
     token = base64.b64encode(f"{username}:{password}".encode()).decode()
     return {"Authorization": f"Basic {token}"}

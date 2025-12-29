@@ -353,6 +353,9 @@ def _render_job_detail(
     if message:
         alert_block = f"<div class=\"{'alert error' if error else 'alert'}\">{html.escape(message)}</div>"
 
+    actions_html = ''.join(controls) or '<span class="muted">No actions available.</span>'
+    scope_html = ''.join(scope_bits) or '<tr><td colspan=2 class="muted">No scope captured.</td></tr>'
+
     return f"""
     {alert_block}
     <div class="card">
@@ -374,7 +377,7 @@ def _render_job_detail(
       <div class="stack-tight">
         <div class="muted">Planned: {planned_minutes or '-'} mins · Actual: {actual_minutes} mins</div>
         <div class="muted">State: {html.escape(state)}</div>
-        <div class="actions">{''.join(controls) or '<span class=\"muted\">No actions available.</span>'}</div>
+        <div class="actions">{actions_html}</div>
       </div>
       {finish_form}
     </div>
@@ -384,7 +387,7 @@ def _render_job_detail(
     </div>
     <div class="card">
       <h3>Scope & notes</h3>
-      <table>{''.join(scope_bits) or '<tr><td colspan=2 class=\"muted\">No scope captured.</td></tr>'}</table>
+      <table>{scope_html}</table>
       <p class="muted">Customer notes: {html.escape(lead_notes)}</p>
     </div>
     <div class="card">
