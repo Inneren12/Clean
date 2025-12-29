@@ -8,6 +8,8 @@ from app.domain.disputes import DecisionType, DisputeFacts, DisputeState
 from app.domain.disputes.db_models import FinancialAdjustmentEvent
 from app.domain.disputes import service as dispute_service
 from app.domain.errors import DomainError
+from app.domain.invoices.db_models import Invoice, InvoiceItem
+from app.domain.leads.db_models import Lead
 
 
 @pytest.mark.anyio
@@ -117,3 +119,147 @@ async def test_full_refund_and_snapshot_immutability(async_session_maker):
         assert events[0].adjustment_type == DecisionType.FULL_REFUND.value
         assert events[0].before_totals["refund_total_cents"] == 2000
         assert events[0].after_totals["refund_total_cents"] == 15000
+
+
+@pytest.mark.anyio
+async def test_refund_with_invoice_fallback(async_session_maker):
+    """Test that refunds work for existing bookings with base_charge_cents=0 but invoice exists"""
+    async with async_session_maker() as session:
+        # Create booking with base_charge_cents=0 (simulating existing booking)
+        booking = Booking(
+            team_id=1,  # Use default team from fixtures
+            starts_at=datetime.now(tz=timezone.utc),
+            duration_minutes=120,
+            status="DONE",
+            base_charge_cents=0,  # Not populated (existing booking)
+        )
+        session.add(booking)
+        await session.flush()
+
+        # Create invoice with subtotal (this is what we'll use for fallback)
+        invoice = Invoice(
+            invoice_number="INV-2025-TEST-001",
+            order_id=booking.booking_id,
+            status="paid",
+            issue_date=datetime.now(tz=timezone.utc).date(),
+            currency="CAD",
+            subtotal_cents=25000,
+            tax_cents=3250,
+            total_cents=28250,
+        )
+        session.add(invoice)
+        await session.flush()
+
+        # Open dispute and request partial refund
+        dispute = await dispute_service.open_dispute(
+            session, booking.booking_id, reason="Service issue", opened_by="client"
+        )
+        await dispute_service.attach_facts(
+            session,
+            dispute.dispute_id,
+            DisputeFacts(photo_refs=["photo-1"], checklist_snapshot={"score": 75}),
+        )
+
+        # Decide with partial refund - should use invoice subtotal as fallback
+        await dispute_service.decide_dispute(
+            session,
+            dispute.dispute_id,
+            decision=DecisionType.PARTIAL_REFUND,
+            amount_cents=10000,
+            notes="Partial refund using invoice fallback",
+        )
+        await session.refresh(booking)
+        await session.refresh(dispute)
+
+        assert dispute.decision_cents == 10000
+        assert booking.refund_total_cents == 10000
+        assert dispute.state == DisputeState.DECIDED.value
+
+
+@pytest.mark.anyio
+async def test_refund_with_lead_estimate_fallback(async_session_maker):
+    """Test that refunds work for bookings with base_charge_cents=0 using lead estimate"""
+    async with async_session_maker() as session:
+        # Create lead with estimate snapshot
+        lead = Lead(
+            name="Test Client",
+            email="test@example.com",
+            postal_code="M5V3A8",
+            estimate_snapshot={"total_before_tax": 180.00, "bedrooms": 2},
+        )
+        session.add(lead)
+        await session.flush()
+
+        # Create booking with base_charge_cents=0 but linked to lead
+        booking = Booking(
+            team_id=1,  # Use default team from fixtures
+            lead_id=lead.lead_id,
+            starts_at=datetime.now(tz=timezone.utc),
+            duration_minutes=90,
+            status="DONE",
+            base_charge_cents=0,  # Not populated
+        )
+        session.add(booking)
+        await session.flush()
+
+        # Open dispute and request refund
+        dispute = await dispute_service.open_dispute(
+            session, booking.booking_id, reason="Quality issue"
+        )
+        await dispute_service.attach_facts(
+            session,
+            dispute.dispute_id,
+            DisputeFacts(
+                photo_refs=["photo-1", "photo-2"],
+                checklist_snapshot={"score": 60, "issues": ["bathroom", "kitchen"]},
+            ),
+        )
+
+        # Decide with full refund - should use lead estimate as fallback (180.00 * 100 = 18000 cents)
+        await dispute_service.decide_dispute(
+            session,
+            dispute.dispute_id,
+            decision=DecisionType.FULL_REFUND,
+            notes="Full refund using lead estimate fallback",
+        )
+        await session.refresh(booking)
+        await session.refresh(dispute)
+
+        # Lead estimate is 180.00, which becomes 18000 cents
+        assert dispute.decision_cents == 18000
+        assert booking.refund_total_cents == 18000
+
+
+@pytest.mark.anyio
+async def test_refund_fails_without_base_charge_or_fallback(async_session_maker):
+    """Test that refund fails when base_charge_cents=0 and no fallback sources exist"""
+    async with async_session_maker() as session:
+        # Create booking without base_charge_cents, invoice, or lead estimate
+        booking = Booking(
+            team_id=1,  # Use default team from fixtures
+            starts_at=datetime.now(tz=timezone.utc),
+            duration_minutes=60,
+            status="DONE",
+            base_charge_cents=0,
+        )
+        session.add(booking)
+        await session.flush()
+
+        dispute = await dispute_service.open_dispute(session, booking.booking_id)
+        await dispute_service.attach_facts(
+            session,
+            dispute.dispute_id,
+            DisputeFacts(photo_refs=["photo-1"]),
+        )
+
+        # Should raise error when trying to decide refund without any base charge source
+        with pytest.raises(
+            DomainError,
+            match="Cannot determine refundable amount; base charge missing and no invoice/estimate found",
+        ):
+            await dispute_service.decide_dispute(
+                session,
+                dispute.dispute_id,
+                decision=DecisionType.PARTIAL_REFUND,
+                amount_cents=5000,
+            )

@@ -6,11 +6,13 @@ import logging
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.domain.bookings.db_models import Booking
 from app.domain.disputes.db_models import Dispute, FinancialAdjustmentEvent
 from app.domain.disputes.schemas import DecisionType, DisputeFacts, DisputeState
 from app.domain.errors import DomainError
+from app.domain.invoices.db_models import Invoice
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +36,52 @@ def _ensure_state(dispute: Dispute, allowed: set[DisputeState]) -> None:
         raise DomainError(detail=f"Invalid dispute state transition from {dispute.state}")
 
 
-def _validate_refund_amount(booking: Booking, amount_cents: int) -> int:
-    available = max(booking.base_charge_cents - booking.refund_total_cents, 0)
+async def _derive_effective_base_charge(session: AsyncSession, booking: Booking) -> int:
+    """
+    Derive effective base charge for bookings where base_charge_cents was not populated.
+    Tries invoice subtotal first, then lead estimate snapshot.
+    """
+    if booking.base_charge_cents > 0:
+        return booking.base_charge_cents
+
+    # Try to get base charge from invoice
+    result = await session.execute(
+        select(Invoice.subtotal_cents)
+        .where(Invoice.order_id == booking.booking_id)
+        .order_by(Invoice.created_at.asc())
+        .limit(1)
+    )
+    invoice_subtotal = result.scalar_one_or_none()
+    if invoice_subtotal is not None and invoice_subtotal > 0:
+        return invoice_subtotal
+
+    # Try to get from lead estimate snapshot
+    if booking.lead:
+        estimate_snapshot = booking.lead.estimate_snapshot or {}
+        total_before_tax = estimate_snapshot.get("total_before_tax")
+        if total_before_tax is not None:
+            try:
+                import math
+                return math.ceil(float(total_before_tax) * 100)
+            except (ValueError, TypeError):
+                pass
+
+    # Last resort: check policy snapshot
+    if booking.policy_snapshot:
+        total_amount_cents = booking.policy_snapshot.get("total_amount_cents")
+        if total_amount_cents is not None and total_amount_cents > 0:
+            return total_amount_cents
+
+    raise DomainError(
+        detail="Cannot determine refundable amount; base charge missing and no invoice/estimate found"
+    )
+
+
+async def _validate_refund_amount(
+    session: AsyncSession, booking: Booking, amount_cents: int
+) -> int:
+    effective_base = await _derive_effective_base_charge(session, booking)
+    available = max(effective_base - booking.refund_total_cents, 0)
     if amount_cents <= 0:
         raise DomainError(detail="Refund amount must be positive")
     if amount_cents > available:
@@ -43,7 +89,9 @@ def _validate_refund_amount(booking: Booking, amount_cents: int) -> int:
     return amount_cents
 
 
-def _decision_amount(booking: Booking, decision: DecisionType, amount_cents: int | None) -> int:
+async def _decision_amount(
+    session: AsyncSession, booking: Booking, decision: DecisionType, amount_cents: int | None
+) -> int:
     if decision == DecisionType.NO_REFUND:
         return 0
     if decision == DecisionType.CREDIT_NOTE:
@@ -53,12 +101,13 @@ def _decision_amount(booking: Booking, decision: DecisionType, amount_cents: int
     if decision == DecisionType.PARTIAL_REFUND:
         if amount_cents is None:
             raise DomainError(detail="Partial refund requires amount_cents")
-        return _validate_refund_amount(booking, amount_cents)
+        return await _validate_refund_amount(session, booking, amount_cents)
     if decision == DecisionType.FULL_REFUND:
-        available = max(booking.base_charge_cents - booking.refund_total_cents, 0)
+        effective_base = await _derive_effective_base_charge(session, booking)
+        available = max(effective_base - booking.refund_total_cents, 0)
         if amount_cents is None:
             return available
-        return _validate_refund_amount(booking, amount_cents)
+        return await _validate_refund_amount(session, booking, amount_cents)
     raise DomainError(detail="Unsupported decision type")
 
 
@@ -111,13 +160,17 @@ async def decide_dispute(
     dispute = await _get_dispute(session, dispute_id)
     _ensure_state(dispute, {DisputeState.FACTS_COLLECTED})
 
-    booking = await session.get(Booking, dispute.booking_id)
+    # Load booking with lead relationship for fallback base charge derivation
+    result = await session.execute(
+        select(Booking).where(Booking.booking_id == dispute.booking_id).options(selectinload(Booking.lead))
+    )
+    booking = result.scalar_one_or_none()
     if not booking:
         raise DomainError(detail="Booking not found for dispute")
     if not dispute.facts_snapshot:
         raise DomainError(detail="Cannot decide dispute without evidence snapshot")
 
-    decision_amount = _decision_amount(booking, decision, amount_cents)
+    decision_amount = await _decision_amount(session, booking, decision, amount_cents)
     now = datetime.now(timezone.utc)
 
     before_totals = {
