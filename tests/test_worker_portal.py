@@ -110,6 +110,42 @@ async def test_worker_portal_dashboard_lists_jobs(client, async_session_maker):
 
 
 @pytest.mark.anyio
+async def test_worker_portal_renders_russian_labels(client, async_session_maker):
+    settings.worker_basic_username = "worker"
+    settings.worker_basic_password = "secret"
+    settings.worker_team_id = 1
+    booking_id = await _seed_booking(async_session_maker, team_id=1)
+
+    login = client.post("/worker/login", headers=_basic_auth("worker", "secret"))
+    assert login.status_code == 200
+
+    resp = client.get("/worker", cookies={"ui_lang": "ru"})
+
+    assert resp.status_code == 200
+    assert "Панель" in resp.text
+    assert "Мои заказы" in resp.text
+    assert "Сегодня" in resp.text
+    assert booking_id in resp.text
+
+
+@pytest.mark.anyio
+async def test_worker_job_invoice_text_stays_english_with_ru(client, async_session_maker):
+    settings.worker_basic_username = "worker"
+    settings.worker_basic_password = "secret"
+    settings.worker_team_id = 1
+    booking_id = await _seed_booking(async_session_maker, team_id=1)
+
+    login = client.post("/worker/login", headers=_basic_auth("worker", "secret"))
+    assert login.status_code == 200
+
+    detail = client.get(f"/worker/jobs/{booking_id}", cookies={"ui_lang": "ru"})
+
+    assert detail.status_code == 200
+    assert "Invoice" in detail.text
+    assert "Учёт времени" in detail.text
+
+
+@pytest.mark.anyio
 async def test_worker_cannot_view_other_team(client, async_session_maker):
     settings.worker_basic_username = "worker"
     settings.worker_basic_password = "secret"
