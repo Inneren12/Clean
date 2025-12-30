@@ -125,6 +125,7 @@ async def _load_team_bookings(session: AsyncSession, team_id: int) -> list[Booki
         .options(
             selectinload(Booking.lead),
             selectinload(Booking.order_addons).selectinload(OrderAddon.definition),
+            selectinload(Booking.assigned_worker),
         )
         .order_by(Booking.starts_at)
     )
@@ -157,6 +158,7 @@ async def _load_worker_booking(
         .options(
             selectinload(Booking.lead),
             selectinload(Booking.order_addons).selectinload(OrderAddon.definition),
+            selectinload(Booking.assigned_worker),
         )
     )
     result = await session.execute(stmt)
@@ -277,12 +279,17 @@ def _render_job_card(booking: Booking, invoice: Invoice | None, lang: str) -> st
     badges = " ".join(filter(None, [_status_badge(booking.status), _risk_badge(booking), _deposit_badge(booking, invoice)]))
     address = lead.address if lead else "Address on file"
     safe_booking_id = html.escape(str(booking.booking_id), quote=True)
+    assigned = getattr(booking, "assigned_worker", None)
+    assigned_line = ""
+    if assigned:
+        assigned_line = f"<div class=\"muted\">{html.escape(tr(lang, 'worker.assigned_worker'))}: {html.escape(assigned.name)}</div>"
     return f"""
     <div class="card">
       <div class="row">
         <div>
           <div class="title"><a href="/worker/jobs/{safe_booking_id}">{html.escape(str(booking.booking_id))}</a></div>
           <div class="muted">{html.escape(address or 'Address pending')}</div>
+          {assigned_line}
           <div class="muted">{tr(lang, 'job.starts_at')}: {_format_dt(booking.starts_at)} · {tr(lang, 'job.duration')}: {booking.duration_minutes} mins</div>
         </div>
         <div class="stack" style="align-items:flex-end;">{badges}</div>
@@ -420,6 +427,8 @@ def _render_job_detail(
     lead_name = getattr(lead, "name", "Unknown") or "Unknown"
     lead_address = getattr(lead, "address", "On file") or "On file"
     lead_notes = getattr(lead, "notes", "None") or "None"
+    assigned_worker = getattr(booking, "assigned_worker", None)
+    assigned_display = getattr(assigned_worker, "name", tr(lang, "worker.unassigned"))
     safe_booking_id = html.escape(str(booking.booking_id), quote=True)
     csrf_field = render_csrf_input(csrf_token)
     scope_bits = []
@@ -544,6 +553,7 @@ def _render_job_detail(
       <div class="muted">{tr(lang, 'job.starts_at')}: {_format_dt(booking.starts_at)} · {tr(lang, 'job.duration')}: {booking.duration_minutes} mins</div>
       <div class="muted">Customer: {html.escape(lead_name)}</div>
       <div class="muted">Address: {html.escape(lead_address)}</div>
+      <div class="muted">{html.escape(tr(lang, 'worker.assigned_worker'))}: {html.escape(assigned_display)}</div>
       <div class="stack" style="margin-top:8px;">
         <div class="pill">Deposit: {'Yes' if booking.deposit_required else 'No'} {_deposit_badge(booking, invoice)}</div>
         <div class="pill">Invoice: {invoice_block}</div>
