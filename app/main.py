@@ -22,6 +22,7 @@ from app.api.routes_client import router as client_router
 from app.api.routes_payments import router as payments_router
 from app.api.routes_orders import router as orders_router
 from app.api.routes_time_tracking import router as time_tracking_router
+from app.api.routes_ui_lang import router as ui_lang_router
 from app.api.routes_worker import router as worker_router
 from app.api.worker_auth import WorkerAccessMiddleware
 from app.api.routes_public import router as public_router
@@ -232,6 +233,7 @@ def create_app(app_settings) -> FastAPI:
     app.include_router(orders_router)
     app.include_router(checklists_router)
     app.include_router(time_tracking_router)
+    app.include_router(ui_lang_router)
     app.include_router(worker_router)
     app.include_router(bookings_router)
     app.include_router(leads_router)

@@ -43,6 +43,7 @@ from app.domain.reason_logs import schemas as reason_schemas
 from app.domain.reason_logs import service as reason_service
 from app.domain.time_tracking import schemas as time_schemas
 from app.domain.time_tracking import service as time_service
+from app.infra.i18n import render_lang_toggle, resolve_lang
 from app.settings import settings
 from pydantic import BaseModel
 
@@ -200,7 +201,7 @@ async def _record_job_event(
         )
 
 
-def _wrap_page(body: str, *, title: str = "Worker", active: str | None = None) -> str:
+def _wrap_page(request: Request, body: str, *, title: str = "Worker", active: str | None = None) -> str:
     nav_links = [
         ("Dashboard", "/worker", "dashboard"),
         ("My Jobs", "/worker/jobs", "jobs"),
@@ -209,6 +210,7 @@ def _wrap_page(body: str, *, title: str = "Worker", active: str | None = None) -
         f'<a class="nav-link{" nav-link-active" if active == key else ""}" href="{href}">{html.escape(label)}</a>'
         for label, href, key in nav_links
     )
+    lang_toggle = render_lang_toggle(request, resolve_lang(request))
     return f"""
     <html>
       <head>
@@ -218,9 +220,13 @@ def _wrap_page(body: str, *, title: str = "Worker", active: str | None = None) -
           body {{ font-family: Arial, sans-serif; margin: 12px; background: #f8fafc; color: #0f172a; }}
           .page {{ max-width: 720px; margin: 0 auto; padding: 12px; }}
           .topbar {{ display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }}
+          .topbar-actions {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
           .nav {{ display: flex; gap: 8px; flex-wrap: wrap; }}
           .nav-link {{ text-decoration: none; color: #334155; padding: 6px 10px; border-radius: 999px; border: 1px solid transparent; font-size: 14px; }}
           .nav-link-active {{ background: #0f172a; color: #fff; border-color: #0f172a; }}
+          .lang-toggle {{ display: flex; gap: 6px; font-size: 13px; align-items: center; }}
+          .lang-link {{ text-decoration: none; color: #334155; padding: 4px 8px; border-radius: 8px; border: 1px solid transparent; font-weight: 600; }}
+          .lang-link-active {{ background: #0f172a; color: #fff; border-color: #0f172a; }}
           h1 {{ margin: 8px 0; font-size: 22px; }}
           h2 {{ margin: 16px 0 8px; font-size: 18px; }}
           .card {{ background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }}
@@ -250,7 +256,10 @@ def _wrap_page(body: str, *, title: str = "Worker", active: str | None = None) -
         <div class="page">
           <div class="topbar">
             <div class="title">Worker Portal</div>
-            <div class="nav">{nav}</div>
+            <div class="topbar-actions">
+              <div class="nav">{nav}</div>
+              <div class="lang-toggle">{lang_toggle}</div>
+            </div>
           </div>
           {body}
         </div>
@@ -582,6 +591,7 @@ async def _render_job_page(
     session: AsyncSession,
     booking: Booking,
     identity: WorkerIdentity,
+    request: Request,
     *,
     message: str | None = None,
     error: bool = False,
@@ -622,7 +632,7 @@ async def _render_job_page(
         message=message,
         error=error,
     )
-    return HTMLResponse(_wrap_page(body, title="Job details", active="jobs"))
+    return HTMLResponse(_wrap_page(request, body, title="Job details", active="jobs"))
 
 
 async def _audit_transition(
@@ -673,7 +683,9 @@ async def worker_login(request: Request, identity: WorkerIdentity = Depends(get_
 
 @router.get("/worker", response_class=HTMLResponse)
 async def worker_dashboard(
-    identity: WorkerIdentity = Depends(require_worker), session: AsyncSession = Depends(get_db_session)
+    request: Request,
+    identity: WorkerIdentity = Depends(require_worker),
+    session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
     bookings = await _load_team_bookings(session, identity.team_id)
     counts: dict[str, int] = defaultdict(int)
@@ -690,34 +702,40 @@ async def worker_dashboard(
             break
     await _audit(session, identity, action="VIEW_DASHBOARD", resource_type="portal", resource_id=None)
     await session.commit()
-    return HTMLResponse(_wrap_page(_render_dashboard(next_job, counts), title="Worker dashboard", active="dashboard"))
+    return HTMLResponse(
+        _wrap_page(request, _render_dashboard(next_job, counts), title="Worker dashboard", active="dashboard")
+    )
 
 
 @router.get("/worker/jobs", response_class=HTMLResponse)
 async def worker_jobs(
-    identity: WorkerIdentity = Depends(require_worker), session: AsyncSession = Depends(get_db_session)
+    request: Request,
+    identity: WorkerIdentity = Depends(require_worker),
+    session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
     bookings = await _load_team_bookings(session, identity.team_id)
     invoices = await _latest_invoices(session, [b.booking_id for b in bookings])
     cards = "".join(_render_job_card(booking, invoices.get(booking.booking_id)) for booking in bookings) or "<p class=\"muted\">No jobs yet.</p>"
     await _audit(session, identity, action="VIEW_JOBS", resource_type="portal", resource_id=None)
     await session.commit()
-    return HTMLResponse(_wrap_page(cards, title="My jobs", active="jobs"))
+    return HTMLResponse(_wrap_page(request, cards, title="My jobs", active="jobs"))
 
 
 @router.get("/worker/jobs/{job_id}", response_class=HTMLResponse)
 async def worker_job_detail(
     job_id: str,
+    request: Request,
     identity: WorkerIdentity = Depends(require_worker),
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
     booking = await _load_worker_booking(session, job_id, identity)
-    return await _render_job_page(session, booking, identity)
+    return await _render_job_page(session, booking, identity, request)
 
 
 @router.post("/worker/jobs/{job_id}/addons", response_class=HTMLResponse)
 async def worker_update_addons(
     job_id: str,
+    request: Request,
     addon_id: int = Form(...),
     qty: int = Form(1),
     identity: WorkerIdentity = Depends(require_worker),
@@ -731,7 +749,7 @@ async def worker_update_addons(
         parsed_qty = 0
     if parsed_qty <= 0:
         return await _render_job_page(
-            session, booking, identity, message="Quantity must be positive", error=True, log_view=False
+            session, booking, identity, request, message="Quantity must be positive", error=True, log_view=False
         )
 
     definitions = await addon_service.list_definitions(session, include_inactive=False)
@@ -756,7 +774,9 @@ async def worker_update_addons(
     try:
         await addon_service.set_order_addons(session, booking.booking_id, updated)
     except ValueError as exc:
-        return await _render_job_page(session, booking, identity, message=str(exc), error=True, log_view=False)
+        return await _render_job_page(
+            session, booking, identity, request, message=str(exc), error=True, log_view=False
+        )
 
     invoice_map = await _latest_invoices(session, [booking.booking_id])
     invoice = invoice_map.get(booking.booking_id)
@@ -781,12 +801,13 @@ async def worker_update_addons(
     )
     await session.commit()
 
-    return await _render_job_page(session, booking, identity, message=invoice_message, log_view=False)
+    return await _render_job_page(session, booking, identity, request, message=invoice_message, log_view=False)
 
 
 @router.post("/worker/jobs/{job_id}/start", response_class=HTMLResponse)
 async def worker_start_job(
     job_id: str,
+    request: Request,
     identity: WorkerIdentity = Depends(require_worker),
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
@@ -816,12 +837,13 @@ async def worker_start_job(
     except ValueError as exc:
         message = str(exc)
         error = True
-    return await _render_job_page(session, booking, identity, message=message, error=error, log_view=False)
+    return await _render_job_page(session, booking, identity, request, message=message, error=error, log_view=False)
 
 
 @router.post("/worker/jobs/{job_id}/pause", response_class=HTMLResponse)
 async def worker_pause_job(
     job_id: str,
+    request: Request,
     identity: WorkerIdentity = Depends(require_worker),
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
@@ -853,12 +875,13 @@ async def worker_pause_job(
     except ValueError as exc:
         message = str(exc)
         error = True
-    return await _render_job_page(session, booking, identity, message=message, error=error, log_view=False)
+    return await _render_job_page(session, booking, identity, request, message=message, error=error, log_view=False)
 
 
 @router.post("/worker/jobs/{job_id}/resume", response_class=HTMLResponse)
 async def worker_resume_job(
     job_id: str,
+    request: Request,
     identity: WorkerIdentity = Depends(require_worker),
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
@@ -890,12 +913,13 @@ async def worker_resume_job(
     except ValueError as exc:
         message = str(exc)
         error = True
-    return await _render_job_page(session, booking, identity, message=message, error=error, log_view=False)
+    return await _render_job_page(session, booking, identity, request, message=message, error=error, log_view=False)
 
 
 @router.post("/worker/jobs/{job_id}/finish", response_class=HTMLResponse)
 async def worker_finish_job(
     job_id: str,
+    request: Request,
     delay_reason: str | None = Form(None),
     delay_note: str | None = Form(None),
     price_adjust_reason: str | None = Form(None),
@@ -985,7 +1009,7 @@ async def worker_finish_job(
     except ValueError as exc:
         message = str(exc)
         error = True
-    return await _render_job_page(session, booking, identity, message=message, error=error, log_view=False)
+    return await _render_job_page(session, booking, identity, request, message=message, error=error, log_view=False)
 
 
 @router.get(
