@@ -167,7 +167,7 @@ async def delete_blackout(
     del role
     blackout = await session.get(TeamBlackout, blackout_id)
     if blackout:
-        await session.delete(blackout)
+        session.delete(blackout)
         await session.commit()
     return None
 

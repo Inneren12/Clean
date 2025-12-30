@@ -260,6 +260,28 @@ async def _get_client_booking(session: AsyncSession, order_id: str, client_id: s
     return booking
 
 
+async def _get_owned_booking(
+    session: AsyncSession, booking_id: str, identity: client_schemas.ClientIdentity
+) -> Booking:
+    booking = await session.get(Booking, booking_id)
+    if booking is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+
+    if booking.client_id:
+        if booking.client_id != identity.client_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+        return booking
+
+    if booking.lead_id:
+        lead = await session.get(Lead, booking.lead_id)
+        if lead and lead.email and lead.email.lower() == identity.email.lower():
+            booking.client_id = identity.client_id
+            await session.flush()
+            return booking
+
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+
+
 @router.get("/client/orders/{order_id}")
 async def order_detail(
     order_id: str,
@@ -416,10 +438,15 @@ async def client_slots(
 )
 async def client_create_booking(
     payload: booking_schemas.ClientBookingRequest,
+    identity: client_schemas.ClientIdentity = Depends(require_identity),
     session: AsyncSession = Depends(get_db_session),
 ) -> booking_schemas.ClientBookingResponse:
     normalized_start = payload.normalized_start()
-    lead = await session.get(Lead, payload.lead_id) if payload.lead_id else None
+    lead = None
+    if payload.lead_id:
+        lead = await session.get(Lead, payload.lead_id)
+        if not lead or not lead.email or lead.email.lower() != identity.email.lower():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
 
     try:
         booking = await booking_service.create_booking(
@@ -427,7 +454,7 @@ async def client_create_booking(
             duration_minutes=payload.duration_minutes,
             lead_id=payload.lead_id,
             session=session,
-            client_id=None,
+            client_id=identity.client_id,
             lead=lead,
             service_type=payload.service_type,
             team_id=payload.team_id,
@@ -446,11 +473,10 @@ async def client_create_booking(
 async def client_reschedule_booking(
     booking_id: str,
     payload: booking_schemas.ClientRescheduleRequest,
+    identity: client_schemas.ClientIdentity = Depends(require_identity),
     session: AsyncSession = Depends(get_db_session),
 ) -> booking_schemas.ClientBookingResponse:
-    booking = await session.get(Booking, booking_id)
-    if not booking:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+    booking = await _get_owned_booking(session, booking_id, identity)
 
     try:
         booking = await booking_service.reschedule_booking(
@@ -471,11 +497,10 @@ async def client_reschedule_booking(
 )
 async def client_cancel_booking(
     booking_id: str,
+    identity: client_schemas.ClientIdentity = Depends(require_identity),
     session: AsyncSession = Depends(get_db_session),
 ) -> booking_schemas.ClientBookingResponse:
-    booking = await session.get(Booking, booking_id)
-    if not booking:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+    booking = await _get_owned_booking(session, booking_id, identity)
 
     try:
         booking = await booking_service.cancel_booking(session, booking)
