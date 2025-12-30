@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}PaniDobro Style Guide{% endblock %}
+
+{% block content %}
+<section class="stack">
+  <div class="page-header">
+    <div>
+      <h1>PaniDobro Design System</h1>
+      <p>Tokens, foundations, and UI components for invoices, admin, and client pages.</p>
+    </div>
+    <div class="badge">v1</div>
+  </div>
+
+  <div class="grid two">
+    <div class="card">
+      <div class="section-title"><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="12" rx="3"/><path d="M7 17h10l-2 4h-6z"/></svg><h3>Logo usage</h3></div>
+      <div class="stack">
+        <div class="surface-muted" style="display: flex; align-items: center; gap: var(--space-md);">
+          <img src="{{ url_for('static', path='svg/logo_wordmark_light.svg') }}" alt="PaniDobro wordmark" style="height: 36px;" />
+          <p class="text-muted">Wordmark on light backgrounds only.</p>
+        </div>
+        <div class="muted-card" style="display: flex; align-items: center; gap: var(--space-md);">
+          <img src="{{ url_for('static', path='svg/logo_mark.svg') }}" alt="PaniDobro emblem" style="height: 32px;" />
+          <p class="text-muted">Emblem may be used in mono.</p>
+        </div>
+        <div style="background: var(--color-graphite); color: var(--color-clean-white); padding: var(--space-lg); border-radius: var(--radius-lg); display: flex; gap: var(--space-md); align-items: center;">
+          <img src="{{ url_for('static', path='svg/logo_mark.svg') }}" alt="PaniDobro emblem" style="height: 32px; filter: brightness(0) invert(1);" />
+          <div>
+            <div style="font-weight: var(--font-weight-heading);">Dark background preview</div>
+            <p style="color: rgba(249, 250, 251, 0.82); margin: 4px 0 0 0;">Keep contrast strong for accessibility.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-title"><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h10"/><path d="M7 13h6"/></svg><h3>Buttons</h3></div>
+      <div class="row">
+        <button class="button button-primary">Primary</button>
+        <button class="button button-secondary">Secondary</button>
+        <button class="button button-danger">Danger</button>
+        <button class="button button-primary" disabled>Disabled</button>
+      </div>
+      <p class="text-muted">Buttons use accent teal for primary actions and clear focus outlines for accessibility.</p>
+    </div>
+  </div>
+
+  <div class="grid two">
+    <div class="card">
+      <div class="section-title"><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h10"/><path d="M7 13h10"/><path d="M7 17h6"/></svg><h3>Inputs</h3></div>
+      <div class="stack">
+        <div class="input-field">
+          <label for="input-normal">Label</label>
+          <input id="input-normal" type="text" placeholder="Normal input" />
+          <div class="helper-text">Helper text reinforces expectations.</div>
+        </div>
+        <div class="input-field">
+          <label for="input-focus">Focus state</label>
+          <input id="input-focus" type="text" value="Focus uses accent teal" aria-describedby="focus-helper" />
+          <div id="focus-helper" class="helper-text">Tab to this field to see the outline.</div>
+        </div>
+        <div class="input-field">
+          <label for="input-error">Error</label>
+          <input id="input-error" class="error" type="text" value="Error state" aria-describedby="error-helper" />
+          <div id="error-helper" class="helper-text" style="color: var(--color-error);">Destructive actions use the error palette.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-title"><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="14" rx="2"/><path d="M7 7h10"/><path d="M7 11h10"/><path d="M7 15h6"/></svg><h3>Cards &amp; banners</h3></div>
+      <div class="stack">
+        <div class="card-banner success"><strong>Success:</strong> Payment captured and receipt emailed.</div>
+        <div class="card-banner warning"><strong>Warning:</strong> Invoice is past due by 5 days.</div>
+        <div class="card-banner error"><strong>Error:</strong> Payment method was declined; retry required.</div>
+        <div class="card" style="padding: var(--space-lg); background: var(--color-surface-muted);">
+          <div style="font-weight: var(--font-weight-heading); margin-bottom: var(--space-sm);">Card container</div>
+          <p style="margin: 0;">Use cards to group related content with generous spacing.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid two">
+    <div class="card">
+      <div class="section-title"><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg><h3>Badges</h3></div>
+      <div class="row">
+        <span class="badge success">Paid</span>
+        <span class="badge warning">Pending</span>
+        <span class="badge error">Overdue</span>
+        <span class="badge">Neutral</span>
+      </div>
+      <p class="text-muted">Badges pair with cards and tables for quick status scanning.</p>
+    </div>
+
+    <div class="card">
+      <div class="section-title"><svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18"/><path d="M3 9h18"/><path d="M3 13h18"/><path d="M3 17h18"/></svg><h3>Tables</h3></div>
+      <table class="table" aria-label="Billing table example">
+        <thead>
+          <tr>
+            <th>Client</th>
+            <th>Status</th>
+            <th>Amount</th>
+            <th>Issued</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Marin Co.</td>
+            <td><span class="badge success">Paid</span></td>
+            <td>$1,240</td>
+            <td>Jan 8</td>
+          </tr>
+          <tr>
+            <td>Northwind</td>
+            <td><span class="badge warning">Pending</span></td>
+            <td>$980</td>
+            <td>Jan 11</td>
+          </tr>
+          <tr>
+            <td>Brightline</td>
+            <td><span class="badge error">Overdue</span></td>
+            <td>$2,360</td>
+            <td>Jan 4</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% endblock %}

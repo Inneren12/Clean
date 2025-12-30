@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}PaniDobro{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='css/tokens.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', path='css/base.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', path='css/components.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', path='css/utilities.css') }}" />
+</head>
+<body>
+  <header style="padding: var(--space-lg) var(--space-xl); border-bottom: 1px solid var(--color-border); background: var(--color-surface);
+                 display: flex; align-items: center; gap: var(--space-md);">
+    <img src="{{ url_for('static', path='svg/logo_mark.svg') }}" alt="PaniDobro emblem" style="height: 36px; width: auto;" />
+    <div style="flex: 1;">
+      <div style="font-weight: var(--font-weight-heading); color: var(--color-graphite);">PaniDobro Design System</div>
+      <div class="text-muted" style="font-size: var(--font-size-small);">Consistent UI for invoices, admin, and client experiences</div>
+    </div>
+    <a class="button button-secondary" href="/style-guide">Style Guide</a>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

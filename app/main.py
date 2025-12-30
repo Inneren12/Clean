@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.admin_auth import AdminAccessMiddleware, AdminAuditMiddleware
@@ -122,9 +123,20 @@ def _resolve_cors_origins(app_settings) -> Iterable[str]:
     return []
 
 
+def _try_include_style_guide(app: FastAPI) -> None:
+    try:
+        from app.api.routes_style_guide import router as style_guide_router
+    except Exception as exc:
+        logger.warning("style_guide_disabled", extra={"extra": {"reason": str(exc)}})
+        return
+    app.include_router(style_guide_router)
+
+
 def create_app(app_settings) -> FastAPI:
     configure_logging()
     app = FastAPI(title="Cleaning Economy Bot", version="1.0.0")
+
+    app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
     rate_limiter = create_rate_limiter(app_settings)
     app.state.rate_limiter = rate_limiter
@@ -224,6 +236,7 @@ def create_app(app_settings) -> FastAPI:
     app.include_router(bookings_router)
     app.include_router(leads_router)
     app.include_router(admin_router)
+    _try_include_style_guide(app)
     return app
 
 
