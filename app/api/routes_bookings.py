@@ -4,6 +4,7 @@ import logging
 
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.exceptions import HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.admin_auth import require_admin
@@ -13,7 +14,7 @@ from app.domain.analytics.service import (
     estimated_revenue_from_lead,
     log_event,
 )
-from app.domain.bookings.db_models import Booking
+from app.domain.bookings.db_models import Booking, TeamBlackout, TeamWorkingHours
 from app.dependencies import get_db_session
 from app.domain.bookings import schemas as booking_schemas
 from app.domain.bookings import service as booking_service
@@ -45,6 +46,130 @@ async def get_slots(
         slots=slot_result.slots,
         clarifier=slot_result.clarifier,
     )
+
+
+@router.get(
+    "/v1/admin/working-hours",
+    response_model=list[booking_schemas.WorkingHoursResponse],
+)
+async def list_working_hours(
+    session: AsyncSession = Depends(get_db_session), role: str = Depends(require_admin)
+) -> list[booking_schemas.WorkingHoursResponse]:
+    del role
+    result = await session.execute(select(TeamWorkingHours))
+    records = result.scalars().all()
+    return [
+        booking_schemas.WorkingHoursResponse(
+            id=record.id,
+            team_id=record.team_id,
+            day_of_week=record.day_of_week,
+            start_time=record.start_time,
+            end_time=record.end_time,
+        )
+        for record in records
+    ]
+
+
+@router.post(
+    "/v1/admin/working-hours",
+    response_model=booking_schemas.WorkingHoursResponse,
+)
+async def upsert_working_hours(
+    payload: booking_schemas.WorkingHoursUpdateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    role: str = Depends(require_admin),
+) -> booking_schemas.WorkingHoursResponse:
+    del role
+    existing_result = await session.execute(
+        select(TeamWorkingHours).where(
+            TeamWorkingHours.team_id == payload.team_id,
+            TeamWorkingHours.day_of_week == payload.day_of_week,
+        )
+    )
+    record = existing_result.scalar_one_or_none()
+    if record:
+        record.start_time = payload.start_time
+        record.end_time = payload.end_time
+    else:
+        record = TeamWorkingHours(
+            team_id=payload.team_id,
+            day_of_week=payload.day_of_week,
+            start_time=payload.start_time,
+            end_time=payload.end_time,
+        )
+        session.add(record)
+
+    await session.commit()
+    await session.refresh(record)
+    return booking_schemas.WorkingHoursResponse(
+        id=record.id,
+        team_id=record.team_id,
+        day_of_week=record.day_of_week,
+        start_time=record.start_time,
+        end_time=record.end_time,
+    )
+
+
+@router.get(
+    "/v1/admin/blackouts", response_model=list[booking_schemas.BlackoutResponse]
+)
+async def list_blackouts(
+    session: AsyncSession = Depends(get_db_session), role: str = Depends(require_admin)
+) -> list[booking_schemas.BlackoutResponse]:
+    del role
+    result = await session.execute(select(TeamBlackout))
+    records = result.scalars().all()
+    return [
+        booking_schemas.BlackoutResponse(
+            id=record.id,
+            team_id=record.team_id,
+            starts_at=record.starts_at,
+            ends_at=record.ends_at,
+            reason=record.reason,
+        )
+        for record in records
+    ]
+
+
+@router.post(
+    "/v1/admin/blackouts", response_model=booking_schemas.BlackoutResponse
+)
+async def create_blackout(
+    payload: booking_schemas.BlackoutCreateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    role: str = Depends(require_admin),
+) -> booking_schemas.BlackoutResponse:
+    del role
+    blackout = TeamBlackout(
+        team_id=payload.team_id,
+        starts_at=payload.starts_at,
+        ends_at=payload.ends_at,
+        reason=payload.reason,
+    )
+    session.add(blackout)
+    await session.commit()
+    await session.refresh(blackout)
+    return booking_schemas.BlackoutResponse(
+        id=blackout.id,
+        team_id=blackout.team_id,
+        starts_at=blackout.starts_at,
+        ends_at=blackout.ends_at,
+        reason=blackout.reason,
+    )
+
+
+@router.delete("/v1/admin/blackouts/{blackout_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_blackout(
+    blackout_id: int,
+    session: AsyncSession = Depends(get_db_session),
+    role: str = Depends(require_admin),
+) -> None:
+    del role
+    blackout = await session.get(TeamBlackout, blackout_id)
+    if blackout:
+        await session.delete(blackout)
+        await session.commit()
+    return None
 
 
 @router.post("/v1/bookings", response_model=booking_schemas.BookingResponse, status_code=status.HTTP_201_CREATED)

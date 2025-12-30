@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
 import anyio
 import pytest
 import sqlalchemy as sa
+from datetime import time
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -48,6 +49,18 @@ def test_engine():
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
             await conn.execute(sa.insert(booking_db_models.Team).values(team_id=1, name="Default Team"))
+            await conn.execute(
+                sa.insert(booking_db_models.TeamWorkingHours),
+                [
+                    {
+                        "team_id": 1,
+                        "day_of_week": day,
+                        "start_time": time(hour=9, minute=0),
+                        "end_time": time(hour=17, minute=0),
+                    }
+                    for day in range(7)
+                ],
+            )
 
     asyncio.run(init_models())
     yield engine
@@ -95,6 +108,18 @@ def clean_database(test_engine):
             for table in reversed(Base.metadata.sorted_tables):
                 await conn.execute(table.delete())
             await conn.execute(sa.insert(booking_db_models.Team).values(team_id=1, name="Default Team"))
+            await conn.execute(
+                sa.insert(booking_db_models.TeamWorkingHours),
+                [
+                    {
+                        "team_id": 1,
+                        "day_of_week": day,
+                        "start_time": time(hour=9, minute=0),
+                        "end_time": time(hour=17, minute=0),
+                    }
+                    for day in range(7)
+                ],
+            )
 
     asyncio.run(truncate_tables())
     rate_limiter = getattr(app.state, "rate_limiter", None)

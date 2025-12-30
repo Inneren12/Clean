@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     retention_chat_days: int = Field(30, env="RETENTION_CHAT_DAYS")
     retention_lead_days: int = Field(365, env="RETENTION_LEAD_DAYS")
     retention_enable_leads: bool = Field(False, env="RETENTION_ENABLE_LEADS")
-    slot_provider_mode: Literal["stub"] = Field("stub", env="SLOT_PROVIDER_MODE")
+    slot_provider_mode: Literal["stub", "db"] = Field("db", env="SLOT_PROVIDER_MODE")
     stripe_secret_key: str | None = Field(None, env="STRIPE_SECRET_KEY")
     stripe_webhook_secret: str | None = Field(None, env="STRIPE_WEBHOOK_SECRET")
     stripe_success_url: str = Field("http://localhost:3000/deposit-success?session_id={CHECKOUT_SESSION_ID}", env="STRIPE_SUCCESS_URL")

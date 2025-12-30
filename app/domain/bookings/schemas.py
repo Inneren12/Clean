@@ -1,10 +1,12 @@
 from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from enum import Enum
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.domain.bookings.policy import BookingPolicySnapshot
 from app.domain.bookings.service import (
+    DEFAULT_SLOT_DURATION_MINUTES,
     LOCAL_TZ,
     TimeWindowPreference,
     apply_duration_constraints,
@@ -148,3 +150,109 @@ class ConsentPhotosUpdateRequest(BaseModel):
 class ConsentPhotosResponse(BaseModel):
     order_id: str
     consent_photos: bool
+
+
+class WorkingHoursUpdateRequest(BaseModel):
+    team_id: int = Field(1, ge=1)
+    day_of_week: int = Field(ge=0, le=6)
+    start_time: time
+    end_time: time
+
+    @model_validator(mode="after")
+    def ensure_window(self) -> "WorkingHoursUpdateRequest":
+        if self.end_time <= self.start_time:
+            raise ValueError("end_time must be after start_time")
+        return self
+
+
+class WorkingHoursResponse(BaseModel):
+    id: int
+    team_id: int
+    day_of_week: int
+    start_time: time
+    end_time: time
+
+
+class BlackoutCreateRequest(BaseModel):
+    team_id: int = Field(1, ge=1)
+    starts_at: datetime
+    ends_at: datetime
+    reason: str | None = None
+
+    @model_validator(mode="after")
+    def ensure_bounds(self) -> "BlackoutCreateRequest":
+        if self.ends_at <= self.starts_at:
+            raise ValueError("ends_at must be after starts_at")
+        return self
+
+
+class BlackoutResponse(BaseModel):
+    id: int
+    team_id: int
+    starts_at: datetime
+    ends_at: datetime
+    reason: str | None = None
+
+
+class ClientSlotQuery(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    team_id: int | None = Field(None, ge=1)
+    start: datetime = Field(alias="from", validation_alias="from")
+    end: datetime = Field(alias="to", validation_alias="to")
+    duration_minutes: int = Field(DEFAULT_SLOT_DURATION_MINUTES, gt=0)
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> "ClientSlotQuery":
+        if self.end <= self.start:
+            raise ValueError("to must be after from")
+        return self
+
+
+class ClientBookingRequest(BaseModel):
+    starts_at: datetime
+    duration_minutes: int = Field(DEFAULT_SLOT_DURATION_MINUTES, gt=0)
+    lead_id: str | None = None
+    team_id: int | None = Field(None, ge=1)
+    service_type: CleaningType | None = None
+
+    def normalized_start(self) -> datetime:
+        local_start = self.starts_at
+        if self.starts_at.tzinfo is None:
+            local_start = self.starts_at.replace(tzinfo=LOCAL_TZ)
+        else:
+            local_start = self.starts_at.astimezone(LOCAL_TZ)
+        return local_start.astimezone(timezone.utc)
+
+
+class ClientRescheduleRequest(BaseModel):
+    starts_at: datetime
+    duration_minutes: int = Field(DEFAULT_SLOT_DURATION_MINUTES, gt=0)
+    service_type: CleaningType | None = None
+
+    def normalized_start(self) -> datetime:
+        local_start = self.starts_at
+        if self.starts_at.tzinfo is None:
+            local_start = self.starts_at.replace(tzinfo=LOCAL_TZ)
+        else:
+            local_start = self.starts_at.astimezone(LOCAL_TZ)
+        return local_start.astimezone(timezone.utc)
+
+
+class ClientBookingResponse(BaseModel):
+    booking_id: str
+    status: str
+    starts_at: datetime
+    duration_minutes: int
+    lead_id: str | None = None
+    policy_snapshot: BookingPolicySnapshot | None = None
+    deposit_required: bool
+    deposit_cents: int | None = None
+    deposit_policy: list[str]
+    deposit_status: str | None = None
+    cancellation_exception: bool = False
+
+
+class ClientSlotAvailabilityResponse(BaseModel):
+    duration_minutes: int
+    slots: list[datetime]
