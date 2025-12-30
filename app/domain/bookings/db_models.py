@@ -1,5 +1,6 @@
 import uuid
 from datetime import date, datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -7,6 +8,9 @@ from sqlalchemy.types import JSON
 
 from app.infra.db import Base
 from app.domain.clients.db_models import ClientUser
+
+if TYPE_CHECKING:  # pragma: no cover
+    from app.domain.workers.db_models import Worker
 
 
 class Team(Base):
@@ -42,6 +46,9 @@ class Booking(Base):
     )
     team_id: Mapped[int] = mapped_column(ForeignKey("teams.team_id"), nullable=False)
     lead_id: Mapped[str | None] = mapped_column(ForeignKey("leads.lead_id"), nullable=True)
+    assigned_worker_id: Mapped[int | None] = mapped_column(
+        ForeignKey("workers.worker_id"), nullable=True, index=True
+    )
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     actual_duration_minutes: Mapped[int | None] = mapped_column(Integer)
@@ -94,6 +101,9 @@ class Booking(Base):
 
     team: Mapped[Team] = relationship("Team", back_populates="bookings")
     client: Mapped[ClientUser | None] = relationship("ClientUser")
+    assigned_worker: Mapped["Worker | None"] = relationship(
+        "Worker", back_populates="bookings"
+    )
     lead = relationship("Lead", backref="bookings")
     subscription = relationship("Subscription", back_populates="orders")
     photos: Mapped[list["OrderPhoto"]] = relationship(

@@ -4,14 +4,14 @@ import csv
 import io
 import logging
 import math
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timezone, timedelta
 from typing import Iterable, List, Optional
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response, status
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, or_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,7 +41,7 @@ from app.domain.analytics.service import (
     log_event,
 )
 from app.dependencies import get_db_session
-from app.domain.bookings.db_models import Booking
+from app.domain.bookings.db_models import Booking, Team
 from app.domain.bookings import schemas as booking_schemas
 from app.domain.bookings import service as booking_service
 from app.domain.export_events.db_models import ExportEvent
@@ -66,6 +66,7 @@ from app.domain.subscriptions import schemas as subscription_schemas
 from app.domain.subscriptions import service as subscription_service
 from app.domain.subscriptions.db_models import Subscription
 from app.domain.admin_audit import service as audit_service
+from app.domain.workers.db_models import Worker
 from app.infra.csrf import get_csrf_token, issue_csrf_token, render_csrf_input, require_csrf
 from app.infra.bot_store import BotStore
 from app.infra.i18n import render_lang_toggle, resolve_lang, tr
@@ -133,9 +134,34 @@ def _icon(name: str) -> str:
         </svg>
         """,
         "warning": """
-        <svg class=\"icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\">
+        <svg class=\"icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"> 
           <path d=\"m12 3.5 9 16H3l9-16Z\" />
           <path d=\"M12 10v4.5M12 18.1h.01\" />
+        </svg>
+        """,
+        "users": """
+        <svg class=\"icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\">
+          <path d=\"M17 21v-2.5A3.5 3.5 0 0 0 13.5 15h-7A3.5 3.5 0 0 0 3 18.5V21\" />
+          <circle cx=\"10\" cy=\"7\" r=\"3.5\" />
+          <path d=\"M21 21v-2a3 3 0 0 0-2.5-3 3.1 3.1 0 0 0-1.3 0\" />
+          <path d=\"M17.5 3.5a3 3 0 1 1-2 5.3\" />
+        </svg>
+        """,
+        "calendar": """
+        <svg class=\"icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\">
+          <rect x=\"3.5\" y=\"5\" width=\"17\" height=\"15.5\" rx=\"2.5\" />
+          <path d=\"M7.5 3.5v3M16.5 3.5v3M3.5 9.5h17\" />
+        </svg>
+        """,
+        "edit": """
+        <svg class=\"icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\">
+          <path d=\"M4 20h4l11-11-4-4L4 16v4Z\" />
+          <path d=\"M14 5 19 10\" />
+        </svg>
+        """,
+        "plus": """
+        <svg class=\"icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\">
+          <path d=\"M12 5v14M5 12h14\" />
         </svg>
         """,
     }
@@ -333,6 +359,16 @@ def _wrap_page(
             _icon("eye") + html.escape(tr(nav_lang, "admin.nav.observability")),
             "/v1/admin/observability",
             "observability",
+        ),
+        (
+            _icon("users") + html.escape(tr(nav_lang, "admin.nav.workers")),
+            "/v1/admin/ui/workers",
+            "workers",
+        ),
+        (
+            _icon("calendar") + html.escape(tr(nav_lang, "admin.nav.dispatch")),
+            "/v1/admin/ui/dispatch",
+            "dispatch",
         ),
         (
             _icon("receipt") + html.escape(tr(nav_lang, "admin.nav.invoices")),
@@ -2328,3 +2364,459 @@ async def update_support_ticket(
     await session.commit()
     await session.refresh(ticket)
     return _ticket_response(ticket)
+
+
+def _worker_status_badge(worker: Worker, lang: str | None) -> str:
+    label = tr(lang, "admin.workers.status_active") if worker.is_active else tr(lang, "admin.workers.status_inactive")
+    cls = "badge" + (" badge-active" if worker.is_active else "")
+    return f'<span class="{cls}">{html.escape(label)}</span>'
+
+
+def _render_worker_form(worker: Worker | None, teams: list[Team], lang: str | None, csrf_input: str) -> str:
+    team_options = "".join(
+        f'<option value="{team.team_id}" {"selected" if worker and worker.team_id == team.team_id else ""}>{html.escape(team.name)}</option>'
+        for team in teams
+    )
+    hourly_rate = getattr(worker, "hourly_rate_cents", None)
+    return f"""
+    <div class=\"card\">
+      <div class=\"card-row\">
+        <div>
+          <div class=\"title with-icon\">{_icon('users')}{html.escape(tr(lang, 'admin.workers.title'))}</div>
+          <div class=\"muted\">{html.escape(tr(lang, 'admin.workers.subtitle'))}</div>
+        </div>
+      </div>
+      <form class=\"stack\" method=\"post\">
+        <div class=\"form-group\">
+          <label>{html.escape(tr(lang, 'admin.workers.name'))}</label>
+          <input class=\"input\" type=\"text\" name=\"name\" required value=\"{html.escape(getattr(worker, 'name', '') or '')}\" />
+        </div>
+        <div class=\"form-group\">
+          <label>{html.escape(tr(lang, 'admin.workers.phone'))}</label>
+          <input class=\"input\" type=\"text\" name=\"phone\" required value=\"{html.escape(getattr(worker, 'phone', '') or '')}\" />
+        </div>
+        <div class=\"form-group\">
+          <label>{html.escape(tr(lang, 'admin.workers.email'))}</label>
+          <input class=\"input\" type=\"email\" name=\"email\" value=\"{html.escape(getattr(worker, 'email', '') or '')}\" />
+        </div>
+        <div class=\"form-group\">
+          <label>{html.escape(tr(lang, 'admin.workers.role'))}</label>
+          <input class=\"input\" type=\"text\" name=\"role\" value=\"{html.escape(getattr(worker, 'role', '') or '')}\" />
+        </div>
+        <div class=\"form-group\">
+          <label>{html.escape(tr(lang, 'admin.workers.hourly_rate'))}</label>
+          <input class=\"input\" type=\"number\" name=\"hourly_rate_cents\" min=\"0\" step=\"50\" value=\"{'' if hourly_rate is None else hourly_rate}\" />
+        </div>
+        <div class=\"form-group\">
+          <label>{html.escape(tr(lang, 'admin.workers.team'))}</label>
+          <select class=\"input\" name=\"team_id\" required>{team_options}</select>
+        </div>
+        <div class=\"actions\">
+          <label class=\"with-icon\"><input type=\"checkbox\" name=\"is_active\" {'' if worker and not worker.is_active else 'checked'} /> {html.escape(tr(lang, 'admin.workers.is_active'))}</label>
+        </div>
+        {csrf_input}
+        <button class=\"btn\" type=\"submit\">{html.escape(tr(lang, 'admin.workers.save'))}</button>
+      </form>
+    </div>
+    """
+
+
+async def _list_workers(
+    session: AsyncSession, *, q: str | None, active_only: bool, team_id: int | None
+) -> list[Worker]:
+    filters = []
+    if active_only:
+        filters.append(Worker.is_active.is_(True))
+    if team_id:
+        filters.append(Worker.team_id == team_id)
+    if q:
+        pattern = f"%{q.lower()}%"
+        filters.append(
+            or_(
+                func.lower(Worker.name).like(pattern),
+                func.lower(Worker.phone).like(pattern),
+                func.lower(Worker.email).like(pattern),
+            )
+        )
+    stmt = select(Worker).where(*filters).options(selectinload(Worker.team)).order_by(Worker.created_at.desc())
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+
+@router.get("/v1/admin/ui/workers", response_class=HTMLResponse)
+async def admin_workers_list(
+    request: Request,
+    q: str | None = Query(default=None),
+    active_only: bool = Query(default=False),
+    team_id: int | None = Query(default=None),
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_dispatch),
+) -> HTMLResponse:
+    lang = resolve_lang(request)
+    workers = await _list_workers(session, q=q, active_only=active_only, team_id=team_id)
+    teams = (await session.execute(select(Team).order_by(Team.name))).scalars().all()
+    team_filter_options = "".join(
+        f'<option value="{team.team_id}" {"selected" if team_id == team.team_id else ""}>{html.escape(team.name)}</option>'
+        for team in teams
+    )
+    cards: list[str] = []
+    for worker in workers:
+        contact = [worker.phone]
+        if worker.email:
+            contact.append(worker.email)
+        cards.append(
+            """
+            <div class=\"card\">
+              <div class=\"card-row\">
+                <div>
+                  <div class=\"title with-icon\">{icon}{name}</div>
+                  <div class=\"muted\">{team}</div>
+                  <div class=\"muted\">{contact_label}: {contact}</div>
+                </div>
+                <div class=\"actions\">{status}<a class=\"btn secondary small\" href=\"/v1/admin/ui/workers/{worker_id}\">{edit_icon}{edit_label}</a></div>
+              </div>
+              <div class=\"muted small\">{role}</div>
+            </div>
+            """.format(
+                icon=_icon("users"),
+                name=html.escape(worker.name),
+                team=html.escape(getattr(worker.team, "name", tr(lang, "admin.workers.team"))),
+                contact_label=html.escape(tr(lang, "admin.workers.contact")),
+                contact=html.escape(" · ".join(filter(None, contact))),
+                status=_worker_status_badge(worker, lang),
+                worker_id=worker.worker_id,
+                edit_icon=_icon("edit"),
+                edit_label=html.escape(tr(lang, "admin.workers.save")),
+                role=html.escape(worker.role or tr(lang, "admin.workers.role")),
+            )
+        )
+    content = "".join(
+        [
+            "<div class=\"card\">",
+            "<div class=\"card-row\">",
+            f"<div><div class=\"title with-icon\">{_icon('users')}{html.escape(tr(lang, 'admin.workers.title'))}</div>",
+            f"<div class=\"muted\">{html.escape(tr(lang, 'admin.workers.subtitle'))}</div></div>",
+            "<div class=\"actions\">",
+            f"<a class=\"btn\" href=\"/v1/admin/ui/workers/new\">{_icon('plus')}{html.escape(tr(lang, 'admin.workers.create'))}</a>",
+            "</div></div>",
+            "<form class=\"filters\" method=\"get\">",
+            f"<div class=\"form-group\"><label>{html.escape(tr(lang, 'admin.workers.search'))}</label><input class=\"input\" type=\"text\" name=\"q\" value=\"{html.escape(q or '')}\" /></div>",
+            f"<div class=\"form-group\"><label>{html.escape(tr(lang, 'admin.workers.team'))}</label><select class=\"input\" name=\"team_id\"><option value=\"\"></option>{team_filter_options}</select></div>",
+            f"<div class=\"form-group\"><label>{html.escape(tr(lang, 'admin.workers.active_only'))}</label><input type=\"checkbox\" name=\"active_only\" value=\"1\" { 'checked' if active_only else '' } /></div>",
+            "<div class=\"form-group\"><label>&nbsp;</label><div class=\"actions\"><button class=\"btn\" type=\"submit\">Apply</button><a class=\"btn secondary\" href=\"/v1/admin/ui/workers\">Reset</a></div></div>",
+            "</form>",
+            "</div>",
+            "<div class=\"stack\">{cards}</div>".format(cards="".join(cards) or _render_empty(tr(lang, "admin.workers.none"))),
+        ]
+    )
+    return HTMLResponse(_wrap_page(request, content, title="Admin — Workers", active="workers", page_lang=lang))
+
+
+@router.get("/v1/admin/ui/workers/new", response_class=HTMLResponse)
+async def admin_workers_new_form(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_dispatch),
+) -> HTMLResponse:
+    lang = resolve_lang(request)
+    teams = (await session.execute(select(Team).order_by(Team.name))).scalars().all()
+    csrf_token = get_csrf_token(request)
+    response = HTMLResponse(
+        _wrap_page(
+            request,
+            _render_worker_form(None, teams, lang, render_csrf_input(csrf_token)),
+            title="Admin — Workers",
+            active="workers",
+            page_lang=lang,
+        )
+    )
+    issue_csrf_token(request, response, csrf_token)
+    return response
+
+
+@router.post("/v1/admin/ui/workers/new", response_class=HTMLResponse)
+async def admin_workers_create(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    identity: AdminIdentity = Depends(require_dispatch),
+) -> Response:
+    await require_csrf(request)
+    form = await request.form()
+    name = (form.get("name") or "").strip()
+    phone = (form.get("phone") or "").strip()
+    email = (form.get("email") or "").strip() or None
+    role = (form.get("role") or "").strip() or None
+    team_id_raw = form.get("team_id")
+    hourly_rate_raw = form.get("hourly_rate_cents")
+    is_active = form.get("is_active") == "on" or form.get("is_active") == "1"
+
+    if not name or not phone or not team_id_raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing required fields")
+    team_id = int(team_id_raw)
+    team = await session.get(Team, team_id)
+    if team is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+    hourly_rate_cents = int(hourly_rate_raw) if hourly_rate_raw else None
+    worker = Worker(
+        name=name,
+        phone=phone,
+        email=email,
+        role=role,
+        team_id=team_id,
+        hourly_rate_cents=hourly_rate_cents,
+        is_active=is_active,
+    )
+    session.add(worker)
+    await audit_service.record_action(
+        session,
+        identity=identity,
+        action="CREATE_WORKER",
+        resource_type="worker",
+        resource_id=None,
+        before=None,
+        after={
+            "name": name,
+            "phone": phone,
+            "email": email,
+            "role": role,
+            "team_id": team_id,
+            "hourly_rate_cents": hourly_rate_cents,
+            "is_active": is_active,
+        },
+    )
+    await session.commit()
+    return RedirectResponse("/v1/admin/ui/workers", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.get("/v1/admin/ui/workers/{worker_id}", response_class=HTMLResponse)
+async def admin_workers_edit_form(
+    worker_id: int,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_dispatch),
+) -> HTMLResponse:
+    lang = resolve_lang(request)
+    worker = await session.get(Worker, worker_id)
+    if worker is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
+    teams = (await session.execute(select(Team).order_by(Team.name))).scalars().all()
+    csrf_token = get_csrf_token(request)
+    response = HTMLResponse(
+        _wrap_page(
+            request,
+            _render_worker_form(worker, teams, lang, render_csrf_input(csrf_token)),
+            title="Admin — Workers",
+            active="workers",
+            page_lang=lang,
+        )
+    )
+    issue_csrf_token(request, response, csrf_token)
+    return response
+
+
+@router.post("/v1/admin/ui/workers/{worker_id}", response_class=HTMLResponse)
+async def admin_workers_update(
+    worker_id: int,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    identity: AdminIdentity = Depends(require_dispatch),
+) -> Response:
+    await require_csrf(request)
+    worker = await session.get(Worker, worker_id)
+    if worker is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
+
+    before = {
+        "name": worker.name,
+        "phone": worker.phone,
+        "email": worker.email,
+        "role": worker.role,
+        "team_id": worker.team_id,
+        "hourly_rate_cents": worker.hourly_rate_cents,
+        "is_active": worker.is_active,
+    }
+
+    form = await request.form()
+    worker.name = (form.get("name") or worker.name).strip()
+    worker.phone = (form.get("phone") or worker.phone).strip()
+    worker.email = (form.get("email") or "").strip() or None
+    worker.role = (form.get("role") or "").strip() or None
+    team_id_raw = form.get("team_id")
+    if team_id_raw:
+        team = await session.get(Team, int(team_id_raw))
+        if team is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+        worker.team_id = team.team_id
+    hourly_rate_raw = form.get("hourly_rate_cents")
+    worker.hourly_rate_cents = int(hourly_rate_raw) if hourly_rate_raw else None
+    worker.is_active = form.get("is_active") == "on" or form.get("is_active") == "1"
+
+    await audit_service.record_action(
+        session,
+        identity=identity,
+        action="UPDATE_WORKER",
+        resource_type="worker",
+        resource_id=str(worker.worker_id),
+        before=before,
+        after={
+            "name": worker.name,
+            "phone": worker.phone,
+            "email": worker.email,
+            "role": worker.role,
+            "team_id": worker.team_id,
+            "hourly_rate_cents": worker.hourly_rate_cents,
+            "is_active": worker.is_active,
+        },
+    )
+    await session.commit()
+    return RedirectResponse("/v1/admin/ui/workers", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.get("/v1/admin/ui/dispatch", response_class=HTMLResponse)
+async def admin_dispatch_board(
+    request: Request,
+    day: str | None = Query(default=None, alias="date"),
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_dispatch),
+) -> HTMLResponse:
+    lang = resolve_lang(request)
+    try:
+        target_date = date.fromisoformat(day) if day else datetime.now(timezone.utc).date()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid date") from exc
+    start_dt = datetime.combine(target_date, time.min).replace(tzinfo=timezone.utc)
+    end_dt = start_dt + timedelta(days=1)
+
+    stmt = (
+        select(Booking)
+        .where(Booking.starts_at >= start_dt, Booking.starts_at < end_dt)
+        .options(
+            selectinload(Booking.lead),
+            selectinload(Booking.assigned_worker),
+            selectinload(Booking.team),
+        )
+        .order_by(Booking.starts_at)
+    )
+    bookings = (await session.execute(stmt)).scalars().all()
+    team_ids = {booking.team_id for booking in bookings}
+    workers_stmt = select(Worker).where(Worker.team_id.in_(team_ids or {0})).options(selectinload(Worker.team)).order_by(Worker.name)
+    workers = (await session.execute(workers_stmt)).scalars().all()
+    workers_by_team: dict[int, list[Worker]] = {}
+    for worker in workers:
+        workers_by_team.setdefault(worker.team_id, []).append(worker)
+
+    csrf_token = get_csrf_token(request)
+    csrf_input = render_csrf_input(csrf_token)
+
+    cards: list[str] = []
+    for booking in bookings:
+        lead: Lead | None = getattr(booking, "lead", None)
+        assigned = getattr(booking, "assigned_worker", None)
+        worker_options = [
+            f'<option value="">{html.escape(tr(lang, "admin.dispatch.unassigned"))}</option>'
+        ]
+        for worker in workers_by_team.get(booking.team_id, []):
+            selected = "selected" if worker.worker_id == getattr(booking, "assigned_worker_id", None) else ""
+            status_hint = "" if worker.is_active else " (inactive)"
+            worker_options.append(
+                f'<option value="{worker.worker_id}" {selected}>{html.escape(worker.name + status_hint)}</option>'
+            )
+        cards.append(
+            """
+            <div class=\"card\">
+              <div class=\"card-row\">
+                <div>
+                  <div class=\"title\">{starts}</div>
+                  <div class=\"muted\">{customer}</div>
+                  <div class=\"muted\">{team_label}: {team}</div>
+                </div>
+                <div class=\"actions\">{status}</div>
+              </div>
+              <form class=\"actions\" method=\"post\" action=\"/v1/admin/ui/dispatch/assign\">
+                <input type=\"hidden\" name=\"booking_id\" value=\"{booking_id}\" />
+                {csrf_input}
+                <label class=\"muted\">{assign_label}</label>
+                <select class=\"input\" name=\"worker_id\">{options}</select>
+                <button class=\"btn secondary\" type=\"submit\">{save_label}</button>
+              </form>
+              <div class=\"muted small\">{current}</div>
+            </div>
+            """.format(
+                starts=html.escape(_format_dt(booking.starts_at)),
+                customer=html.escape(getattr(lead, "name", tr(lang, "admin.dispatch.customer"))),
+                team_label=html.escape(tr(lang, "admin.dispatch.team")),
+                team=html.escape(getattr(booking.team, "name", "")),
+                status=html.escape(booking.status),
+                booking_id=html.escape(booking.booking_id),
+                assign_label=html.escape(tr(lang, "admin.dispatch.assigned_worker")),
+                options="".join(worker_options),
+                save_label=html.escape(tr(lang, "admin.dispatch.save")),
+                current=html.escape(
+                    getattr(assigned, "name", tr(lang, "admin.dispatch.unassigned"))
+                ),
+                csrf_input=csrf_input,
+            )
+        )
+
+    date_value = target_date.isoformat()
+    content = "".join(
+        [
+            "<div class=\"card\">",
+            "<div class=\"card-row\">",
+            f"<div><div class=\"title with-icon\">{_icon('calendar')}{html.escape(tr(lang, 'admin.dispatch.title'))}</div>",
+            f"<div class=\"muted\">{html.escape(tr(lang, 'admin.dispatch.subtitle'))}</div></div>",
+            "<form class=\"actions\" method=\"get\">",
+            f"<label class=\"muted\">{html.escape(tr(lang, 'admin.dispatch.date_label'))}</label>",
+            f"<input class=\"input\" type=\"date\" name=\"date\" value=\"{date_value}\" />",
+            "<button class=\"btn secondary\" type=\"submit\">Go</button>",
+            "</form>",
+            "</div>",
+            f"<div class=\"stack\">{''.join(cards) if cards else _render_empty(tr(lang, 'admin.workers.none'))}</div>",
+            "</div>",
+        ]
+    )
+    response = HTMLResponse(_wrap_page(request, content, title="Admin — Dispatch", active="dispatch", page_lang=lang))
+    issue_csrf_token(request, response, csrf_token)
+    return response
+
+
+@router.post("/v1/admin/ui/dispatch/assign", response_class=HTMLResponse)
+async def admin_assign_worker(
+    request: Request,
+    booking_id: str = Form(...),
+    worker_id: int | None = Form(default=None),
+    session: AsyncSession = Depends(get_db_session),
+    identity: AdminIdentity = Depends(require_dispatch),
+) -> Response:
+    await require_csrf(request)
+    booking = await session.get(Booking, booking_id)
+    if booking is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+
+    previous = getattr(booking, "assigned_worker_id", None)
+    new_worker_id = worker_id
+    if worker_id in {"", None}:
+        new_worker_id = None
+    if new_worker_id is not None:
+        worker = await session.get(Worker, int(new_worker_id))
+        if worker is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
+        if worker.team_id != booking.team_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Worker must be on the same team")
+    booking.assigned_worker_id = int(new_worker_id) if new_worker_id is not None else None
+
+    await audit_service.record_action(
+        session,
+        identity=identity,
+        action="ASSIGN_WORKER" if booking.assigned_worker_id else "UNASSIGN_WORKER",
+        resource_type="booking",
+        resource_id=booking.booking_id,
+        before={"assigned_worker_id": previous},
+        after={"assigned_worker_id": booking.assigned_worker_id},
+    )
+    await session.commit()
+    target_date = getattr(booking.starts_at, "date", lambda: None)() if hasattr(booking.starts_at, "date") else None
+    redirect_url = "/v1/admin/ui/dispatch"
+    if target_date:
+        redirect_url = f"{redirect_url}?date={target_date.isoformat()}"
+    return RedirectResponse(redirect_url, status_code=status.HTTP_303_SEE_OTHER)
