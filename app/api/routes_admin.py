@@ -66,6 +66,7 @@ from app.domain.subscriptions import schemas as subscription_schemas
 from app.domain.subscriptions import service as subscription_service
 from app.domain.subscriptions.db_models import Subscription
 from app.domain.admin_audit import service as audit_service
+from app.infra.csrf import get_csrf_token, issue_csrf_token, render_csrf_input, require_csrf
 from app.infra.bot_store import BotStore
 from app.infra.i18n import render_lang_toggle, resolve_lang, tr
 from app.settings import settings
@@ -1552,6 +1553,7 @@ async def admin_invoice_detail_ui(
 
     lead = await invoice_service.fetch_customer(session, invoice_model)
     invoice = _invoice_response(invoice_model)
+    csrf_token = get_csrf_token(request)
 
     customer_bits: list[str] = []
     if lead:
@@ -1652,6 +1654,8 @@ async def admin_invoice_detail_ui(
         ]
     )
 
+    csrf_input = render_csrf_input(csrf_token)
+
     payment_form = f"""
         <form id="payment-form" class="stack" onsubmit="recordPayment(event)">
           <div class="form-group">
@@ -1671,6 +1675,7 @@ async def admin_invoice_detail_ui(
             <label>Reference</label>
             <input class="input" type="text" name="reference" placeholder="Receipt or note" />
           </div>
+          {csrf_input}
           <button class="btn" type="submit">Record payment</button>
         </form>
     """
@@ -1856,7 +1861,7 @@ async def admin_invoice_detail_ui(
             const response = await fetch(`/v1/admin/invoices/${{invoiceId}}/record-payment`, {{
               method: 'POST',
               credentials: 'same-origin',
-              headers: {{ 'Content-Type': 'application/json' }},
+              headers: {{ 'Content-Type': 'application/json', 'X-CSRF-Token': form.csrf_token.value }},
               body: JSON.stringify(payload),
             }});
             let data;
@@ -1898,7 +1903,7 @@ async def admin_invoice_detail_ui(
             script,
         ]
     )
-    return HTMLResponse(
+    response = HTMLResponse(
         _wrap_page(
             request,
             detail_layout,
@@ -1907,6 +1912,8 @@ async def admin_invoice_detail_ui(
             page_lang="en",
         )
     )
+    issue_csrf_token(request, response, csrf_token)
+    return response
 
 
 def _format_money(cents: int, currency: str) -> str:
@@ -2223,6 +2230,7 @@ async def mark_invoice_paid(
     invoice_id: str,
     request: invoice_schemas.ManualPaymentRequest,
     session: AsyncSession = Depends(get_db_session),
+    _csrf: None = Depends(require_csrf),
     _admin: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.ManualPaymentResult:
     return await _record_manual_invoice_payment(invoice_id, request, session)
@@ -2237,6 +2245,7 @@ async def record_manual_invoice_payment(
     invoice_id: str,
     request: invoice_schemas.ManualPaymentRequest,
     session: AsyncSession = Depends(get_db_session),
+    _csrf: None = Depends(require_csrf),
     _admin: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.ManualPaymentResult:
     return await _record_manual_invoice_payment(invoice_id, request, session)
