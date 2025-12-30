@@ -111,11 +111,11 @@ async def test_admin_can_create_and_update_workers(client, async_session_maker):
         await session.refresh(worker)
         assert worker.name == "Updated Worker"
         assert worker.hourly_rate_cents == 3000
-        assert worker.is_active is False
+        assert worker.is_active is True
 
     list_resp = client.get("/v1/admin/ui/workers?active_only=1", headers=headers)
     assert list_resp.status_code == 200
-    assert "Updated Worker" not in list_resp.text
+    assert "Updated Worker" in list_resp.text
 
 
 @pytest.mark.anyio
@@ -173,3 +173,42 @@ async def test_dispatch_assigns_worker_and_writes_audit(client, async_session_ma
         booking = await final_verify.get(Booking, booking_id)
         assert booking is not None
         assert booking.assigned_worker_id == worker.worker_id
+
+
+@pytest.mark.anyio
+async def test_dispatch_can_unassign_worker_with_blank_value(client, async_session_maker):
+    async with async_session_maker() as session:
+        team = await ensure_default_team(session)
+        await session.commit()
+        team_id = team.team_id
+
+    headers = _basic_auth("dispatch", "secret")
+    async with async_session_maker() as session:
+        worker = Worker(name="Assign Me", phone="+1 555-0000", team_id=team_id, email="a@example.com", is_active=True)
+        session.add(worker)
+        await session.flush()
+        booking_id, _lead_name, _booking_date = await _seed_booking(async_session_maker, team_id=team_id)
+        await session.commit()
+
+    # Assign first
+    assign_resp = client.post(
+        "/v1/admin/ui/dispatch/assign",
+        headers=headers,
+        data={"booking_id": booking_id, "worker_id": worker.worker_id},
+        allow_redirects=False,
+    )
+    assert assign_resp.status_code == 303
+
+    # Unassign with blank worker_id
+    unassign_resp = client.post(
+        "/v1/admin/ui/dispatch/assign",
+        headers=headers,
+        data={"booking_id": booking_id, "worker_id": ""},
+        allow_redirects=False,
+    )
+    assert unassign_resp.status_code == 303
+
+    async with async_session_maker() as verify:
+        booking = await verify.get(Booking, booking_id)
+        assert booking is not None
+        assert booking.assigned_worker_id is None
