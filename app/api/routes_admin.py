@@ -67,6 +67,7 @@ from app.domain.subscriptions import service as subscription_service
 from app.domain.subscriptions.db_models import Subscription
 from app.domain.admin_audit import service as audit_service
 from app.infra.bot_store import BotStore
+from app.infra.i18n import render_lang_toggle, resolve_lang
 from app.settings import settings
 
 router = APIRouter(dependencies=[Depends(require_viewer)])
@@ -262,7 +263,7 @@ def _render_dialogs(
     return "".join(cards)
 
 
-def _wrap_page(content: str, *, title: str = "Admin", active: str | None = None) -> str:
+def _wrap_page(request: Request, content: str, *, title: str = "Admin", active: str | None = None) -> str:
     nav_links = [
         ("Observability", "/v1/admin/observability", "observability"),
         ("Invoices", "/v1/admin/ui/invoices", "invoices"),
@@ -271,6 +272,7 @@ def _wrap_page(content: str, *, title: str = "Admin", active: str | None = None)
         f'<a class="nav-link{" nav-link-active" if active == key else ""}" href="{href}">{html.escape(label)}</a>'
         for label, href, key in nav_links
     )
+    lang_toggle = render_lang_toggle(request, resolve_lang(request))
     return f"""
     <html>
       <head>
@@ -282,9 +284,13 @@ def _wrap_page(content: str, *, title: str = "Admin", active: str | None = None)
           a {{ color: #2563eb; }}
           .page {{ max-width: 1080px; margin: 0 auto; }}
           .topbar {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 12px; flex-wrap: wrap; }}
+          .topbar-actions {{ display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }}
           .nav {{ display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }}
           .nav-link {{ text-decoration: none; color: #374151; padding: 6px 10px; border-radius: 8px; border: 1px solid transparent; }}
           .nav-link-active {{ background: #111827; color: #fff; border-color: #111827; }}
+          .lang-toggle {{ display: flex; gap: 6px; font-size: 13px; align-items: center; }}
+          .lang-link {{ text-decoration: none; color: #374151; padding: 4px 8px; border-radius: 8px; border: 1px solid transparent; font-weight: 600; }}
+          .lang-link-active {{ background: #111827; color: #fff; border-color: #111827; }}
           .card {{ background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }}
           .card-row {{ display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }}
           .title {{ font-weight: 600; }}
@@ -332,7 +338,10 @@ def _wrap_page(content: str, *, title: str = "Admin", active: str | None = None)
         <div class="page">
           <div class="topbar">
             <h1>{html.escape(title)}</h1>
-            <div class="nav">{nav}</div>
+            <div class="topbar-actions">
+              <div class="nav">{nav}</div>
+              <div class="lang-toggle">{lang_toggle}</div>
+            </div>
           </div>
           {content}
         </div>
@@ -787,6 +796,7 @@ async def confirm_booking(
 
 @router.get("/v1/admin/observability", response_class=HTMLResponse)
 async def admin_observability(
+    request: Request,
     filters: list[str] = Query(default=[]),
     session: AsyncSession = Depends(get_db_session),
     store: BotStore = Depends(get_bot_store),
@@ -817,13 +827,14 @@ async def admin_observability(
         ]
     )
     return HTMLResponse(
-        _wrap_page(content, title="Admin — Leads, Cases & Dialogs", active="observability")
+        _wrap_page(request, content, title="Admin — Leads, Cases & Dialogs", active="observability")
     )
 
 
 @router.get("/v1/admin/observability/cases/{case_id}", response_class=HTMLResponse)
 async def admin_case_detail(
     case_id: str,
+    request: Request,
     store: BotStore = Depends(get_bot_store),
     _identity: AdminIdentity = Depends(require_viewer),
 ) -> HTMLResponse:
@@ -929,7 +940,7 @@ async def admin_case_detail(
         ]
     )
     return HTMLResponse(
-        _wrap_page(content, title="Admin — Leads, Cases & Dialogs", active="observability")
+        _wrap_page(request, content, title="Admin — Leads, Cases & Dialogs", active="observability")
     )
 
 
@@ -1258,6 +1269,7 @@ async def list_invoices(
 
 @router.get("/v1/admin/ui/invoices", response_class=HTMLResponse)
 async def admin_invoice_list_ui(
+    request: Request,
     status_filter: str | None = Query(default=None, alias="status"),
     customer_id: str | None = Query(default=None),
     order_id: str | None = Query(default=None),
@@ -1395,7 +1407,7 @@ async def admin_invoice_list_ui(
             "</div>",
         ]
     )
-    return HTMLResponse(_wrap_page(content, title="Admin — Invoices", active="invoices"))
+    return HTMLResponse(_wrap_page(request, content, title="Admin — Invoices", active="invoices"))
 
 
 @router.get("/v1/admin/invoices/{invoice_id}", response_model=invoice_schemas.InvoiceResponse)
@@ -1418,6 +1430,7 @@ async def get_invoice(
 @router.get("/v1/admin/ui/invoices/{invoice_id}", response_class=HTMLResponse)
 async def admin_invoice_detail_ui(
     invoice_id: str,
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
     _admin: AdminIdentity = Depends(require_finance),
 ) -> HTMLResponse:
@@ -1766,7 +1779,7 @@ async def admin_invoice_detail_ui(
             script,
         ]
     )
-    return HTMLResponse(_wrap_page(detail_layout, title=f"Invoice {invoice.invoice_number}", active="invoices"))
+    return HTMLResponse(_wrap_page(request, detail_layout, title=f"Invoice {invoice.invoice_number}", active="invoices"))
 
 
 def _format_money(cents: int, currency: str) -> str:
