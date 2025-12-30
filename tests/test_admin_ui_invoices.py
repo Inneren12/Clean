@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import uuid
 from datetime import date, datetime, timezone
 
 from app.domain.bookings.db_models import Booking
@@ -23,12 +24,19 @@ def _seed_invoice(async_session_maker):
                 email="ui.lead@example.com",
                 postal_code="H0H0H0",
                 address="123 Test St",
-                preferred_dates=[],
-                structured_inputs={},
-                estimate_snapshot={},
+                preferred_dates=["Mon"],
+                structured_inputs={"beds": 1, "baths": 1, "cleaning_type": "standard"},
+                estimate_snapshot={
+                    "price_cents": 15000,
+                    "subtotal_cents": 15000,
+                    "tax_cents": 0,
+                    "pricing_config_version": "v1",
+                    "config_hash": "seed-config",
+                    "line_items": [],
+                },
                 pricing_config_version="v1",
                 config_hash="seed-config",
-                referral_code="UITEST",
+                referral_code=uuid.uuid4().hex[:16],
             )
             session.add(lead)
             await session.flush()

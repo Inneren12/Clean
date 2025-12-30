@@ -288,16 +288,18 @@ def _wrap_page(
     active: str | None = None,
     page_lang: str | None = None,
 ) -> str:
-    page_lang = page_lang or resolve_lang(request)
+    resolved_lang = resolve_lang(request)
+    page_lang = page_lang or resolved_lang
+    nav_lang = "en" if active == "invoices" else resolved_lang
     nav_links = [
-        ("Observability", "/v1/admin/observability", "observability"),
-        ("Invoices", "/v1/admin/ui/invoices", "invoices"),
+        (tr(nav_lang, "admin.nav.observability"), "/v1/admin/observability", "observability"),
+        (tr(nav_lang, "admin.nav.invoices"), "/v1/admin/ui/invoices", "invoices"),
     ]
     nav = "".join(
         f'<a class="nav-link{" nav-link-active" if active == key else ""}" href="{href}">{html.escape(label)}</a>'
         for label, href, key in nav_links
     )
-    lang_toggle = render_lang_toggle(request, resolve_lang(request))
+    lang_toggle = render_lang_toggle(request, resolved_lang)
     return f"""
     <html lang=\"{html.escape(page_lang)}\">
       <head>
