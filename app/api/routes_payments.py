@@ -159,16 +159,26 @@ async def _handle_deposit_event(session: AsyncSession, event: Any, email_adapter
         )
         return False
 
-    checkout_session_id = _safe_get(payload_object, "id")
-    payment_intent_id = _safe_get(payload_object, "payment_intent") or _safe_get(payload_object, "id")
+    is_checkout_event = event_type.startswith("checkout.session.")
+    is_payment_intent_event = event_type.startswith("payment_intent.")
+
+    checkout_session_id = _safe_get(payload_object, "id") if is_checkout_event else None
+    payment_intent_id = (
+        _safe_get(payload_object, "payment_intent")
+        if is_checkout_event
+        else _safe_get(payload_object, "id")
+    )
+
     payment_status = None
     failure_status = None
-    if event_type == "checkout.session.completed" and _safe_get(payload_object, "payment_status") == "paid":
+    if is_checkout_event and event_type == "checkout.session.completed" and _safe_get(payload_object, "payment_status") == "paid":
         payment_status = invoice_statuses.PAYMENT_STATUS_SUCCEEDED
-    elif event_type == "checkout.session.expired":
+    elif is_checkout_event and event_type == "checkout.session.expired":
         payment_status = invoice_statuses.PAYMENT_STATUS_FAILED
         failure_status = "expired"
-    elif event_type == "payment_intent.payment_failed":
+    elif is_payment_intent_event and event_type == "payment_intent.succeeded":
+        payment_status = invoice_statuses.PAYMENT_STATUS_SUCCEEDED
+    elif is_payment_intent_event and event_type == "payment_intent.payment_failed":
         payment_status = invoice_statuses.PAYMENT_STATUS_FAILED
         failure_status = "failed"
 
@@ -188,13 +198,17 @@ async def _handle_deposit_event(session: AsyncSession, event: Any, email_adapter
     currency = _safe_get(payload_object, "currency") or settings.deposit_currency
     received_at = datetime.fromtimestamp(_safe_get(event, "created", int(time.time())), tz=timezone.utc)
 
-    await booking_service.attach_checkout_session(
-        session,
-        booking.booking_id,
-        checkout_session_id or booking.stripe_checkout_session_id or "",
-        payment_intent_id=payment_intent_id,
-        commit=False,
-    )
+    if checkout_session_id:
+        await booking_service.attach_checkout_session(
+            session,
+            booking.booking_id,
+            checkout_session_id,
+            payment_intent_id=payment_intent_id,
+            commit=False,
+        )
+    elif payment_intent_id and not booking.stripe_payment_intent_id:
+        booking.stripe_payment_intent_id = payment_intent_id
+        await session.flush()
 
     await booking_service.record_stripe_deposit_payment(
         session,
@@ -203,7 +217,9 @@ async def _handle_deposit_event(session: AsyncSession, event: Any, email_adapter
         currency=str(currency),
         status=payment_status,
         provider_ref=str(payment_intent_id) if payment_intent_id else None,
-        checkout_session_id=str(checkout_session_id) if checkout_session_id else None,
+        checkout_session_id=str(checkout_session_id)
+        if checkout_session_id
+        else booking.stripe_checkout_session_id,
         payment_intent_id=str(payment_intent_id) if payment_intent_id else None,
         received_at=received_at,
     )

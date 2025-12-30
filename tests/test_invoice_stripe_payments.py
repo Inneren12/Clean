@@ -1,9 +1,6 @@
 import asyncio
 import hashlib
 import uuid
-import asyncio
-import hashlib
-import uuid
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
@@ -218,17 +215,62 @@ def test_webhook_retries_after_error(client, async_session_maker, monkeypatch):
     assert response.status_code == 200, response.text
     assert response.json()["processed"] is True
 
-    async def _fetch_invoice_status() -> tuple[str, int, str]:
-        async with async_session_maker() as session:
-            invoice = await session.get(Invoice, invoice_id)
-            paid = await session.scalar(
-                sa.select(sa.func.count()).select_from(Payment).where(Payment.invoice_id == invoice_id)
-            )
-            event_record = await session.get(StripeEvent, "evt_retry")
-            assert invoice is not None and event_record is not None
-            return invoice.status, int(paid or 0), event_record.status
 
-    status_value, payment_count, event_status = asyncio.run(_fetch_invoice_status())
-    assert status_value == invoice_statuses.INVOICE_STATUS_PAID
+def test_checkout_then_payment_intent_single_payment(client, async_session_maker, monkeypatch):
+    monkeypatch.setattr(settings, "stripe_webhook_secret", "whsec_test")
+    invoice_id, _ = asyncio.run(_seed_invoice(async_session_maker, total_cents=5500))
+
+    checkout_event = {
+        "id": "evt_invoice_checkout",
+        "type": "checkout.session.completed",
+        "created": int(datetime.now(tz=timezone.utc).timestamp()),
+        "data": {
+            "object": {
+                "id": "cs_invoice_multi",
+                "payment_intent": "pi_invoice_multi",
+                "payment_status": "paid",
+                "amount_total": 5500,
+                "currency": "CAD",
+                "metadata": {"invoice_id": invoice_id},
+            }
+        },
+    }
+    payment_intent_event = {
+        "id": "evt_invoice_payment_intent",
+        "type": "payment_intent.succeeded",
+        "created": int(datetime.now(tz=timezone.utc).timestamp()),
+        "data": {
+            "object": {
+                "id": "pi_invoice_multi",
+                "amount_received": 5500,
+                "currency": "CAD",
+                "metadata": {"invoice_id": invoice_id},
+            }
+        },
+    }
+
+    events = iter([checkout_event, payment_intent_event])
+
+    def _verify_webhook(payload, signature):
+        return next(events)
+
+    app.state.stripe_client = SimpleNamespace(verify_webhook=_verify_webhook)
+
+    headers = {"Stripe-Signature": "t=test"}
+    first = client.post("/v1/payments/stripe/webhook", content=b"{}", headers=headers)
+    assert first.status_code == 200, first.text
+    second = client.post("/v1/payments/stripe/webhook", content=b"{}", headers=headers)
+    assert second.status_code == 200, second.text
+
+    async def _fetch_state() -> tuple[int, str | None, str | None]:
+        async with async_session_maker() as session:
+            payments = await session.scalars(sa.select(Payment).where(Payment.invoice_id == invoice_id))
+            payment_rows = payments.all()
+            invoice = await session.get(Invoice, invoice_id)
+            return len(payment_rows), payment_rows[0].provider_ref if payment_rows else None, invoice.status if invoice else None
+
+    payment_count, provider_ref, invoice_status = asyncio.run(_fetch_state())
     assert payment_count == 1
-    assert event_status == "succeeded"
+    assert provider_ref == "pi_invoice_multi"
+    assert invoice_status == invoice_statuses.INVOICE_STATUS_PAID
+
