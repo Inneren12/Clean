@@ -16,7 +16,7 @@ from app.domain.analytics.service import (
     estimated_revenue_from_lead,
     log_event,
 )
-from app.domain.bookings.db_models import Booking, Team
+from app.domain.bookings.db_models import Booking, Team, TeamBlackout, TeamWorkingHours
 from app.domain.bookings.policy import (
     BookingPolicySnapshot,
     CancellationPolicySnapshot,
@@ -37,6 +37,7 @@ WORK_START_HOUR = 9
 WORK_END_HOUR = 18
 SLOT_STEP_MINUTES = 30
 BUFFER_MINUTES = 30
+DEFAULT_SLOT_DURATION_MINUTES = 120
 BLOCKING_STATUSES = {"PENDING", "CONFIRMED"}
 LOCAL_TZ = ZoneInfo("America/Edmonton")
 DEFAULT_TEAM_NAME = "Default Team"
@@ -411,9 +412,13 @@ def assert_valid_booking_transition(current: str, target: str) -> None:
         raise ValueError(f"Cannot transition booking from {current} to {target}")
 
 
-def _day_window(target_date: date) -> tuple[datetime, datetime]:
-    local_start = datetime.combine(target_date, time(hour=WORK_START_HOUR, tzinfo=LOCAL_TZ))
-    local_end = datetime.combine(target_date, time(hour=WORK_END_HOUR, tzinfo=LOCAL_TZ))
+def _day_window(target_date: date, working_hours: TeamWorkingHours | None) -> tuple[datetime, datetime] | None:
+    start_time = working_hours.start_time if working_hours else time(hour=WORK_START_HOUR)
+    end_time = working_hours.end_time if working_hours else time(hour=WORK_END_HOUR)
+    local_start = datetime.combine(target_date, start_time, tzinfo=LOCAL_TZ)
+    local_end = datetime.combine(target_date, end_time, tzinfo=LOCAL_TZ)
+    if local_end <= local_start:
+        return None
     return local_start.astimezone(timezone.utc), local_end.astimezone(timezone.utc)
 
 
@@ -427,6 +432,31 @@ def _booking_window_filters(day_start: datetime, day_end: datetime, team_id: int
             Booking.status.in_(BLOCKING_STATUSES),
         )
     )
+
+
+async def _working_hours_for_day(
+    session: AsyncSession, team_id: int, day_of_week: int
+) -> TeamWorkingHours | None:
+    stmt = (
+        select(TeamWorkingHours)
+        .where(TeamWorkingHours.team_id == team_id, TeamWorkingHours.day_of_week == day_of_week)
+        .order_by(TeamWorkingHours.id.desc())
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def _blackouts_for_window(
+    session: AsyncSession, team_id: int, window_start: datetime, window_end: datetime
+) -> list[TeamBlackout]:
+    stmt = select(TeamBlackout).where(
+        TeamBlackout.team_id == team_id,
+        TeamBlackout.starts_at < window_end,
+        TeamBlackout.ends_at > window_start,
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
 
 
 async def _has_existing_history(session: AsyncSession, lead_id: str) -> bool:
@@ -600,9 +630,14 @@ async def generate_slots(
     duration_minutes: int,
     session: AsyncSession,
     team_id: int | None = None,
+    excluded_booking_id: str | None = None,
 ) -> list[datetime]:
     team = team_id or (await ensure_default_team(session)).team_id
-    day_start, day_end = _day_window(target_date)
+    working_hours = await _working_hours_for_day(session, team, target_date.weekday())
+    day_window = _day_window(target_date, working_hours)
+    if day_window is None:
+        return []
+    day_start, day_end = day_window
     duration_delta = timedelta(minutes=duration_minutes)
     buffer_delta = timedelta(minutes=BUFFER_MINUTES)
 
@@ -611,9 +646,20 @@ async def generate_slots(
 
     blocked_windows: list[tuple[datetime, datetime]] = []
     for booking in bookings:
+        if excluded_booking_id and booking.booking_id == excluded_booking_id:
+            continue
         start = _normalize_datetime(booking.starts_at)
         end = start + timedelta(minutes=booking.duration_minutes)
         blocked_windows.append((start - buffer_delta, end + buffer_delta))
+
+    blackouts = await _blackouts_for_window(session, team, day_start, day_end)
+    for blackout in blackouts:
+        blocked_windows.append(
+            (
+                _normalize_datetime(blackout.starts_at),
+                _normalize_datetime(blackout.ends_at),
+            )
+        )
 
     candidate = day_start
     slots: list[datetime] = []
@@ -691,8 +737,14 @@ class StubSlotProvider(SlotProvider):
         return filtered
 
 
+class DBSlotProvider(StubSlotProvider):
+    """Slot provider backed by database configuration."""
+
+
 def resolve_slot_provider() -> SlotProvider:
     mode = (getattr(settings, "slot_provider_mode", "stub") or "stub").lower()
+    if mode == "db":
+        return DBSlotProvider()
     if mode == "stub":
         return StubSlotProvider()
     logger.warning("Unknown slot provider mode %s; using stub", mode)
@@ -724,11 +776,43 @@ async def is_slot_available(
     duration_minutes: int,
     session: AsyncSession,
     team_id: int | None = None,
+    excluded_booking_id: str | None = None,
 ) -> bool:
     normalized = _normalize_datetime(starts_at)
     local_date = normalized.astimezone(LOCAL_TZ).date()
-    slots = await generate_slots(local_date, duration_minutes, session, team_id=team_id)
+    slots = await generate_slots(
+        local_date,
+        duration_minutes,
+        session,
+        team_id=team_id,
+        excluded_booking_id=excluded_booking_id,
+    )
     return normalized in slots
+
+
+async def list_available_slots(
+    session: AsyncSession,
+    start: datetime,
+    end: datetime,
+    duration_minutes: int,
+    team_id: int | None = None,
+) -> list[datetime]:
+    team = team_id or (await ensure_default_team(session)).team_id
+    normalized_start = _normalize_datetime(start)
+    normalized_end = _normalize_datetime(end)
+    slots: set[datetime] = set()
+    current_date = normalized_start.astimezone(LOCAL_TZ).date()
+    end_date = normalized_end.astimezone(LOCAL_TZ).date()
+
+    while current_date <= end_date:
+        day_slots = await generate_slots(current_date, duration_minutes, session, team_id=team)
+        for slot in day_slots:
+            slot_end = slot + timedelta(minutes=duration_minutes)
+            if normalized_start <= slot and slot_end <= normalized_end:
+                slots.add(slot)
+        current_date += timedelta(days=1)
+
+    return sorted(slots)
 
 
 async def create_booking(
@@ -745,6 +829,7 @@ async def create_booking(
     scheduled_date: date | None = None,
     lead: Lead | None = None,
     service_type: str | CleaningType | None = None,
+    team_id: int | None = None,
 ) -> Booking:
     normalized = _normalize_datetime(starts_at)
     resolved_lead = lead
@@ -806,6 +891,18 @@ async def create_booking(
         snapshot.model_dump(mode="json") if hasattr(snapshot, "model_dump") else snapshot
     )
 
+    async def _resolve_team(lock: bool) -> Team:
+        if team_id:
+            stmt = select(Team).where(Team.team_id == team_id)
+            if lock:
+                stmt = stmt.with_for_update()
+            team_result = await session.execute(stmt)
+            found = team_result.scalar_one_or_none()
+            if found is None:
+                raise ValueError("Team not found")
+            return found
+        return await ensure_default_team(session, lock=lock)
+
     async def _create(team: Team) -> Booking:
         if not await is_slot_available(normalized, duration_minutes, session, team_id=team.team_id):
             raise ValueError("Requested slot is no longer available")
@@ -837,10 +934,10 @@ async def create_booking(
     if manage_transaction:
         transaction_ctx = session.begin_nested() if session.in_transaction() else session.begin()
         async with transaction_ctx:
-            team = await ensure_default_team(session, lock=True)
+            team = await _resolve_team(lock=True)
             return await _create(team)
 
-    team = await ensure_default_team(session, lock=True)
+    team = await _resolve_team(lock=True)
     return await _create(team)
 
 
@@ -855,11 +952,27 @@ async def reschedule_booking(
     team_result = await session.execute(team_stmt)
     team = team_result.scalar_one()
 
-    if not await is_slot_available(normalized, duration_minutes, session, team_id=team.team_id):
+    if booking.status == "CANCELLED":
+        raise ValueError("Cannot reschedule a cancelled booking")
+    if not await is_slot_available(
+        normalized,
+        duration_minutes,
+        session,
+        team_id=team.team_id,
+        excluded_booking_id=booking.booking_id,
+    ):
         raise ValueError("Requested slot is no longer available")
 
     booking.starts_at = normalized
     booking.duration_minutes = duration_minutes
+    await session.commit()
+    await session.refresh(booking)
+    return booking
+
+
+async def cancel_booking(session: AsyncSession, booking: Booking) -> Booking:
+    assert_valid_booking_transition(booking.status, "CANCELLED")
+    booking.status = "CANCELLED"
     await session.commit()
     await session.refresh(booking)
     return booking

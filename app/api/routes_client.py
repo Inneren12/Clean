@@ -3,13 +3,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db_session
 from app.domain.bookings.db_models import Booking, OrderPhoto
+from app.domain.bookings import schemas as booking_schemas
 from app.domain.bookings import service as booking_service
 from app.domain.clients import schemas as client_schemas
 from app.domain.clients import service as client_service
@@ -169,6 +170,22 @@ def _subscription_response(model: Subscription) -> subscription_schemas.Subscrip
         base_service_type=model.base_service_type,
         base_price=model.base_price,
         created_at=model.created_at,
+    )
+
+
+def _client_booking_response(model: Booking) -> booking_schemas.ClientBookingResponse:
+    return booking_schemas.ClientBookingResponse(
+        booking_id=model.booking_id,
+        status=model.status,
+        starts_at=model.starts_at if model.starts_at.tzinfo else model.starts_at.replace(tzinfo=timezone.utc),
+        duration_minutes=model.duration_minutes,
+        lead_id=model.lead_id,
+        policy_snapshot=model.policy_snapshot,
+        deposit_required=model.deposit_required,
+        deposit_cents=model.deposit_cents,
+        deposit_policy=model.deposit_policy,
+        deposit_status=model.deposit_status,
+        cancellation_exception=model.cancellation_exception,
     )
 
 
@@ -365,4 +382,105 @@ async def submit_review(
         },
     )
     return JSONResponse({"status": "received"})
+
+
+@router.get(
+    "/v1/client/slots", response_model=booking_schemas.ClientSlotAvailabilityResponse
+)
+async def client_slots(
+    team_id: int | None = Query(None, ge=1),
+    start: datetime = Query(..., alias="from"),
+    end: datetime = Query(..., alias="to"),
+    duration_minutes: int = Query(booking_schemas.DEFAULT_SLOT_DURATION_MINUTES, gt=0),
+    session: AsyncSession = Depends(get_db_session),
+) -> booking_schemas.ClientSlotAvailabilityResponse:
+    query = booking_schemas.ClientSlotQuery(
+        team_id=team_id, start=start, end=end, duration_minutes=duration_minutes
+    )
+    slots = await booking_service.list_available_slots(
+        session,
+        query.start,
+        query.end,
+        query.duration_minutes,
+        team_id=query.team_id,
+    )
+    return booking_schemas.ClientSlotAvailabilityResponse(
+        duration_minutes=query.duration_minutes, slots=slots
+    )
+
+
+@router.post(
+    "/v1/client/bookings",
+    response_model=booking_schemas.ClientBookingResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def client_create_booking(
+    payload: booking_schemas.ClientBookingRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> booking_schemas.ClientBookingResponse:
+    normalized_start = payload.normalized_start()
+    lead = await session.get(Lead, payload.lead_id) if payload.lead_id else None
+
+    try:
+        booking = await booking_service.create_booking(
+            starts_at=normalized_start,
+            duration_minutes=payload.duration_minutes,
+            lead_id=payload.lead_id,
+            session=session,
+            client_id=None,
+            lead=lead,
+            service_type=payload.service_type,
+            team_id=payload.team_id,
+        )
+    except ValueError as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    await session.refresh(booking)
+    return _client_booking_response(booking)
+
+
+@router.post(
+    "/v1/client/bookings/{booking_id}/reschedule",
+    response_model=booking_schemas.ClientBookingResponse,
+)
+async def client_reschedule_booking(
+    booking_id: str,
+    payload: booking_schemas.ClientRescheduleRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> booking_schemas.ClientBookingResponse:
+    booking = await session.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+
+    try:
+        booking = await booking_service.reschedule_booking(
+            session,
+            booking,
+            payload.normalized_start(),
+            payload.duration_minutes,
+        )
+    except ValueError as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    return _client_booking_response(booking)
+
+
+@router.post(
+    "/v1/client/bookings/{booking_id}/cancel",
+    response_model=booking_schemas.ClientBookingResponse,
+)
+async def client_cancel_booking(
+    booking_id: str,
+    session: AsyncSession = Depends(get_db_session),
+) -> booking_schemas.ClientBookingResponse:
+    booking = await session.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+
+    try:
+        booking = await booking_service.cancel_booking(session, booking)
+    except ValueError as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    return _client_booking_response(booking)
 
