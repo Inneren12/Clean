@@ -2015,6 +2015,11 @@ async def admin_invoice_detail_ui(
           return `${{currency}} ${{(cents / 100).toFixed(2)}}`;
         }}
 
+        function getCsrfToken() {{
+          const tokenInput = document.querySelector('input[name="csrf_token"]');
+          return tokenInput ? tokenInput.value : '';
+        }}
+
         function isOverdue(invoice) {{
           if (!invoice.due_date) return false;
           const today = new Date().toISOString().slice(0, 10);
@@ -2071,7 +2076,11 @@ async def admin_invoice_detail_ui(
           button.disabled = true;
           message.textContent = 'Sending…';
           try {{
-            const response = await fetch(`/v1/admin/invoices/${{invoiceId}}/send`, {{ method: 'POST', credentials: 'same-origin' }});
+            const response = await fetch(`/v1/admin/invoices/${{invoiceId}}/send`, {{
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: {{ 'X-CSRF-Token': getCsrfToken() }},
+            }});
             let data;
             let errorDetail;
             try {{
@@ -2369,6 +2378,7 @@ async def send_invoice(
     invoice_id: str,
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
+    _csrf: None = Depends(require_csrf),
     _admin: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.InvoiceSendResponse:
     invoice = await session.get(
@@ -2447,6 +2457,7 @@ async def create_invoice_from_order(
     order_id: str,
     request: invoice_schemas.InvoiceCreateRequest,
     session: AsyncSession = Depends(get_db_session),
+    _csrf: None = Depends(require_csrf),
     admin: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.InvoiceResponse:
     order = await session.get(
@@ -2788,7 +2799,11 @@ async def admin_workers_create(
     role = (form.get("role") or "").strip() or None
     team_id_raw = form.get("team_id")
     hourly_rate_raw = form.get("hourly_rate_cents")
-    is_active = form.get("is_active") == "on" or form.get("is_active") == "1"
+    is_active = (
+        form.get("is_active") == "on"
+        or form.get("is_active") == "1"
+        or "is_active" not in form
+    )
 
     if not name or not phone or not team_id_raw:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing required fields")
@@ -2889,7 +2904,8 @@ async def admin_workers_update(
         worker.team_id = team.team_id
     hourly_rate_raw = form.get("hourly_rate_cents")
     worker.hourly_rate_cents = int(hourly_rate_raw) if hourly_rate_raw else None
-    worker.is_active = form.get("is_active") == "on" or form.get("is_active") == "1"
+    if "is_active" in form:
+        worker.is_active = form.get("is_active") == "on" or form.get("is_active") == "1"
 
     await audit_service.record_action(
         session,
@@ -3024,7 +3040,7 @@ async def admin_dispatch_board(
 async def admin_assign_worker(
     request: Request,
     booking_id: str = Form(...),
-    worker_id: int | None = Form(default=None),
+    worker_id_raw: str | None = Form(default=None, alias="worker_id"),
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ) -> Response:
@@ -3034,16 +3050,22 @@ async def admin_assign_worker(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
 
     previous = getattr(booking, "assigned_worker_id", None)
-    new_worker_id = worker_id
-    if worker_id in {"", None}:
+    new_worker_id: int | None
+    if worker_id_raw is None or str(worker_id_raw).strip() == "":
         new_worker_id = None
+    else:
+        try:
+            new_worker_id = int(worker_id_raw)
+        except (TypeError, ValueError) as exc:  # noqa: BLE001
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid worker ID") from exc
+
     if new_worker_id is not None:
-        worker = await session.get(Worker, int(new_worker_id))
+        worker = await session.get(Worker, new_worker_id)
         if worker is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
         if worker.team_id != booking.team_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Worker must be on the same team")
-    booking.assigned_worker_id = int(new_worker_id) if new_worker_id is not None else None
+    booking.assigned_worker_id = new_worker_id
 
     await audit_service.record_action(
         session,

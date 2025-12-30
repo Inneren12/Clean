@@ -7,6 +7,10 @@ from app.settings import settings
 
 Base = declarative_base()
 
+# Import models that use string-based relationship references to ensure they are registered
+# when Base metadata is configured.
+import app.infra.models  # noqa: F401,E402
+
 _engine = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 
