@@ -280,7 +280,15 @@ def _render_dialogs(
     return "".join(cards)
 
 
-def _wrap_page(request: Request, content: str, *, title: str = "Admin", active: str | None = None) -> str:
+def _wrap_page(
+    request: Request,
+    content: str,
+    *,
+    title: str = "Admin",
+    active: str | None = None,
+    page_lang: str | None = None,
+) -> str:
+    page_lang = page_lang or resolve_lang(request)
     nav_links = [
         ("Observability", "/v1/admin/observability", "observability"),
         ("Invoices", "/v1/admin/ui/invoices", "invoices"),
@@ -291,7 +299,7 @@ def _wrap_page(request: Request, content: str, *, title: str = "Admin", active: 
     )
     lang_toggle = render_lang_toggle(request, resolve_lang(request))
     return f"""
-    <html lang=\"en\">
+    <html lang=\"{html.escape(page_lang)}\">
       <head>
         <title>{html.escape(title)}</title>
         <style>
@@ -853,6 +861,7 @@ async def admin_observability(
             content,
             title=tr(lang, "admin.observability.title"),
             active="observability",
+            page_lang=lang,
         )
     )
 
@@ -981,6 +990,7 @@ async def admin_case_detail(
             content,
             title=tr(lang, "admin.observability.title"),
             active="observability",
+            page_lang=lang,
         )
     )
 
@@ -1449,7 +1459,15 @@ async def admin_invoice_list_ui(
             "</div>",
         ]
     )
-    return HTMLResponse(_wrap_page(request, content, title="Admin — Invoices", active="invoices"))
+    return HTMLResponse(
+        _wrap_page(
+            request,
+            content,
+            title="Admin — Invoices",
+            active="invoices",
+            page_lang="en",
+        )
+    )
 
 
 @router.get("/v1/admin/invoices/{invoice_id}", response_model=invoice_schemas.InvoiceResponse)
@@ -1835,7 +1853,15 @@ async def admin_invoice_detail_ui(
             script,
         ]
     )
-    return HTMLResponse(_wrap_page(request, detail_layout, title=f"Invoice {invoice.invoice_number}", active="invoices"))
+    return HTMLResponse(
+        _wrap_page(
+            request,
+            detail_layout,
+            title=f"Invoice {invoice.invoice_number}",
+            active="invoices",
+            page_lang="en",
+        )
+    )
 
 
 def _format_money(cents: int, currency: str) -> str:
