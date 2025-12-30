@@ -67,7 +67,7 @@ from app.domain.subscriptions import service as subscription_service
 from app.domain.subscriptions.db_models import Subscription
 from app.domain.admin_audit import service as audit_service
 from app.infra.bot_store import BotStore
-from app.infra.i18n import render_lang_toggle, resolve_lang
+from app.infra.i18n import render_lang_toggle, resolve_lang, tr
 from app.settings import settings
 
 router = APIRouter(dependencies=[Depends(require_viewer)])
@@ -105,11 +105,11 @@ def _format_ts(value: float | None) -> str:
     return _format_dt(dt)
 
 
-def _filter_badge(filter_key: str, active_filters: set[str]) -> str:
+def _filter_badge(filter_key: str, active_filters: set[str], lang: str | None) -> str:
     labels = {
-        "needs_human": "Needs human",
-        "waiting_for_contact": "Waiting for contact",
-        "order_created": "Order created",
+        "needs_human": tr(lang, "admin.filters.needs_human"),
+        "waiting_for_contact": tr(lang, "admin.filters.waiting_for_contact"),
+        "order_created": tr(lang, "admin.filters.order_created"),
     }
     label = labels.get(filter_key, filter_key)
     is_active = filter_key in active_filters
@@ -118,14 +118,14 @@ def _filter_badge(filter_key: str, active_filters: set[str]) -> str:
     return f'<a class="{class_name}" href="{href}">{html.escape(label)}</a>'
 
 
-def _render_filters(active_filters: set[str]) -> str:
+def _render_filters(active_filters: set[str], lang: str | None) -> str:
     parts = [
         '<div class="filters">',
-        "<strong>Quick filters:</strong>",
-        _filter_badge("needs_human", active_filters),
-        _filter_badge("waiting_for_contact", active_filters),
-        _filter_badge("order_created", active_filters),
-        '<a class="badge" href="/v1/admin/observability">Clear</a>',
+        f"<strong>{tr(lang, 'admin.filters.title')}</strong>",
+        _filter_badge("needs_human", active_filters, lang),
+        _filter_badge("waiting_for_contact", active_filters, lang),
+        _filter_badge("order_created", active_filters, lang),
+        f'<a class="badge" href="/v1/admin/observability">{tr(lang, "admin.filters.clear")}</a>',
         "</div>",
     ]
     return "".join(parts)
@@ -139,8 +139,13 @@ def _render_empty(message: str) -> str:
     return f"<p class=\"muted\">{html.escape(message)}</p>"
 
 
-def _render_leads(leads: Iterable[Lead], active_filters: set[str]) -> str:
+def _render_leads(leads: Iterable[Lead], active_filters: set[str], lang: str | None) -> str:
     cards: list[str] = []
+    tag_labels = {
+        "needs_human": tr(lang, "admin.filters.needs_human"),
+        "waiting_for_contact": tr(lang, "admin.filters.waiting_for_contact"),
+        "order_created": tr(lang, "admin.filters.order_created"),
+    }
     for lead in leads:
         tags: set[str] = set()
         bookings_count = len(getattr(lead, "bookings", []))
@@ -156,7 +161,9 @@ def _render_leads(leads: Iterable[Lead], active_filters: set[str]) -> str:
         if lead.email:
             contact_bits.append(html.escape(lead.email))
         contact = " · ".join(contact_bits)
-        tag_text = " ".join(f"<span class=\"tag\">{t}</span>" for t in sorted(tags))
+        tag_text = " ".join(
+            f"<span class=\"tag\">{html.escape(tag_labels.get(t, t))}</span>" for t in sorted(tags)
+        )
         cards.append(
             """
             <div class="card">
@@ -168,32 +175,34 @@ def _render_leads(leads: Iterable[Lead], active_filters: set[str]) -> str:
                 <div class="status">{status}</div>
               </div>
               <div class="card-row">
-                <div class="muted">Created {created}</div>
+                <div class="muted">{created}</div>
                 <div>{tags}</div>
               </div>
-              <div class="muted">Notes: {notes}</div>
+              <div class="muted">{notes}</div>
             </div>
             """.format(
                 name=html.escape(lead.name),
                 contact=contact,
                 status=html.escape(lead.status),
-                created=_format_dt(lead.created_at),
-                notes=html.escape(lead.notes or "-"),
+                created=html.escape(tr(lang, "admin.leads.created_at", created=_format_dt(lead.created_at))),
+                notes=html.escape(tr(lang, "admin.leads.notes", notes=lead.notes or "-")),
                 tags=tag_text,
             )
         )
     if not cards:
-        return _render_empty("No leads match the current filter.")
+        return _render_empty(tr(lang, "admin.empty.leads"))
     return "".join(cards)
 
 
-def _render_cases(cases: Iterable[object], active_filters: set[str]) -> str:
+def _render_cases(cases: Iterable[object], active_filters: set[str], lang: str | None) -> str:
     cards: list[str] = []
     for case in cases:
         tags = {"needs_human"}
         if active_filters and not active_filters.intersection(tags):
             continue
-        summary = getattr(case, "summary", "Escalated case") or "Escalated case"
+        summary = getattr(case, "summary", tr(lang, "admin.cases.default_summary")) or tr(
+            lang, "admin.cases.default_summary"
+        )
         reason = getattr(case, "reason", "-")
         conversation_id = getattr(case, "source_conversation_id", None)
         cards.append(
@@ -202,25 +211,30 @@ def _render_cases(cases: Iterable[object], active_filters: set[str]) -> str:
               <div class="card-row">
                 <div>
                   <div class="title">{summary}</div>
-                  <div class="muted">Reason: {reason}</div>
+                  <div class="muted">{reason_label} {reason}</div>
                 </div>
                 <div class="muted">{created}</div>
               </div>
               <div class="card-row">
-                <a class="btn" href="/v1/admin/observability/cases/{case_id}">View detail</a>
-                <div class="muted">Conversation: {conversation}</div>
+                <a class="btn" href="/v1/admin/observability/cases/{case_id}">{view_detail}</a>
+                <div class="muted">{conversation_label}: {conversation}</div>
               </div>
             </div>
             """.format(
                 summary=html.escape(summary),
+                reason_label=html.escape(tr(lang, "admin.labels.reason")),
                 reason=html.escape(reason),
-                created=_format_ts(getattr(case, "created_at", None)),
+                created=html.escape(
+                    tr(lang, "admin.cases.created_at", created=_format_ts(getattr(case, "created_at", None)))
+                ),
                 case_id=html.escape(getattr(case, "case_id", "")),
+                view_detail=html.escape(tr(lang, "admin.cases.view_detail")),
+                conversation_label=html.escape(tr(lang, "admin.labels.conversation")),
                 conversation=html.escape(conversation_id or "n/a"),
             )
         )
     if not cards:
-        return _render_empty("No cases match the current filter.")
+        return _render_empty(tr(lang, "admin.empty.cases"))
     return "".join(cards)
 
 
@@ -228,6 +242,7 @@ def _render_dialogs(
     conversations: Iterable[object],
     message_lookup: dict[str, list[object]],
     active_filters: set[str],
+    lang: str | None,
 ) -> str:
     cards: list[str] = []
     for conversation in conversations:
@@ -240,7 +255,7 @@ def _render_dialogs(
             continue
 
         messages = message_lookup.get(conversation.conversation_id, [])
-        last_message = messages[-1].text if messages else "No messages yet"
+        last_message = messages[-1].text if messages else tr(lang, "admin.dialogs.no_messages")
         cards.append(
             """
             <div class="card">
@@ -248,18 +263,20 @@ def _render_dialogs(
                 <div class="title">{conversation_id}</div>
                 <div class="status">{status}</div>
               </div>
-              <div class="muted">Last message: {last_message}</div>
-              <div class="muted">Updated {updated_at}</div>
+              <div class="muted">{last_message_label}: {last_message}</div>
+              <div class="muted">{updated_label} {updated_at}</div>
             </div>
             """.format(
                 conversation_id=html.escape(conversation.conversation_id),
                 status=html.escape(str(status)),
                 last_message=html.escape(last_message),
-                updated_at=_format_ts(getattr(conversation, "updated_at", None)),
+                last_message_label=html.escape(tr(lang, "admin.dialogs.last_message")),
+                updated_label=html.escape(tr(lang, "admin.dialogs.updated")),
+                updated_at=html.escape(_format_ts(getattr(conversation, "updated_at", None))),
             )
         )
     if not cards:
-        return _render_empty("No dialogs match the current filter.")
+        return _render_empty(tr(lang, "admin.empty.dialogs"))
     return "".join(cards)
 
 
@@ -802,6 +819,7 @@ async def admin_observability(
     store: BotStore = Depends(get_bot_store),
     _identity: AdminIdentity = Depends(require_viewer),
 ) -> HTMLResponse:
+    lang = resolve_lang(request)
     active_filters = {value.lower() for value in filters if value}
     lead_stmt = (
         select(Lead)
@@ -820,14 +838,22 @@ async def admin_observability(
 
     content = "".join(
         [
-            _render_filters(active_filters),
-            _render_section("Cases", _render_cases(cases, active_filters)),
-            _render_section("Leads", _render_leads(leads, active_filters)),
-            _render_section("Dialogs", _render_dialogs(conversations, message_lookup, active_filters)),
+            _render_filters(active_filters, lang),
+            _render_section(tr(lang, "admin.sections.cases"), _render_cases(cases, active_filters, lang)),
+            _render_section(tr(lang, "admin.sections.leads"), _render_leads(leads, active_filters, lang)),
+            _render_section(
+                tr(lang, "admin.sections.dialogs"),
+                _render_dialogs(conversations, message_lookup, active_filters, lang),
+            ),
         ]
     )
     return HTMLResponse(
-        _wrap_page(request, content, title="Admin — Leads, Cases & Dialogs", active="observability")
+        _wrap_page(
+            request,
+            content,
+            title=tr(lang, "admin.observability.title"),
+            active="observability",
+        )
     )
 
 
@@ -838,6 +864,7 @@ async def admin_case_detail(
     store: BotStore = Depends(get_bot_store),
     _identity: AdminIdentity = Depends(require_viewer),
 ) -> HTMLResponse:
+    lang = resolve_lang(request)
     cases = await store.list_cases()
     case = next((item for item in cases if getattr(item, "case_id", None) == case_id), None)
     if case is None:
@@ -889,7 +916,7 @@ async def admin_case_detail(
         for message in transcript
     )
     if not transcript_html:
-        transcript_html = _render_empty("No transcript available")
+        transcript_html = _render_empty(tr(lang, "admin.empty.transcript"))
 
     quick_actions: list[str] = []
     contact_quick_actions = {
@@ -899,36 +926,45 @@ async def admin_case_detail(
     for field, value in contact_quick_actions.items():
         if value:
             escaped_value = html.escape(str(value), quote=True)
+            contact_label = tr(lang, f"admin.contact.{field}")
+            if contact_label == f"admin.contact.{field}":
+                contact_label = field.title()
             quick_actions.append(
                 """
-                <button class="btn" data-copy="{value}" onclick="navigator.clipboard.writeText(this.dataset.copy)">Copy {label}</button>
+                <button class="btn" data-copy="{value}" onclick="navigator.clipboard.writeText(this.dataset.copy)">{copy_label} {label}</button>
                 """.format(
                     value=escaped_value,
-                    label=html.escape(field.title()),
+                    copy_label=html.escape(tr(lang, "admin.buttons.copy")),
+                    label=html.escape(contact_label),
                 )
             )
-    quick_actions.append("<button class=\"btn\" onclick=\"alert('Mark contacted placeholder')\">Mark contacted</button>")
+    quick_actions.append(
+        f"<button class=\"btn\" onclick=\"alert('Mark contacted placeholder')\">{html.escape(tr(lang, 'admin.buttons.mark_contacted'))}</button>"
+    )
 
     summary_block = """
         <div class="card">
           <div class="card-row">
             <div>
               <div class="title">{summary}</div>
-              <div class="muted">Reason: {reason}</div>
+              <div class="muted">{reason_label} {reason}</div>
             </div>
             <div class="muted">{created}</div>
           </div>
           <div class="card-row">
-            <div class="muted">Conversation: {conversation}</div>
-            <div class="muted">Case ID: {case_id}</div>
+            <div class="muted">{conversation_label}: {conversation}</div>
+            <div class="muted">{case_label}: {case_id}</div>
           </div>
           <div class="card-row">{actions}</div>
         </div>
     """.format(
         summary=html.escape(getattr(case, "summary", "Escalated case") or "Escalated case"),
+        reason_label=html.escape(tr(lang, "admin.labels.reason")),
         reason=html.escape(getattr(case, "reason", "-")),
         created=_format_ts(getattr(case, "created_at", None)),
+        conversation_label=html.escape(tr(lang, "admin.labels.conversation")),
         conversation=html.escape(getattr(case, "source_conversation_id", "")),
+        case_label=html.escape(tr(lang, "admin.labels.case_id")),
         case_id=html.escape(getattr(case, "case_id", "")),
         actions="".join(quick_actions),
     )
@@ -936,11 +972,16 @@ async def admin_case_detail(
     content = "".join(
         [
             summary_block,
-            _render_section("Transcript", transcript_html),
+            _render_section(tr(lang, "admin.sections.transcript"), transcript_html),
         ]
     )
     return HTMLResponse(
-        _wrap_page(request, content, title="Admin — Leads, Cases & Dialogs", active="observability")
+        _wrap_page(
+            request,
+            content,
+            title=tr(lang, "admin.observability.title"),
+            active="observability",
+        )
     )
 
 

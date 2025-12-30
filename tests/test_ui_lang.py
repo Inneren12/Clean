@@ -62,3 +62,20 @@ def test_admin_page_renders_lang_toggle(client):
     finally:
         settings.admin_basic_username = previous_username
         settings.admin_basic_password = previous_password
+
+
+def test_admin_observability_renders_ru_strings(client):
+    previous_username = settings.admin_basic_username
+    previous_password = settings.admin_basic_password
+    settings.admin_basic_username = "admin"
+    settings.admin_basic_password = "secret"
+
+    try:
+        client.cookies.set("ui_lang", "ru")
+        response = client.get("/v1/admin/observability", headers=_basic_auth("admin", "secret"))
+
+        assert response.status_code == 200
+        assert "Наблюдение" in response.text
+    finally:
+        settings.admin_basic_username = previous_username
+        settings.admin_basic_password = previous_password
