@@ -17,6 +17,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.domain.analytics import db_models as analytics_db_models  # noqa: F401
 from app.domain.bookings import db_models as booking_db_models  # noqa: F401
+from app.domain.bookings.service import WORK_END_HOUR, WORK_START_HOUR
 from app.domain.addons import db_models as addon_db_models  # noqa: F401
 from app.domain.export_events import db_models as export_events_db_models  # noqa: F401
 from app.domain.leads import db_models  # noqa: F401
@@ -55,8 +56,8 @@ def test_engine():
                     {
                         "team_id": 1,
                         "day_of_week": day,
-                        "start_time": time(hour=9, minute=0),
-                        "end_time": time(hour=17, minute=0),
+                        "start_time": time(hour=WORK_START_HOUR, minute=0),
+                        "end_time": time(hour=WORK_END_HOUR, minute=0),
                     }
                     for day in range(7)
                 ],
@@ -114,8 +115,8 @@ def clean_database(test_engine):
                     {
                         "team_id": 1,
                         "day_of_week": day,
-                        "start_time": time(hour=9, minute=0),
-                        "end_time": time(hour=17, minute=0),
+                        "start_time": time(hour=WORK_START_HOUR, minute=0),
+                        "end_time": time(hour=WORK_END_HOUR, minute=0),
                     }
                     for day in range(7)
                 ],
