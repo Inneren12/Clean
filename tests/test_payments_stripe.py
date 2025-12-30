@@ -80,6 +80,81 @@ def test_deposit_checkout_and_webhook(client, async_session_maker, monkeypatch):
     assert duplicate.json()["processed"] is False
 
 
+def test_deposit_checkout_then_payment_intent_single_payment(client, async_session_maker, monkeypatch):
+    settings.stripe_secret_key = "sk_test"
+    settings.stripe_webhook_secret = "whsec_test"
+    booking_id = asyncio.run(_seed_booking(async_session_maker))
+
+    checkout_event = {
+        "id": "evt_dep_checkout_multi",
+        "type": "checkout.session.completed",
+        "created": int(datetime.now(tz=timezone.utc).timestamp()),
+        "data": {
+            "object": {
+                "id": "cs_dep_multi",
+                "payment_intent": "pi_dep_multi",
+                "payment_status": "paid",
+                "amount_total": 5000,
+                "currency": "CAD",
+                "metadata": {"booking_id": booking_id},
+            }
+        },
+    }
+    payment_intent_event = {
+        "id": "evt_dep_payment_intent_multi",
+        "type": "payment_intent.succeeded",
+        "created": int(datetime.now(tz=timezone.utc).timestamp()),
+        "data": {
+            "object": {
+                "id": "pi_dep_multi",
+                "amount_received": 5000,
+                "currency": "CAD",
+                "metadata": {"booking_id": booking_id},
+            }
+        },
+    }
+
+    events = iter([checkout_event, payment_intent_event])
+
+    def _verify_webhook(payload, signature):
+        return next(events)
+
+    app.state.stripe_client = SimpleNamespace(
+        create_checkout_session=lambda **kwargs: SimpleNamespace(
+            id="cs_dep_multi", url="https://stripe.test/deposit", payment_intent="pi_dep_multi"
+        ),
+        verify_webhook=_verify_webhook,
+    )
+
+    checkout = client.post(f"/v1/payments/deposit/checkout?booking_id={booking_id}")
+    assert checkout.status_code == 201, checkout.text
+
+    first = client.post("/v1/payments/stripe/webhook", content=b"{}", headers={"Stripe-Signature": "t=test"})
+    assert first.status_code == 200, first.text
+    second = client.post("/v1/payments/stripe/webhook", content=b"{}", headers={"Stripe-Signature": "t=test"})
+    assert second.status_code == 200, second.text
+
+    async def _fetch() -> tuple[str | None, int, str | None, str | None]:
+        async with async_session_maker() as session:
+            booking = await session.get(Booking, booking_id)
+            payments = await session.scalars(select(Payment).where(Payment.booking_id == booking_id))
+            payment_rows = payments.all()
+            provider_ref = payment_rows[0].provider_ref if payment_rows else None
+            checkout_id = payment_rows[0].checkout_session_id if payment_rows else None
+            return (
+                booking.deposit_status if booking else None,
+                len(payment_rows),
+                provider_ref,
+                checkout_id,
+            )
+
+    deposit_status, payment_count, provider_ref, checkout_session_id = asyncio.run(_fetch())
+    assert deposit_status == "paid"
+    assert payment_count == 1
+    assert provider_ref == "pi_dep_multi"
+    assert checkout_session_id == "cs_dep_multi"
+
+
 def test_invoice_checkout_stores_pending_payment(client, async_session_maker, monkeypatch):
     settings.stripe_secret_key = "sk_test"
     invoice_id, _ = asyncio.run(

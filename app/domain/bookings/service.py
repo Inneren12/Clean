@@ -1039,13 +1039,17 @@ async def record_stripe_deposit_payment(
         )
 
     if existing_payment:
+        if provider_ref and not existing_payment.provider_ref:
+            existing_payment.provider_ref = provider_ref
         existing_payment.status = normalized_status
         existing_payment.amount_cents = amount_cents
         existing_payment.currency = normalized_currency
         existing_payment.received_at = received_at
         existing_payment.reference = reference or existing_payment.reference
         existing_payment.checkout_session_id = checkout_session_id or existing_payment.checkout_session_id
-        existing_payment.payment_intent_id = payment_intent_id or provider_ref
+        existing_payment.payment_intent_id = (
+            payment_intent_id or provider_ref or existing_payment.payment_intent_id
+        )
         return existing_payment
 
     payment = Payment(
@@ -1149,7 +1153,10 @@ async def mark_deposit_paid(
     else:
         await session.flush()
 
-    if booking.lead_id and not manual_confirmation_required:
+    should_send_email = (
+        commit and booking.lead_id and not manual_confirmation_required and email_adapter is not None
+    )
+    if should_send_email:
         lead = await session.get(Lead, booking.lead_id)
         if lead:
             await email_service.send_booking_confirmed_email(session, email_adapter, booking, lead)
