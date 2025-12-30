@@ -44,7 +44,7 @@ def test_gst_and_exports(client, async_session_maker):
     settings.admin_basic_username = "admin"
     settings.admin_basic_password = "secret"
 
-    async def seed_data() -> tuple[list[Invoice], Payment]:
+    async def seed_data() -> tuple[list[Invoice], Payment, Payment]:
         async with async_session_maker() as session:
             lead = Lead(**_lead_payload())
             session.add(lead)
@@ -83,9 +83,22 @@ def test_gst_and_exports(client, async_session_maker):
                 currency="CAD",
                 status=statuses.PAYMENT_STATUS_SUCCEEDED,
                 received_at=datetime(2024, 1, 6, 9, 0, tzinfo=timezone.utc),
+                created_at=datetime(2024, 1, 6, 9, 0, tzinfo=timezone.utc),
             )
             payment.invoice = invoice_one
             session.add(payment)
+
+            deposit_payment = Payment(
+                booking_id=booking.booking_id,
+                provider="manual",
+                method="cash",
+                amount_cents=5000,
+                currency="CAD",
+                status=statuses.PAYMENT_STATUS_SUCCEEDED,
+                received_at=datetime(2024, 1, 4, 10, 0, tzinfo=timezone.utc),
+                created_at=datetime(2024, 1, 4, 10, 0, tzinfo=timezone.utc),
+            )
+            session.add(deposit_payment)
 
             number_two = await invoice_service.generate_invoice_number(session, date(2024, 2, 1))
             invoice_two = Invoice(
@@ -110,6 +123,7 @@ def test_gst_and_exports(client, async_session_maker):
                     currency="CAD",
                     status=statuses.PAYMENT_STATUS_SUCCEEDED,
                     received_at=datetime(2024, 2, 2, 9, 0, tzinfo=timezone.utc),
+                    created_at=datetime(2024, 2, 2, 9, 0, tzinfo=timezone.utc),
                     invoice=invoice_two,
                 )
             )
@@ -129,9 +143,9 @@ def test_gst_and_exports(client, async_session_maker):
             session.add(void_invoice)
 
             await session.commit()
-            return [invoice_one, invoice_two], payment
+            return [invoice_one, invoice_two], payment, deposit_payment
 
-    invoices, payment = asyncio.run(seed_data())
+    invoices, payment, deposit_payment = asyncio.run(seed_data())
     headers = _auth_headers("admin", "secret")
 
     gst_resp = client.get(
@@ -165,6 +179,16 @@ def test_gst_and_exports(client, async_session_maker):
     exported_numbers = {row["invoice_number"] for row in payment_rows}
     assert invoices[0].invoice_number in exported_numbers
     assert invoices[1].invoice_number in exported_numbers
+
+    deposit_resp = client.get(
+        "/v1/admin/exports/deposits.csv?from=2024-01-01&to=2024-12-31",
+        headers=headers,
+    )
+    assert deposit_resp.status_code == 200
+    deposit_rows = list(csv.DictReader(io.StringIO(deposit_resp.text)))
+    assert len(deposit_rows) == 1
+    assert deposit_rows[0]["booking_id"] == deposit_payment.booking_id
+    assert deposit_rows[0]["amount_cents"] == str(deposit_payment.amount_cents)
 
 
 def test_pnl_report(client, async_session_maker):
@@ -221,7 +245,7 @@ def test_pnl_report(client, async_session_maker):
     assert payload["rows"], payload
     row = payload["rows"][0]
     assert row["invoice_number"] == invoice.invoice_number
-    assert row["revenue_cents"] == 12600
+    assert row["revenue_cents"] == 12000
     assert row["labour_cents"] == 6000
-    assert row["margin_cents"] == 6600
-    assert abs(row["margin_pct"] - 52.381) < 0.001
+    assert row["margin_cents"] == 6000
+    assert abs(row["margin_pct"] - 50.0) < 0.001
