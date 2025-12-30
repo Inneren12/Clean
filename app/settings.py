@@ -72,6 +72,7 @@ class Settings(BaseSettings):
     retention_chat_days: int = Field(30, env="RETENTION_CHAT_DAYS")
     retention_lead_days: int = Field(365, env="RETENTION_LEAD_DAYS")
     retention_enable_leads: bool = Field(False, env="RETENTION_ENABLE_LEADS")
+    default_worker_hourly_rate_cents: int = Field(2500, env="DEFAULT_WORKER_HOURLY_RATE_CENTS")
     slot_provider_mode: Literal["stub", "db"] = Field("db", env="SLOT_PROVIDER_MODE")
     stripe_secret_key: str | None = Field(None, env="STRIPE_SECRET_KEY")
     stripe_webhook_secret: str | None = Field(None, env="STRIPE_WEBHOOK_SECRET")
