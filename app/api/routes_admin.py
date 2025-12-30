@@ -837,7 +837,12 @@ async def export_sales_ledger(
         ]
     )
     for invoice in invoices:
-        item = invoice_service.build_invoice_list_item(invoice)
+        paid_cents = sum(
+            payment.amount_cents
+            for payment in invoice.payments
+            if payment.status == invoice_statuses.PAYMENT_STATUS_SUCCEEDED
+        )
+        balance_due_cents = max(invoice.total_cents - paid_cents, 0)
         writer.writerow(
             [
                 invoice.invoice_number,
@@ -848,8 +853,8 @@ async def export_sales_ledger(
                 invoice.subtotal_cents,
                 invoice.tax_cents,
                 invoice.total_cents,
-                item["paid_cents"],
-                item["balance_due_cents"],
+                paid_cents,
+                balance_due_cents,
                 invoice.customer_id or "",
                 invoice.order_id or "",
             ]
@@ -880,6 +885,7 @@ async def export_payments_ledger(
             timestamp_expr >= start_dt,
             timestamp_expr <= end_dt,
             Payment.status == invoice_statuses.PAYMENT_STATUS_SUCCEEDED,
+            Payment.invoice_id.isnot(None),
         )
         .order_by(timestamp_expr.asc(), Payment.created_at.asc(), Payment.payment_id.asc())
     )
@@ -926,6 +932,65 @@ async def export_payments_ledger(
     )
 
 
+@router.get("/v1/admin/exports/deposits.csv")
+async def export_deposits_ledger(
+    from_date: date | None = Query(default=None, alias="from"),
+    to_date: date | None = Query(default=None, alias="to"),
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_finance),
+) -> Response:
+    start, end = _normalize_date_range(from_date, to_date)
+    start_dt = datetime.combine(start, time.min, tzinfo=timezone.utc)
+    end_dt = datetime.combine(end, time.max, tzinfo=timezone.utc)
+    timestamp_expr = func.coalesce(Payment.received_at, Payment.created_at).label("ts")
+    stmt = (
+        select(Payment, timestamp_expr)
+        .where(
+            timestamp_expr >= start_dt,
+            timestamp_expr <= end_dt,
+            Payment.status == invoice_statuses.PAYMENT_STATUS_SUCCEEDED,
+            Payment.invoice_id.is_(None),
+            Payment.booking_id.isnot(None),
+        )
+        .order_by(timestamp_expr.asc(), Payment.created_at.asc(), Payment.payment_id.asc())
+    )
+    result = await session.execute(stmt)
+    rows = result.all()
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow([
+        "payment_id",
+        "booking_id",
+        "provider",
+        "method",
+        "amount_cents",
+        "currency",
+        "received_at",
+        "created_at",
+    ])
+
+    for payment, _payment_ts in rows:
+        writer.writerow(
+            [
+                payment.payment_id,
+                payment.booking_id or "",
+                payment.provider,
+                payment.method,
+                payment.amount_cents,
+                payment.currency,
+                payment.received_at.isoformat() if payment.received_at else "",
+                payment.created_at.isoformat(),
+            ]
+        )
+
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=deposits.csv"},
+    )
+
+
 def _resolve_worker_rate(worker: Worker | None) -> int:
     if worker and worker.hourly_rate_cents is not None:
         return worker.hourly_rate_cents
@@ -958,6 +1023,7 @@ async def admin_pnl_report(
             Invoice.status.notin_(
                 [invoice_statuses.INVOICE_STATUS_VOID, invoice_statuses.INVOICE_STATUS_DRAFT]
             ),
+            Booking.status.in_(["DONE", "CONFIRMED"]),
         )
         .order_by(Invoice.issue_date.asc(), Invoice.invoice_number.asc())
     )
@@ -971,7 +1037,7 @@ async def admin_pnl_report(
             .quantize(Decimal("1"), rounding=ROUND_HALF_UP)
         )
         payment_fees_cents = 0
-        revenue_cents = invoice.total_cents
+        revenue_cents = invoice.subtotal_cents
         margin_cents = revenue_cents - labour_cents - payment_fees_cents
         margin_pct = round((margin_cents / revenue_cents) * 100, 4) if revenue_cents else None
 
