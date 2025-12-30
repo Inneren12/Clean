@@ -229,7 +229,7 @@ async def _handle_deposit_event(session: AsyncSession, event: Any, email_adapter
             session,
             checkout_session_id=checkout_session_id,
             payment_intent_id=payment_intent_id,
-            email_adapter=email_adapter,
+            email_adapter=None,
             commit=False,
         )
     else:
