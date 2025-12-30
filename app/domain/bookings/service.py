@@ -29,6 +29,8 @@ from app.domain.notifications import email_service
 from app.domain.pricing.models import CleaningType
 from app.domain.leads.db_models import Lead
 from app.domain.leads.service import grant_referral_credit
+from app.domain.invoices import statuses as invoice_statuses
+from app.domain.invoices.db_models import Payment
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -1001,8 +1003,76 @@ async def attach_checkout_session(
     return booking
 
 
+async def record_stripe_deposit_payment(
+    session: AsyncSession,
+    booking: Booking,
+    *,
+    amount_cents: int,
+    currency: str,
+    status: str,
+    provider_ref: str | None,
+    checkout_session_id: str | None,
+    payment_intent_id: str | None,
+    received_at: datetime,
+    reference: str | None = None,
+) -> Payment | None:
+    normalized_status = status.upper()
+    normalized_currency = currency.upper()
+    if amount_cents <= 0:
+        raise ValueError("Payment amount must be positive")
+
+    existing_payment: Payment | None = None
+    if provider_ref:
+        existing_payment = await session.scalar(
+            select(Payment)
+            .where(Payment.provider == "stripe", Payment.provider_ref == provider_ref)
+            .with_for_update(of=Payment)
+        )
+    if existing_payment is None and checkout_session_id:
+        existing_payment = await session.scalar(
+            select(Payment)
+            .where(
+                Payment.checkout_session_id == checkout_session_id,
+                Payment.booking_id == booking.booking_id,
+            )
+            .with_for_update(of=Payment)
+        )
+
+    if existing_payment:
+        existing_payment.status = normalized_status
+        existing_payment.amount_cents = amount_cents
+        existing_payment.currency = normalized_currency
+        existing_payment.received_at = received_at
+        existing_payment.reference = reference or existing_payment.reference
+        existing_payment.checkout_session_id = checkout_session_id or existing_payment.checkout_session_id
+        existing_payment.payment_intent_id = payment_intent_id or provider_ref
+        return existing_payment
+
+    payment = Payment(
+        booking_id=booking.booking_id,
+        provider="stripe",
+        provider_ref=provider_ref,
+        checkout_session_id=checkout_session_id,
+        payment_intent_id=payment_intent_id or provider_ref,
+        method=invoice_statuses.PAYMENT_METHOD_CARD,
+        amount_cents=amount_cents,
+        currency=normalized_currency,
+        status=normalized_status,
+        received_at=received_at,
+        reference=reference,
+    )
+    session.add(payment)
+    await session.flush()
+    return payment
+
+
 async def mark_deposit_paid(
-    session: AsyncSession, checkout_session_id: str | None, payment_intent_id: str | None, email_adapter
+    session: AsyncSession,
+    checkout_session_id: str | None,
+    payment_intent_id: str | None,
+    email_adapter,
+    *,
+    commit: bool = True,
 ) -> Booking | None:
     conditions = []
     if checkout_session_id:
@@ -1073,8 +1143,11 @@ async def mark_deposit_paid(
                     }
                 },
             )
-    await session.commit()
-    await session.refresh(booking)
+    if commit:
+        await session.commit()
+        await session.refresh(booking)
+    else:
+        await session.flush()
 
     if booking.lead_id and not manual_confirmation_required:
         lead = await session.get(Lead, booking.lead_id)
@@ -1085,7 +1158,12 @@ async def mark_deposit_paid(
 
 
 async def mark_deposit_failed(
-    session: AsyncSession, checkout_session_id: str | None, payment_intent_id: str | None, failure_status: str = "expired"
+    session: AsyncSession,
+    checkout_session_id: str | None,
+    payment_intent_id: str | None,
+    failure_status: str = "expired",
+    *,
+    commit: bool = True,
 ) -> Booking | None:
     conditions = []
     if checkout_session_id:
@@ -1107,8 +1185,11 @@ async def mark_deposit_failed(
     booking.deposit_status = failure_status
     if booking.status == "PENDING":
         booking.status = "CANCELLED"
-    await session.commit()
-    await session.refresh(booking)
+    if commit:
+        await session.commit()
+        await session.refresh(booking)
+    else:
+        await session.flush()
     return booking
 
 
