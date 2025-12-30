@@ -250,9 +250,13 @@ def test_checkout_then_payment_intent_single_payment(client, async_session_maker
     }
 
     events = iter([checkout_event, payment_intent_event])
+    last_event = payment_intent_event
 
     def _verify_webhook(payload, signature):
-        return next(events)
+        try:
+            return next(events)
+        except StopIteration:
+            return last_event
 
     app.state.stripe_client = SimpleNamespace(verify_webhook=_verify_webhook)
 
@@ -266,8 +270,15 @@ def test_checkout_then_payment_intent_single_payment(client, async_session_maker
         async with async_session_maker() as session:
             payments = await session.scalars(sa.select(Payment).where(Payment.invoice_id == invoice_id))
             payment_rows = payments.all()
+            payment_count = await session.scalar(
+                sa.select(sa.func.count()).select_from(Payment).where(Payment.invoice_id == invoice_id)
+            )
             invoice = await session.get(Invoice, invoice_id)
-            return len(payment_rows), payment_rows[0].provider_ref if payment_rows else None, invoice.status if invoice else None
+            return (
+                int(payment_count or 0),
+                payment_rows[0].provider_ref if payment_rows else None,
+                invoice.status if invoice else None,
+            )
 
     payment_count, provider_ref, invoice_status = asyncio.run(_fetch_state())
     assert payment_count == 1

@@ -88,3 +88,15 @@ def test_readyz_alembic_unavailable(monkeypatch, client, async_session_maker):
     assert payload["expected_head"] is None
     assert payload["expected_heads"] == []
     assert payload["migrations_check"] == "skipped_no_alembic_files"
+
+
+def test_readyz_alembic_error_should_503(monkeypatch, client, async_session_maker):
+    asyncio.run(_set_alembic_version(async_session_maker, "any"))
+    monkeypatch.setattr(routes_health, "_load_expected_heads", lambda: (None, "error_loading_alembic"))
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 503
+    payload = response.json()["database"]
+    assert payload["migrations_current"] is False
+    assert payload["migrations_check"] == "error_loading_alembic"
