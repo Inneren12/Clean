@@ -12,6 +12,7 @@ Minimum production monitoring should cover availability, async jobs, and storage
 
 - **Webhook failures**: monitor dead-letter queue growth (`export_events_dead_letter`) and repeated webhook retry errors in logs.
 - **Blocked destinations**: alert on `export_webhook_blocked` or `export_webhook_failed` log events.
+  - Ensure `EXPORT_WEBHOOK_ALLOWED_HOSTS` is configured as bare hostnames (no scheme), either comma-separated or JSON list, so valid webhook URLs are not accidentally blocked.
 
 ## Email and scheduled jobs
 
