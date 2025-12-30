@@ -43,7 +43,7 @@ from app.domain.reason_logs import schemas as reason_schemas
 from app.domain.reason_logs import service as reason_service
 from app.domain.time_tracking import schemas as time_schemas
 from app.domain.time_tracking import service as time_service
-from app.infra.i18n import render_lang_toggle, resolve_lang
+from app.infra.i18n import render_lang_toggle, resolve_lang, tr
 from app.settings import settings
 from pydantic import BaseModel
 
@@ -201,16 +201,19 @@ async def _record_job_event(
         )
 
 
-def _wrap_page(request: Request, body: str, *, title: str = "Worker", active: str | None = None) -> str:
+def _wrap_page(
+    request: Request, body: str, *, title: str = "Worker", active: str | None = None, lang: str | None = None
+) -> str:
+    resolved_lang = lang or resolve_lang(request)
     nav_links = [
-        ("Dashboard", "/worker", "dashboard"),
-        ("My Jobs", "/worker/jobs", "jobs"),
+        (tr(resolved_lang, "nav.dashboard"), "/worker", "dashboard"),
+        (tr(resolved_lang, "nav.my_jobs"), "/worker/jobs", "jobs"),
     ]
     nav = "".join(
         f'<a class="nav-link{" nav-link-active" if active == key else ""}" href="{href}">{html.escape(label)}</a>'
         for label, href, key in nav_links
     )
-    lang_toggle = render_lang_toggle(request, resolve_lang(request))
+    lang_toggle = render_lang_toggle(request, resolved_lang)
     return f"""
     <html>
       <head>
@@ -268,7 +271,7 @@ def _wrap_page(request: Request, body: str, *, title: str = "Worker", active: st
     """
 
 
-def _render_job_card(booking: Booking, invoice: Invoice | None) -> str:
+def _render_job_card(booking: Booking, invoice: Invoice | None, lang: str) -> str:
     lead: Lead | None = getattr(booking, "lead", None)
     badges = " ".join(filter(None, [_status_badge(booking.status), _risk_badge(booking), _deposit_badge(booking, invoice)]))
     address = lead.address if lead else "Address on file"
@@ -279,7 +282,7 @@ def _render_job_card(booking: Booking, invoice: Invoice | None) -> str:
         <div>
           <div class="title"><a href="/worker/jobs/{safe_booking_id}">{html.escape(str(booking.booking_id))}</a></div>
           <div class="muted">{html.escape(address or 'Address pending')}</div>
-          <div class="muted">{_format_dt(booking.starts_at)} · {booking.duration_minutes} mins</div>
+          <div class="muted">{tr(lang, 'job.starts_at')}: {_format_dt(booking.starts_at)} · {tr(lang, 'job.duration')}: {booking.duration_minutes} mins</div>
         </div>
         <div class="stack" style="align-items:flex-end;">{badges}</div>
       </div>
@@ -287,18 +290,18 @@ def _render_job_card(booking: Booking, invoice: Invoice | None) -> str:
     """
 
 
-def _render_dashboard(next_job: Booking | None, counts: dict[str, int]) -> str:
+def _render_dashboard(next_job: Booking | None, counts: dict[str, int], lang: str) -> str:
     metrics = "".join(
         f"<div class=\"pill\"><strong>{html.escape(status.title())}</strong>: {count}</div>"
         for status, count in sorted(counts.items())
     )
-    next_card = "<p class=\"muted\">No jobs assigned.</p>"
+    next_card = f"<p class=\"muted\">{html.escape(tr(lang, 'worker.no_jobs'))}</p>"
     if next_job:
-        next_card = _render_job_card(next_job, None)
+        next_card = _render_job_card(next_job, None, lang)
     return f"""
-    <h1>Today</h1>
+    <h1>{tr(lang, 'worker.today')}</h1>
     <div class="stack">{metrics}</div>
-    <h2>Next job</h2>
+    <h2>{tr(lang, 'worker.next_job')}</h2>
     {next_card}
     """
 
@@ -406,6 +409,7 @@ def _render_job_detail(
     nps_sent: bool,
     nps_response: NpsResponse | None,
     support_ticket: SupportTicket | None,
+    lang: str,
     *,
     message: str | None = None,
     error: bool = False,
@@ -423,13 +427,13 @@ def _render_job_detail(
     addon_rows = "".join(
         f"<li>{html.escape(getattr(addon.definition, 'name', f'Addon {addon.addon_id}'))} × {addon.qty}</li>"
         for addon in addons
-    ) or "<li>No add-ons planned.</li>"
+    ) or f"<li>{html.escape(tr(lang, 'addons.none'))}</li>"
     addon_options = "".join(
         f"<option value='{definition.addon_id}'>{html.escape(getattr(definition, 'name', 'Addon'))} — {_currency(getattr(definition, 'price_cents', 0))}</option>"
         for definition in addon_definitions
         if getattr(definition, "is_active", True)
     )
-    addon_form = "<p class=\"muted\">No add-ons available.</p>"
+    addon_form = f"<p class=\"muted\">{html.escape(tr(lang, 'addons.none'))}</p>"
     if addon_options:
         addon_form = f"""
         <form method=\"post\" action=\"/worker/jobs/{safe_booking_id}/addons\" class=\"stack-tight\" style=\"margin-top:8px;\">
@@ -478,17 +482,17 @@ def _render_job_detail(
     if not_started:
         controls.append(
             f"<form class='inline' method='post' action='/worker/jobs/{safe_booking_id}/start'>"
-            f"<button class='button primary' type='submit'>Start</button></form>"
+            f"<button class='button primary' type='submit'>{html.escape(tr(lang, 'time.start'))}</button></form>"
         )
     elif summary.state == time_service.RUNNING:
         controls.append(
             f"<form class='inline' method='post' action='/worker/jobs/{safe_booking_id}/pause'>"
-            f"<button class='button secondary' type='submit'>Pause</button></form>"
+            f"<button class='button secondary' type='submit'>{html.escape(tr(lang, 'time.pause'))}</button></form>"
         )
     elif summary.state == time_service.PAUSED:
         controls.append(
             f"<form class='inline' method='post' action='/worker/jobs/{safe_booking_id}/resume'>"
-            f"<button class='button primary' type='submit'>Resume</button></form>"
+            f"<button class='button primary' type='submit'>{html.escape(tr(lang, 'time.resume'))}</button></form>"
         )
 
     finish_form = ""
@@ -501,11 +505,11 @@ def _render_job_detail(
           <label class="muted">Pricing adjustment reason (optional)</label>
           <select name="price_adjust_reason">{_reason_options(reason_schemas.PRICE_ADJUST_CODES)}</select>
           <textarea name="price_adjust_note" rows="2" placeholder="Discount or surcharge note"></textarea>
-          <button class="button primary" type="submit">Finish</button>
+          <button class="button primary" type="submit">{html.escape(tr(lang, 'time.finish'))}</button>
         </form>
         """
     elif summary.state == time_service.FINISHED:
-        controls.append("<span class=\"pill\">Finished</span>")
+        controls.append(f"<span class=\"pill\">{html.escape(tr(lang, 'time.finish'))}</span>")
 
     reason_rows = "".join(
         f"<li><strong>{html.escape(str(reason.kind))}</strong>: {html.escape(str(reason.code))}"
@@ -513,7 +517,9 @@ def _render_job_detail(
         for reason in reasons
     )
     reasons_block = (
-        f"<ul class=\"stack-tight\">{reason_rows}</ul>" if reason_rows else "<p class=\"muted\">No reasons captured yet.</p>"
+        f"<ul class=\"stack-tight\">{reason_rows}</ul>"
+        if reason_rows
+        else f"<p class=\"muted\">{html.escape(tr(lang, 'reasons.none'))}</p>"
     )
 
     alert_block = ""
@@ -521,16 +527,16 @@ def _render_job_detail(
         alert_block = f"<div class=\"{'alert error' if error else 'alert'}\">{html.escape(message)}</div>"
 
     actions_html = ''.join(controls) or '<span class="muted">No actions available.</span>'
-    scope_html = ''.join(scope_bits) or '<tr><td colspan=2 class="muted">No scope captured.</td></tr>'
+    scope_html = ''.join(scope_bits) or f"<tr><td colspan=2 class='muted'>{html.escape(tr(lang, 'scope.no_scope'))}</td></tr>"
 
     return f"""
     {alert_block}
     <div class="card">
       <div class="row">
-        <div class="title">Job {_status_badge(booking.status)}</div>
+        <div class="title">{tr(lang, 'job.details_title')} {_status_badge(booking.status)}</div>
         {_risk_badge(booking)}
       </div>
-      <div class="muted">Starts at {_format_dt(booking.starts_at)} · {booking.duration_minutes} mins</div>
+      <div class="muted">{tr(lang, 'job.starts_at')}: {_format_dt(booking.starts_at)} · {tr(lang, 'job.duration')}: {booking.duration_minutes} mins</div>
       <div class="muted">Customer: {html.escape(lead_name)}</div>
       <div class="muted">Address: {html.escape(lead_address)}</div>
       <div class="stack" style="margin-top:8px;">
@@ -540,16 +546,16 @@ def _render_job_detail(
       </div>
     </div>
     <div class="card">
-      <h3>Time tracking</h3>
+      <h3>{tr(lang, 'time.title')}</h3>
       <div class="stack-tight">
-        <div class="muted">Planned: {planned_minutes or '-'} mins · Actual: {actual_minutes} mins</div>
-        <div class="muted">State: {html.escape(state)}</div>
+        <div class="muted">{tr(lang, 'time.planned')}: {planned_minutes or '-'} mins · {tr(lang, 'time.actual')}: {actual_minutes} mins</div>
+        <div class="muted">{tr(lang, 'time.state')}: {html.escape(state)}</div>
         <div class="actions">{actions_html}</div>
       </div>
       {finish_form}
     </div>
     <div class="card">
-      <h3>Reasons</h3>
+      <h3>{tr(lang, 'reasons.title')}</h3>
       {reasons_block}
     </div>
     <div class="card">
@@ -561,12 +567,12 @@ def _render_job_detail(
       </div>
     </div>
     <div class="card">
-      <h3>Scope & notes</h3>
+      <h3>{tr(lang, 'scope.title')}</h3>
       <table>{scope_html}</table>
-      <p class="muted">Customer notes: {html.escape(lead_notes)}</p>
+      <p class="muted">{tr(lang, 'scope.customer_notes')}: {html.escape(lead_notes)}</p>
     </div>
     <div class="card">
-      <h3>Add-ons planned</h3>
+      <h3>{tr(lang, 'addons.title')}</h3>
       <ul>{addon_rows}</ul>
       {addon_form}
     </div>
@@ -581,8 +587,8 @@ def _render_job_detail(
       </div>
     </div>
     <div class="card">
-      <h3>Evidence required</h3>
-      <p class="muted">{html.escape('; '.join(evidence_note) or 'Standard before/after photos recommended.')}</p>
+      <h3>{tr(lang, 'evidence.title')}</h3>
+      <p class="muted">{html.escape('; '.join(evidence_note) or tr(lang, 'evidence.standard'))}</p>
     </div>
     """
 
@@ -592,6 +598,7 @@ async def _render_job_page(
     booking: Booking,
     identity: WorkerIdentity,
     request: Request,
+    lang: str,
     *,
     message: str | None = None,
     error: bool = False,
@@ -629,10 +636,11 @@ async def _render_job_page(
         nps_sent,
         nps_response,
         support_ticket,
+        lang,
         message=message,
         error=error,
     )
-    return HTMLResponse(_wrap_page(request, body, title="Job details", active="jobs"))
+    return HTMLResponse(_wrap_page(request, body, title="Job details", active="jobs", lang=lang))
 
 
 async def _audit_transition(
@@ -687,6 +695,7 @@ async def worker_dashboard(
     identity: WorkerIdentity = Depends(require_worker),
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
+    lang = resolve_lang(request)
     bookings = await _load_team_bookings(session, identity.team_id)
     counts: dict[str, int] = defaultdict(int)
     for booking in bookings:
@@ -703,7 +712,7 @@ async def worker_dashboard(
     await _audit(session, identity, action="VIEW_DASHBOARD", resource_type="portal", resource_id=None)
     await session.commit()
     return HTMLResponse(
-        _wrap_page(request, _render_dashboard(next_job, counts), title="Worker dashboard", active="dashboard")
+        _wrap_page(request, _render_dashboard(next_job, counts, lang), title="Worker dashboard", active="dashboard", lang=lang)
     )
 
 
@@ -713,12 +722,16 @@ async def worker_jobs(
     identity: WorkerIdentity = Depends(require_worker),
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
+    lang = resolve_lang(request)
     bookings = await _load_team_bookings(session, identity.team_id)
     invoices = await _latest_invoices(session, [b.booking_id for b in bookings])
-    cards = "".join(_render_job_card(booking, invoices.get(booking.booking_id)) for booking in bookings) or "<p class=\"muted\">No jobs yet.</p>"
+    cards = (
+        "".join(_render_job_card(booking, invoices.get(booking.booking_id), lang) for booking in bookings)
+        or f"<p class=\"muted\">{html.escape(tr(lang, 'worker.no_jobs'))}</p>"
+    )
     await _audit(session, identity, action="VIEW_JOBS", resource_type="portal", resource_id=None)
     await session.commit()
-    return HTMLResponse(_wrap_page(request, cards, title="My jobs", active="jobs"))
+    return HTMLResponse(_wrap_page(request, cards, title="My jobs", active="jobs", lang=lang))
 
 
 @router.get("/worker/jobs/{job_id}", response_class=HTMLResponse)
@@ -729,7 +742,8 @@ async def worker_job_detail(
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
     booking = await _load_worker_booking(session, job_id, identity)
-    return await _render_job_page(session, booking, identity, request)
+    lang = resolve_lang(request)
+    return await _render_job_page(session, booking, identity, request, lang)
 
 
 @router.post("/worker/jobs/{job_id}/addons", response_class=HTMLResponse)
@@ -742,6 +756,7 @@ async def worker_update_addons(
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
     booking = await _load_worker_booking(session, job_id, identity)
+    lang = resolve_lang(request)
 
     try:
         parsed_qty = int(qty)
@@ -749,7 +764,7 @@ async def worker_update_addons(
         parsed_qty = 0
     if parsed_qty <= 0:
         return await _render_job_page(
-            session, booking, identity, request, message="Quantity must be positive", error=True, log_view=False
+            session, booking, identity, request, lang, message="Quantity must be positive", error=True, log_view=False
         )
 
     definitions = await addon_service.list_definitions(session, include_inactive=False)
@@ -775,7 +790,7 @@ async def worker_update_addons(
         await addon_service.set_order_addons(session, booking.booking_id, updated)
     except ValueError as exc:
         return await _render_job_page(
-            session, booking, identity, request, message=str(exc), error=True, log_view=False
+            session, booking, identity, request, lang, message=str(exc), error=True, log_view=False
         )
 
     invoice_map = await _latest_invoices(session, [booking.booking_id])
@@ -801,7 +816,7 @@ async def worker_update_addons(
     )
     await session.commit()
 
-    return await _render_job_page(session, booking, identity, request, message=invoice_message, log_view=False)
+    return await _render_job_page(session, booking, identity, request, lang, message=invoice_message, log_view=False)
 
 
 @router.post("/worker/jobs/{job_id}/start", response_class=HTMLResponse)
@@ -812,6 +827,7 @@ async def worker_start_job(
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
     booking = await _load_worker_booking(session, job_id, identity)
+    lang = resolve_lang(request)
     before_entry = await time_service.fetch_time_entry(session, booking.booking_id)
     before_state = getattr(before_entry, "state", None)
     message = None
@@ -837,7 +853,7 @@ async def worker_start_job(
     except ValueError as exc:
         message = str(exc)
         error = True
-    return await _render_job_page(session, booking, identity, request, message=message, error=error, log_view=False)
+    return await _render_job_page(session, booking, identity, request, lang, message=message, error=error, log_view=False)
 
 
 @router.post("/worker/jobs/{job_id}/pause", response_class=HTMLResponse)
@@ -848,6 +864,7 @@ async def worker_pause_job(
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
     booking = await _load_worker_booking(session, job_id, identity)
+    lang = resolve_lang(request)
     entry = await time_service.fetch_time_entry(session, booking.booking_id)
     before_state = getattr(entry, "state", None)
     if entry is None:
@@ -875,7 +892,7 @@ async def worker_pause_job(
     except ValueError as exc:
         message = str(exc)
         error = True
-    return await _render_job_page(session, booking, identity, request, message=message, error=error, log_view=False)
+    return await _render_job_page(session, booking, identity, request, lang, message=message, error=error, log_view=False)
 
 
 @router.post("/worker/jobs/{job_id}/resume", response_class=HTMLResponse)
@@ -886,6 +903,7 @@ async def worker_resume_job(
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
     booking = await _load_worker_booking(session, job_id, identity)
+    lang = resolve_lang(request)
     entry = await time_service.fetch_time_entry(session, booking.booking_id)
     before_state = getattr(entry, "state", None)
     if entry is None:
@@ -913,7 +931,7 @@ async def worker_resume_job(
     except ValueError as exc:
         message = str(exc)
         error = True
-    return await _render_job_page(session, booking, identity, request, message=message, error=error, log_view=False)
+    return await _render_job_page(session, booking, identity, request, lang, message=message, error=error, log_view=False)
 
 
 @router.post("/worker/jobs/{job_id}/finish", response_class=HTMLResponse)
@@ -928,6 +946,7 @@ async def worker_finish_job(
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
     booking = await _load_worker_booking(session, job_id, identity)
+    lang = resolve_lang(request)
     entry = await time_service.fetch_time_entry(session, booking.booking_id)
     if entry is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Time tracking not started")
@@ -1009,7 +1028,7 @@ async def worker_finish_job(
     except ValueError as exc:
         message = str(exc)
         error = True
-    return await _render_job_page(session, booking, identity, request, message=message, error=error, log_view=False)
+    return await _render_job_page(session, booking, identity, request, lang, message=message, error=error, log_view=False)
 
 
 @router.get(
