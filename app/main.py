@@ -1,4 +1,6 @@
 import logging
+import os
+import sys
 import time
 import uuid
 from typing import Callable, Iterable
@@ -90,6 +92,19 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next: Callable):
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'",
+        )
+        return response
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: FastAPI, limiter: RateLimiter, app_settings) -> None:
         super().__init__(app)
@@ -133,8 +148,33 @@ def _try_include_style_guide(app: FastAPI) -> None:
     app.include_router(style_guide_router)
 
 
+def _validate_prod_config(app_settings) -> None:
+    if app_settings.app_env == "dev" or getattr(app_settings, "testing", False) or os.getenv("PYTEST_CURRENT_TEST") or "pytest" in sys.argv[0]:
+        return
+
+    errors: list[str] = []
+    if not app_settings.worker_portal_secret:
+        errors.append("WORKER_PORTAL_SECRET is required outside dev")
+
+    admin_credentials = [
+        (app_settings.owner_basic_username, app_settings.owner_basic_password),
+        (app_settings.admin_basic_username, app_settings.admin_basic_password),
+        (app_settings.dispatcher_basic_username, app_settings.dispatcher_basic_password),
+        (app_settings.accountant_basic_username, app_settings.accountant_basic_password),
+        (app_settings.viewer_basic_username, app_settings.viewer_basic_password),
+    ]
+    if not any(username and password for username, password in admin_credentials):
+        errors.append("At least one admin credential pair must be configured outside dev")
+
+    if errors:
+        for error in errors:
+            logger.error("startup_config_error", extra={"extra": {"detail": error}})
+        raise RuntimeError("Invalid production configuration; see logs for details")
+
+
 def create_app(app_settings) -> FastAPI:
     configure_logging()
+    _validate_prod_config(app_settings)
     app = FastAPI(title="Cleaning Economy Bot", version="1.0.0")
 
     app.mount("/static", StaticFiles(directory="app/static"), name="static")
@@ -155,6 +195,7 @@ def create_app(app_settings) -> FastAPI:
     app.add_middleware(RateLimitMiddleware, limiter=rate_limiter, app_settings=app_settings)
     app.add_middleware(LoggingMiddleware)
     app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(AdminAccessMiddleware)
     app.add_middleware(AdminAuditMiddleware)
     app.add_middleware(WorkerAccessMiddleware)

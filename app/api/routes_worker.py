@@ -43,6 +43,7 @@ from app.domain.reason_logs import schemas as reason_schemas
 from app.domain.reason_logs import service as reason_service
 from app.domain.time_tracking import schemas as time_schemas
 from app.domain.time_tracking import service as time_service
+from app.infra.csrf import get_csrf_token, issue_csrf_token, render_csrf_input, require_csrf
 from app.infra.i18n import render_lang_toggle, resolve_lang, tr
 from app.settings import settings
 from pydantic import BaseModel
@@ -413,12 +414,14 @@ def _render_job_detail(
     *,
     message: str | None = None,
     error: bool = False,
+    csrf_token: str,
 ) -> str:
     lead: Lead | None = getattr(booking, "lead", None)
     lead_name = getattr(lead, "name", "Unknown") or "Unknown"
     lead_address = getattr(lead, "address", "On file") or "On file"
     lead_notes = getattr(lead, "notes", "None") or "None"
     safe_booking_id = html.escape(str(booking.booking_id), quote=True)
+    csrf_field = render_csrf_input(csrf_token)
     scope_bits = []
     if lead and isinstance(lead.structured_inputs, dict):
         for key, value in lead.structured_inputs.items():
@@ -436,11 +439,12 @@ def _render_job_detail(
     addon_form = f"<p class=\"muted\">{html.escape(tr(lang, 'addons.none'))}</p>"
     if addon_options:
         addon_form = f"""
-        <form method=\"post\" action=\"/worker/jobs/{safe_booking_id}/addons\" class=\"stack-tight\" style=\"margin-top:8px;\">
+        <form method=\"post\" action=\"/worker/jobs/{safe_booking_id}/addons\" class=\"stack-tight\" style=\"margin-top:8px;\"> 
           <label class=\"muted\">Add add-on</label>
           <select name=\"addon_id\" required>{addon_options}</select>
           <label class=\"muted\">Quantity</label>
           <input type=\"number\" name=\"qty\" value=\"1\" min=\"1\" step=\"1\" />
+          {csrf_field}
           <button class=\"button primary\" type=\"submit\">Add add-on</button>
         </form>
         """
@@ -482,17 +486,17 @@ def _render_job_detail(
     if not_started:
         controls.append(
             f"<form class='inline' method='post' action='/worker/jobs/{safe_booking_id}/start'>"
-            f"<button class='button primary' type='submit'>{html.escape(tr(lang, 'time.start'))}</button></form>"
+            f"{csrf_field}<button class='button primary' type='submit'>{html.escape(tr(lang, 'time.start'))}</button></form>"
         )
     elif summary.state == time_service.RUNNING:
         controls.append(
             f"<form class='inline' method='post' action='/worker/jobs/{safe_booking_id}/pause'>"
-            f"<button class='button secondary' type='submit'>{html.escape(tr(lang, 'time.pause'))}</button></form>"
+            f"{csrf_field}<button class='button secondary' type='submit'>{html.escape(tr(lang, 'time.pause'))}</button></form>"
         )
     elif summary.state == time_service.PAUSED:
         controls.append(
             f"<form class='inline' method='post' action='/worker/jobs/{safe_booking_id}/resume'>"
-            f"<button class='button primary' type='submit'>{html.escape(tr(lang, 'time.resume'))}</button></form>"
+            f"{csrf_field}<button class='button primary' type='submit'>{html.escape(tr(lang, 'time.resume'))}</button></form>"
         )
 
     finish_form = ""
@@ -505,6 +509,7 @@ def _render_job_detail(
           <label class="muted">Pricing adjustment reason (optional)</label>
           <select name="price_adjust_reason">{_reason_options(reason_schemas.PRICE_ADJUST_CODES)}</select>
           <textarea name="price_adjust_note" rows="2" placeholder="Discount or surcharge note"></textarea>
+          {csrf_field}
           <button class="button primary" type="submit">{html.escape(tr(lang, 'time.finish'))}</button>
         </form>
         """
@@ -627,6 +632,7 @@ async def _render_job_page(
             resource_id=booking.booking_id,
         )
         await session.commit()
+    csrf_token = get_csrf_token(request)
     body = _render_job_detail(
         booking,
         invoice,
@@ -639,8 +645,11 @@ async def _render_job_page(
         lang,
         message=message,
         error=error,
+        csrf_token=csrf_token,
     )
-    return HTMLResponse(_wrap_page(request, body, title="Job details", active="jobs", lang=lang))
+    response = HTMLResponse(_wrap_page(request, body, title="Job details", active="jobs", lang=lang))
+    issue_csrf_token(request, response, csrf_token)
+    return response
 
 
 async def _audit_transition(
@@ -750,6 +759,7 @@ async def worker_job_detail(
 async def worker_update_addons(
     job_id: str,
     request: Request,
+    _csrf: None = Depends(require_csrf),
     addon_id: int = Form(...),
     qty: int = Form(1),
     identity: WorkerIdentity = Depends(require_worker),
@@ -823,6 +833,7 @@ async def worker_update_addons(
 async def worker_start_job(
     job_id: str,
     request: Request,
+    _csrf: None = Depends(require_csrf),
     identity: WorkerIdentity = Depends(require_worker),
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
@@ -860,6 +871,7 @@ async def worker_start_job(
 async def worker_pause_job(
     job_id: str,
     request: Request,
+    _csrf: None = Depends(require_csrf),
     identity: WorkerIdentity = Depends(require_worker),
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
@@ -899,6 +911,7 @@ async def worker_pause_job(
 async def worker_resume_job(
     job_id: str,
     request: Request,
+    _csrf: None = Depends(require_csrf),
     identity: WorkerIdentity = Depends(require_worker),
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
@@ -938,6 +951,7 @@ async def worker_resume_job(
 async def worker_finish_job(
     job_id: str,
     request: Request,
+    _csrf: None = Depends(require_csrf),
     delay_reason: str | None = Form(None),
     delay_note: str | None = Form(None),
     price_adjust_reason: str | None = Form(None),
