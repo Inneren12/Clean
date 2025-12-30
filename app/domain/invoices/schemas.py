@@ -132,3 +132,57 @@ class InvoicePaymentInitResponse(BaseModel):
     currency: str
     checkout_url: str | None = None
     client_secret: str | None = None
+
+
+class GstReportResponse(BaseModel):
+    range_start: date
+    range_end: date
+    invoice_count: int
+    taxable_subtotal_cents: int
+    tax_cents: int
+
+
+class SalesLedgerRow(BaseModel):
+    invoice_number: str
+    issue_date: date
+    due_date: date | None
+    status: str
+    currency: str
+    subtotal_cents: int
+    tax_cents: int
+    total_cents: int
+    paid_cents: int
+    balance_due_cents: int
+    customer_id: str | None = None
+    booking_id: str | None = None
+
+
+class PaymentLedgerRow(BaseModel):
+    payment_id: str
+    invoice_number: str | None
+    booking_id: str | None
+    provider: str
+    method: str
+    status: str
+    amount_cents: int
+    currency: str
+    received_at: datetime | None = None
+    created_at: datetime
+
+
+class PnlRow(BaseModel):
+    booking_id: str
+    invoice_number: str
+    revenue_cents: int
+    labour_cents: int
+    payment_fees_cents: int
+    margin_cents: int
+    margin_pct: float | None
+    worker_rate_cents: int
+    actual_minutes: int
+
+
+class PnlReportResponse(BaseModel):
+    range_start: date
+    range_end: date
+    rows: list[PnlRow]

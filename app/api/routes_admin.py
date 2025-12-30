@@ -5,6 +5,7 @@ import io
 import logging
 import math
 from datetime import date, datetime, time, timezone, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Iterable, List, Optional
 from urllib.parse import urlencode
 
@@ -49,7 +50,7 @@ from app.domain.export_events.schemas import ExportEventResponse
 from app.domain.invoices import schemas as invoice_schemas
 from app.domain.invoices import service as invoice_service
 from app.domain.invoices import statuses as invoice_statuses
-from app.domain.invoices.db_models import Invoice
+from app.domain.invoices.db_models import Invoice, Payment
 from app.domain.leads import statuses as lead_statuses
 from app.domain.leads.db_models import Lead, ReferralCredit
 from app.domain.nps.db_models import SupportTicket
@@ -653,6 +654,14 @@ def _normalize_range(
     return normalized_start, normalized_end
 
 
+def _normalize_date_range(start: date | None, end: date | None) -> tuple[date, date]:
+    range_start = start or date(1970, 1, 1)
+    range_end = end or date.today()
+    if range_end < range_start:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid date range")
+    return range_start, range_end
+
+
 def _csv_line(key: str, value: object) -> str:
     return f"{key},{value if value is not None else ''}"
 
@@ -750,6 +759,237 @@ async def get_admin_metrics(
         return Response("\n".join(lines), media_type="text/csv")
 
     return response_body
+
+
+@router.get("/v1/admin/reports/gst", response_model=invoice_schemas.GstReportResponse)
+async def admin_gst_report(
+    from_date: date | None = Query(default=None, alias="from"),
+    to_date: date | None = Query(default=None, alias="to"),
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_finance),
+) -> invoice_schemas.GstReportResponse:
+    start, end = _normalize_date_range(from_date, to_date)
+    stmt = (
+        select(
+            func.count(Invoice.invoice_id),
+            func.coalesce(func.sum(Invoice.subtotal_cents), 0),
+            func.coalesce(func.sum(Invoice.tax_cents), 0),
+        )
+        .where(
+            Invoice.issue_date >= start,
+            Invoice.issue_date <= end,
+            Invoice.status.notin_(
+                [invoice_statuses.INVOICE_STATUS_VOID, invoice_statuses.INVOICE_STATUS_DRAFT]
+            ),
+        )
+        .select_from(Invoice)
+    )
+    result = await session.execute(stmt)
+    invoice_count, subtotal_cents, tax_cents = result.one()
+    return invoice_schemas.GstReportResponse(
+        range_start=start,
+        range_end=end,
+        invoice_count=int(invoice_count or 0),
+        taxable_subtotal_cents=int(subtotal_cents or 0),
+        tax_cents=int(tax_cents or 0),
+    )
+
+
+@router.get("/v1/admin/exports/sales-ledger.csv")
+async def export_sales_ledger(
+    from_date: date | None = Query(default=None, alias="from"),
+    to_date: date | None = Query(default=None, alias="to"),
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_finance),
+) -> Response:
+    start, end = _normalize_date_range(from_date, to_date)
+    stmt = (
+        select(Invoice)
+        .options(selectinload(Invoice.payments))
+        .where(
+            Invoice.issue_date >= start,
+            Invoice.issue_date <= end,
+            Invoice.status.notin_(
+                [invoice_statuses.INVOICE_STATUS_VOID, invoice_statuses.INVOICE_STATUS_DRAFT]
+            ),
+        )
+        .order_by(Invoice.issue_date.asc(), Invoice.invoice_number.asc())
+    )
+    result = await session.execute(stmt)
+    invoices = result.scalars().all()
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        [
+            "invoice_number",
+            "issue_date",
+            "due_date",
+            "status",
+            "currency",
+            "subtotal_cents",
+            "tax_cents",
+            "total_cents",
+            "paid_cents",
+            "balance_due_cents",
+            "customer_id",
+            "booking_id",
+        ]
+    )
+    for invoice in invoices:
+        item = invoice_service.build_invoice_list_item(invoice)
+        writer.writerow(
+            [
+                invoice.invoice_number,
+                invoice.issue_date.isoformat(),
+                invoice.due_date.isoformat() if invoice.due_date else "",
+                invoice.status,
+                invoice.currency,
+                invoice.subtotal_cents,
+                invoice.tax_cents,
+                invoice.total_cents,
+                item["paid_cents"],
+                item["balance_due_cents"],
+                invoice.customer_id or "",
+                invoice.order_id or "",
+            ]
+        )
+
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=sales-ledger.csv"},
+    )
+
+
+@router.get("/v1/admin/exports/payments.csv")
+async def export_payments_ledger(
+    from_date: date | None = Query(default=None, alias="from"),
+    to_date: date | None = Query(default=None, alias="to"),
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_finance),
+) -> Response:
+    start, end = _normalize_date_range(from_date, to_date)
+    start_dt = datetime.combine(start, time.min, tzinfo=timezone.utc)
+    end_dt = datetime.combine(end, time.max, tzinfo=timezone.utc)
+    timestamp_expr = func.coalesce(Payment.received_at, Payment.created_at).label("ts")
+    stmt = (
+        select(Payment, Invoice.invoice_number, Invoice.order_id, timestamp_expr)
+        .join(Invoice, Payment.invoice_id == Invoice.invoice_id, isouter=True)
+        .where(
+            timestamp_expr >= start_dt,
+            timestamp_expr <= end_dt,
+            Payment.status == invoice_statuses.PAYMENT_STATUS_SUCCEEDED,
+        )
+        .order_by(timestamp_expr.asc(), Payment.created_at.asc(), Payment.payment_id.asc())
+    )
+    result = await session.execute(stmt)
+    rows = result.all()
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        [
+            "payment_id",
+            "invoice_number",
+            "booking_id",
+            "provider",
+            "method",
+            "status",
+            "amount_cents",
+            "currency",
+            "received_at",
+            "created_at",
+        ]
+    )
+
+    for payment, invoice_number, invoice_order_id, _payment_ts in rows:
+        writer.writerow(
+            [
+                payment.payment_id,
+                invoice_number or "",
+                payment.booking_id or invoice_order_id or "",
+                payment.provider,
+                payment.method,
+                payment.status,
+                payment.amount_cents,
+                payment.currency,
+                payment.received_at.isoformat() if payment.received_at else "",
+                payment.created_at.isoformat(),
+            ]
+        )
+
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=payments.csv"},
+    )
+
+
+def _resolve_worker_rate(worker: Worker | None) -> int:
+    if worker and worker.hourly_rate_cents is not None:
+        return worker.hourly_rate_cents
+    return settings.default_worker_hourly_rate_cents
+
+
+def _actual_minutes(booking: Booking) -> int:
+    if booking.actual_seconds is not None:
+        return int(math.ceil(booking.actual_seconds / 60))
+    if booking.actual_duration_minutes is not None:
+        return booking.actual_duration_minutes
+    return booking.duration_minutes
+
+
+@router.get("/v1/admin/reports/pnl", response_model=invoice_schemas.PnlReportResponse)
+async def admin_pnl_report(
+    from_date: date | None = Query(default=None, alias="from"),
+    to_date: date | None = Query(default=None, alias="to"),
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_finance),
+) -> invoice_schemas.PnlReportResponse:
+    start, end = _normalize_date_range(from_date, to_date)
+    stmt = (
+        select(Invoice, Booking, Worker)
+        .join(Booking, Invoice.order_id == Booking.booking_id)
+        .join(Worker, Booking.assigned_worker_id == Worker.worker_id, isouter=True)
+        .where(
+            Invoice.issue_date >= start,
+            Invoice.issue_date <= end,
+            Invoice.status.notin_(
+                [invoice_statuses.INVOICE_STATUS_VOID, invoice_statuses.INVOICE_STATUS_DRAFT]
+            ),
+        )
+        .order_by(Invoice.issue_date.asc(), Invoice.invoice_number.asc())
+    )
+    result = await session.execute(stmt)
+    rows: list[invoice_schemas.PnlRow] = []
+    for invoice, booking, worker in result.all():
+        worker_rate_cents = _resolve_worker_rate(worker)
+        minutes = _actual_minutes(booking)
+        labour_cents = int(
+            (Decimal(worker_rate_cents) * Decimal(minutes) / Decimal(60))
+            .quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        )
+        payment_fees_cents = 0
+        revenue_cents = invoice.total_cents
+        margin_cents = revenue_cents - labour_cents - payment_fees_cents
+        margin_pct = round((margin_cents / revenue_cents) * 100, 4) if revenue_cents else None
+
+        rows.append(
+            invoice_schemas.PnlRow(
+                booking_id=booking.booking_id,
+                invoice_number=invoice.invoice_number,
+                revenue_cents=revenue_cents,
+                labour_cents=labour_cents,
+                payment_fees_cents=payment_fees_cents,
+                margin_cents=margin_cents,
+                margin_pct=margin_pct,
+                worker_rate_cents=worker_rate_cents,
+                actual_minutes=minutes,
+            )
+        )
+
+    return invoice_schemas.PnlReportResponse(range_start=start, range_end=end, rows=rows)
 
 
 @router.post("/v1/admin/pricing/reload", status_code=status.HTTP_202_ACCEPTED)
