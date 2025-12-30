@@ -1,5 +1,6 @@
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 from alembic.config import Config
@@ -29,20 +30,42 @@ def _load_expected_heads() -> tuple[list[str] | None, str | None]:
     if now - _HEAD_CACHE["timestamp"] < _HEAD_CACHE_TTL_SECONDS:
         return _HEAD_CACHE["heads"], _HEAD_CACHE["skip_reason"]
 
+    repo_root = Path(__file__).resolve().parents[2]
+    alembic_ini = repo_root / "alembic.ini"
+    script_location = repo_root / "alembic"
+
+    if not alembic_ini.exists() or not script_location.exists():
+        skip_reason = "skipped_no_alembic_files"
+        if not _HEAD_CACHE["warning_logged"]:
+            logger.warning(
+                "migrations_check_skipped_no_alembic_files",
+                extra={"error": "alembic config or script directory missing"},
+            )
+            _HEAD_CACHE["warning_logged"] = True
+        _HEAD_CACHE.update({"timestamp": now, "heads": None, "skip_reason": skip_reason})
+        return None, skip_reason
+
     try:
-        cfg = Config("alembic.ini")
-        cfg.set_main_option("script_location", "alembic")
+        cfg = Config(str(alembic_ini))
+        cfg.set_main_option("script_location", str(script_location))
         script = ScriptDirectory.from_config(cfg)
         heads = script.get_heads()
         _HEAD_CACHE.update({"timestamp": now, "heads": heads, "skip_reason": None})
         return heads, None
-    except Exception as exc:  # noqa: BLE001
+    except FileNotFoundError as exc:
         skip_reason = "skipped_no_alembic_files"
         if not _HEAD_CACHE["warning_logged"]:
             logger.warning("migrations_check_skipped_no_alembic_files", extra={"error": str(exc)})
             _HEAD_CACHE["warning_logged"] = True
         _HEAD_CACHE.update({"timestamp": now, "heads": None, "skip_reason": skip_reason})
         return None, skip_reason
+    except Exception as exc:  # noqa: BLE001
+        skip_reason = "error_loading_alembic"
+        if not _HEAD_CACHE["warning_logged"]:
+            logger.warning("migrations_check_error_loading_alembic", extra={"error": str(exc)})
+            _HEAD_CACHE["warning_logged"] = True
+        _HEAD_CACHE.update({"timestamp": now, "heads": [], "skip_reason": skip_reason})
+        return [], skip_reason
 
 
 @router.get("/healthz")
@@ -96,8 +119,10 @@ async def _database_status(request: Request) -> dict[str, Any]:
         }
 
     migrations_current: bool
-    if skip_reason:
+    if skip_reason == "skipped_no_alembic_files":
         migrations_current = True
+    elif skip_reason == "error_loading_alembic":
+        migrations_current = False
     elif not expected_heads:
         migrations_current = False
     elif len(expected_heads) == 1:
