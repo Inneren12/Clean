@@ -291,7 +291,7 @@ def _wrap_page(request: Request, content: str, *, title: str = "Admin", active: 
     )
     lang_toggle = render_lang_toggle(request, resolve_lang(request))
     return f"""
-    <html>
+    <html lang=\"en\">
       <head>
         <title>{html.escape(title)}</title>
         <style>
@@ -1439,6 +1439,7 @@ async def admin_invoice_list_ui(
             "<div class=\"card\">",
             "<div class=\"card-row\"><div><div class=\"title\">Invoices</div><div class=\"muted\">Search, filter and drill into invoices</div></div>",
             f"<div class=\"chip\">Total: {invoice_list.total}</div></div>",
+            "<div class=\"muted small\">Invoices use English labels (Invoice, Subtotal, Tax, Total) regardless of your language preference.</div>",
             filters_html,
             "<table class=\"table\">",
             "<thead><tr><th>Invoice</th><th>Status</th><th>Dates</th><th>Total</th><th>Balance</th><th>Order/Customer</th><th>Created</th></tr></thead>",
@@ -1634,6 +1635,19 @@ async def admin_invoice_detail_ui(
         ]
     )
 
+    totals_block = "".join(
+        [
+            "<div class=\"card section\">",
+            "<div class=\"title\">Totals</div>",
+            "<div class=\"stack\">",
+            f"<div><strong>Subtotal:</strong> {_format_money(invoice.subtotal_cents, invoice.currency)}</div>",
+            f"<div><strong>Tax:</strong> {_format_money(invoice.tax_cents, invoice.currency)}</div>",
+            f"<div><strong>Total:</strong> {_format_money(invoice.total_cents, invoice.currency)}</div>",
+            "</div>",
+            "</div>",
+        ]
+    )
+
     notes_block = ""
     if invoice.notes:
         notes_block = "".join(
@@ -1812,6 +1826,7 @@ async def admin_invoice_detail_ui(
             header,
             customer_section,
             items_table,
+            totals_block,
             payments_table,
             "<div class=\"card section\"><div class=\"title\">Record manual payment</div>",
             payment_form,

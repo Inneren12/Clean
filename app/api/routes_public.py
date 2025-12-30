@@ -89,7 +89,17 @@ def _render_invoice_html(context: dict) -> str:
                     f"<p><a href=\"/i/{escape(token)}/receipts/{payment_id}.pdf\">Receipt {payment_id}</a></p>"
                 )
 
-    return "\n".join(rows)
+    body = "\n".join(rows)
+    return f"""
+    <html lang=\"en\">
+      <head>
+        <title>Invoice {escape(invoice['invoice_number'])}</title>
+      </head>
+      <body>
+        {body}
+      </body>
+    </html>
+    """
 
 
 def _render_nps_form(order_id: str, token: str) -> str:
