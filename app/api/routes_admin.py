@@ -105,6 +105,42 @@ def _format_ts(value: float | None) -> str:
     return _format_dt(dt)
 
 
+def _icon(name: str) -> str:
+    icons = {
+        "eye": """
+        <svg class=\"icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\">
+          <path d=\"M1.5 12s4-6.5 10.5-6.5S22.5 12 22.5 12s-4 6.5-10.5 6.5S1.5 12 1.5 12Z\" />
+          <circle cx=\"12\" cy=\"12\" r=\"3.5\" />
+        </svg>
+        """,
+        "receipt": """
+        <svg class=\"icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\">
+          <path d=\"M7 3.5 9 2l2 1.5L13 2l2 1.5L17 2l2 1.5V21l-2-1.5-2 1.5-2-1.5-2 1.5-2-1.5-2 1.5V3.5Z\" />
+          <path d=\"M8.5 8.5h7M8.5 12h7M8.5 15.5h4\" />
+        </svg>
+        """,
+        "search": """
+        <svg class=\"icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\">
+          <circle cx=\"11\" cy=\"11\" r=\"6.5\" />
+          <path d=\"m16 16 4.5 4.5\" />
+        </svg>
+        """,
+        "copy": """
+        <svg class=\"icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\">
+          <rect x=\"8\" y=\"8\" width=\"11\" height=\"11\" rx=\"2.5\" />
+          <path d=\"M5 15.5V6.5A2.5 2.5 0 0 1 7.5 4H15\" />
+        </svg>
+        """,
+        "warning": """
+        <svg class=\"icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\">
+          <path d=\"m12 3.5 9 16H3l9-16Z\" />
+          <path d=\"M12 10v4.5M12 18.1h.01\" />
+        </svg>
+        """,
+    }
+    return icons.get(name, "")
+
+
 def _filter_badge(filter_key: str, active_filters: set[str], lang: str | None) -> str:
     labels = {
         "needs_human": tr(lang, "admin.filters.needs_human"),
@@ -121,7 +157,7 @@ def _filter_badge(filter_key: str, active_filters: set[str], lang: str | None) -
 def _render_filters(active_filters: set[str], lang: str | None) -> str:
     parts = [
         '<div class="filters">',
-        f"<strong>{tr(lang, 'admin.filters.title')}</strong>",
+        f"<div class=\"with-icon\">{_icon('search')}<strong>{tr(lang, 'admin.filters.title')}</strong></div>",
         _filter_badge("needs_human", active_filters, lang),
         _filter_badge("waiting_for_contact", active_filters, lang),
         _filter_badge("order_created", active_filters, lang),
@@ -292,11 +328,19 @@ def _wrap_page(
     page_lang = page_lang or resolved_lang
     nav_lang = "en" if active == "invoices" else resolved_lang
     nav_links = [
-        (tr(nav_lang, "admin.nav.observability"), "/v1/admin/observability", "observability"),
-        (tr(nav_lang, "admin.nav.invoices"), "/v1/admin/ui/invoices", "invoices"),
+        (
+            _icon("eye") + html.escape(tr(nav_lang, "admin.nav.observability")),
+            "/v1/admin/observability",
+            "observability",
+        ),
+        (
+            _icon("receipt") + html.escape(tr(nav_lang, "admin.nav.invoices")),
+            "/v1/admin/ui/invoices",
+            "invoices",
+        ),
     ]
     nav = "".join(
-        f'<a class="nav-link{" nav-link-active" if active == key else ""}" href="{href}">{html.escape(label)}</a>'
+        f'<a class="nav-link{" nav-link-active" if active == key else ""}" href="{href}"><span class="with-icon">{label}</span></a>'
         for label, href, key in nav_links
     )
     lang_toggle = render_lang_toggle(request, resolved_lang)
@@ -305,29 +349,29 @@ def _wrap_page(
       <head>
         <title>{html.escape(title)}</title>
         <style>
-          body {{ font-family: Arial, sans-serif; margin: 24px; background: #fafafa; color: #111827; }}
-          h1 {{ margin-bottom: 8px; }}
-          h2 {{ margin-top: 28px; margin-bottom: 12px; }}
+          body {{ font-family: Arial, sans-serif; margin: 0; background: #f8fafc; color: #111827; }}
+          h1 {{ margin: 0 0 8px; font-size: 24px; }}
+          h2 {{ margin: 24px 0 12px; font-size: 18px; }}
           a {{ color: #2563eb; }}
-          .page {{ max-width: 1080px; margin: 0 auto; }}
-          .topbar {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 12px; flex-wrap: wrap; }}
-          .topbar-actions {{ display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }}
-          .nav {{ display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }}
-          .nav-link {{ text-decoration: none; color: #374151; padding: 6px 10px; border-radius: 8px; border: 1px solid transparent; }}
-          .nav-link-active {{ background: #111827; color: #fff; border-color: #111827; }}
-          .lang-toggle {{ display: flex; gap: 6px; font-size: 13px; align-items: center; }}
-          .lang-link {{ text-decoration: none; color: #374151; padding: 4px 8px; border-radius: 8px; border: 1px solid transparent; font-weight: 600; }}
-          .lang-link-active {{ background: #111827; color: #fff; border-color: #111827; }}
-          .card {{ background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }}
-          .card-row {{ display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }}
+          .page {{ max-width: 1080px; margin: 0 auto; padding: 24px; }}
+          .topbar {{ display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; gap: 16px; flex-wrap: wrap; }}
+          .topbar-actions {{ display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }}
+          .nav {{ display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }}
+          .nav-link {{ text-decoration: none; color: #374151; padding: 8px 12px; border-radius: 10px; border: 1px solid transparent; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }}
+          .nav-link-active {{ background: #111827; color: #fff; border-color: #111827; box-shadow: 0 1px 2px rgba(0,0,0,0.08); }}
+          .lang-toggle {{ display: flex; gap: 8px; font-size: 13px; align-items: center; }}
+          .lang-link {{ text-decoration: none; color: #374151; padding: 6px 10px; border-radius: 8px; border: 1px solid transparent; font-weight: 600; background: #fff; }}
+          .lang-link-active {{ background: #111827; color: #fff; border-color: #111827; box-shadow: 0 1px 2px rgba(0,0,0,0.08); }}
+          .card {{ background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; margin-bottom: 16px; box-shadow: 0 10px 15px -10px rgba(15,23,42,0.15); }}
+          .card-row {{ display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }}
           .title {{ font-weight: 600; }}
           .status {{ font-weight: 600; color: #2563eb; }}
           .muted {{ color: #6b7280; font-size: 13px; }}
           .small {{ font-size: 12px; }}
-          .filters {{ display: flex; gap: 8px; align-items: flex-end; margin-bottom: 12px; flex-wrap: wrap; }}
-          .form-group {{ display: flex; flex-direction: column; gap: 4px; font-size: 13px; }}
-          .input {{ padding: 6px 8px; border-radius: 6px; border: 1px solid #d1d5db; min-width: 140px; font-size: 14px; }}
-          .badge {{ display: inline-block; padding: 4px 8px; border-radius: 999px; border: 1px solid #d1d5db; text-decoration: none; color: #111827; font-size: 13px; }}
+          .filters {{ display: flex; gap: 8px; align-items: flex-end; margin-bottom: 16px; flex-wrap: wrap; }}
+          .form-group {{ display: flex; flex-direction: column; gap: 6px; font-size: 13px; }}
+          .input {{ padding: 8px 10px; border-radius: 8px; border: 1px solid #d1d5db; min-width: 160px; font-size: 14px; background: #fff; }}
+          .badge {{ display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; border: 1px solid #d1d5db; text-decoration: none; color: #111827; font-size: 13px; background: #fff; }}
           .badge-active {{ background: #2563eb; color: #fff; border-color: #2563eb; }}
           .badge-status {{ font-weight: 600; }}
           .status-draft {{ background: #f3f4f6; }}
@@ -336,29 +380,31 @@ def _wrap_page(
           .status-paid {{ background: #ecfdf3; color: #065f46; border-color: #a7f3d0; }}
           .status-overdue {{ background: #fef2f2; color: #b91c1c; border-color: #fecaca; }}
           .status-void {{ background: #f3f4f6; color: #374151; }}
-          .btn {{ padding: 8px 12px; background: #111827; color: #fff; border-radius: 6px; text-decoration: none; font-size: 13px; border: none; cursor: pointer; }}
+          .btn {{ padding: 10px 14px; background: #111827; color: #fff; border-radius: 8px; text-decoration: none; font-size: 13px; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }}
           .btn.secondary {{ background: #fff; color: #111827; border: 1px solid #d1d5db; }}
-          .btn.small {{ padding: 6px 8px; font-size: 12px; }}
+          .btn.small {{ padding: 8px 10px; font-size: 12px; }}
           .btn:disabled {{ opacity: 0.6; cursor: not-allowed; }}
-          .tag {{ display: inline-block; background: #eef2ff; color: #4338ca; padding: 2px 6px; border-radius: 6px; font-size: 12px; margin-left: 4px; }}
+          .tag {{ display: inline-block; background: #eef2ff; color: #4338ca; padding: 4px 8px; border-radius: 8px; font-size: 12px; margin-left: 4px; }}
           .table {{ width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 14px; }}
-          .table th, .table td {{ padding: 10px 8px; border-bottom: 1px solid #e5e7eb; text-align: left; vertical-align: top; }}
+          .table th, .table td {{ padding: 12px 10px; border-bottom: 1px solid #e5e7eb; text-align: left; vertical-align: top; }}
           .table th {{ background: #f9fafb; font-weight: 600; }}
           .table .muted {{ font-size: 12px; }}
           .table .align-right {{ text-align: right; }}
-          .pill {{ display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 10px; border: 1px solid #e5e7eb; background: #f9fafb; }}
-          .metric-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-top: 8px; }}
-          .metric {{ background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; }}
+          .pill {{ display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 10px; border: 1px solid #e5e7eb; background: #f9fafb; }}
+          .metric-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-top: 12px; }}
+          .metric {{ background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px; }}
           .metric .label {{ font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.03em; }}
           .metric .value {{ font-size: 18px; font-weight: 700; margin-top: 2px; }}
           .danger {{ color: #b91c1c; }}
           .success {{ color: #065f46; }}
-          .chip {{ display: inline-flex; align-items: center; gap: 6px; background: #eef2ff; border: 1px solid #c7d2fe; padding: 6px 8px; border-radius: 8px; font-size: 13px; }}
-          .stack {{ display: flex; flex-direction: column; gap: 6px; }}
+          .chip {{ display: inline-flex; align-items: center; gap: 8px; background: #eef2ff; border: 1px solid #c7d2fe; padding: 8px 10px; border-radius: 10px; font-size: 13px; }}
+          .stack {{ display: flex; flex-direction: column; gap: 8px; }}
           .row-highlight {{ background: #fffbeb; }}
           .actions {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }}
           .section {{ margin-top: 16px; }}
-          .note {{ padding: 8px 10px; background: #f9fafb; border: 1px dashed #d1d5db; border-radius: 8px; }}
+          .note {{ padding: 10px 12px; background: #f9fafb; border: 1px dashed #d1d5db; border-radius: 10px; }}
+          .with-icon {{ display: inline-flex; align-items: center; gap: 8px; }}
+          .icon {{ width: 18px; height: 18px; display: block; }}
         </style>
       </head>
       <body>
@@ -1449,7 +1495,7 @@ async def admin_invoice_list_ui(
     content = "".join(
         [
             "<div class=\"card\">",
-            "<div class=\"card-row\"><div><div class=\"title\">Invoices</div><div class=\"muted\">Search, filter and drill into invoices</div></div>",
+            f"<div class=\"card-row\"><div><div class=\"title with-icon\">{_icon('receipt')}<span>Invoices</span></div><div class=\"muted\">Search, filter and drill into invoices</div></div>",
             f"<div class=\"chip\">Total: {invoice_list.total}</div></div>",
             "<div class=\"muted small\">Invoices use English labels (Invoice, Subtotal, Tax, Total) regardless of your language preference.</div>",
             filters_html,
@@ -1573,10 +1619,7 @@ async def admin_invoice_detail_ui(
         payment_rows = f"<tr id=\"payments-empty\"><td colspan=6>{_render_empty('No payments yet')}</td></tr>"
 
     copy_number_btn = _copy_button("Copy number", invoice.invoice_number)
-    status_badge = (
-        f'<span id="status-badge" class="badge badge-status status-{invoice.status.lower()}">' \
-        f"{html.escape(invoice.status)}</span>"
-    )
+    status_badge = _status_badge(invoice.status).replace("<span", "<span id=\"status-badge\"", 1)
     overdue = invoice.status == invoice_statuses.INVOICE_STATUS_OVERDUE or (
         invoice.due_date and invoice.balance_due_cents > 0 and invoice.due_date < date.today()
     )
@@ -1878,7 +1921,8 @@ def _format_date(value: date | None) -> str:
 
 def _status_badge(value: str) -> str:
     normalized = value.lower()
-    return f'<span class="badge badge-status status-{normalized}">{html.escape(value)}</span>'
+    warning = _icon("warning") if normalized == invoice_statuses.INVOICE_STATUS_OVERDUE.lower() else ""
+    return f'<span class="badge badge-status status-{normalized}"><span class="with-icon">{warning}{html.escape(value)}</span></span>'
 
 
 def _addon_response(model: addon_schemas.AddonDefinitionResponse | AddonDefinition) -> addon_schemas.AddonDefinitionResponse:
@@ -2018,10 +2062,14 @@ def _copy_button(label: str, value: str, *, small: bool = True) -> str:
     size_class = " small" if small else ""
     return (
         """
-        <button type="button" class="btn secondary{size}" data-copy="{value}" onclick="navigator.clipboard.writeText(this.dataset.copy)">{label}</button>
+        <button type="button" class="btn secondary{size}" data-copy="{value}" onclick="navigator.clipboard.writeText(this.dataset.copy)">{icon}<span>{label}</span></button>
         """
         .replace("{size}", size_class)
-        .format(label=html.escape(label), value=html.escape(value, quote=True))
+        .format(
+            label=html.escape(label),
+            value=html.escape(value, quote=True),
+            icon=_icon("copy"),
+        )
     )
 
 
