@@ -3,6 +3,7 @@ import base64
 from datetime import date, datetime, timezone
 
 from app.domain.bookings.db_models import Booking
+from app.domain.leads.db_models import Lead
 from app.domain.invoices import service as invoice_service
 from app.domain.invoices.schemas import InvoiceItemCreate
 from app.settings import settings
@@ -16,9 +17,25 @@ def _basic_auth(username: str, password: str) -> dict[str, str]:
 def _seed_invoice(async_session_maker):
     async def create():
         async with async_session_maker() as session:
+            lead = Lead(
+                name="UI Test Lead",
+                phone="+1 555-555-5555",
+                email="ui.lead@example.com",
+                postal_code="H0H0H0",
+                address="123 Test St",
+                preferred_dates=[],
+                structured_inputs={},
+                estimate_snapshot={},
+                pricing_config_version="v1",
+                config_hash="seed-config",
+                referral_code="UITEST",
+            )
+            session.add(lead)
+            await session.flush()
+
             booking = Booking(
                 team_id=1,
-                lead_id=None,
+                lead_id=lead.lead_id,
                 starts_at=datetime.now(tz=timezone.utc),
                 duration_minutes=60,
                 status="PENDING",

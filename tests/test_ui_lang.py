@@ -76,6 +76,7 @@ def test_admin_observability_renders_ru_strings(client):
 
         assert response.status_code == 200
         assert "Наблюдение" in response.text
+        assert 'lang="ru"' in response.text
     finally:
         settings.admin_basic_username = previous_username
         settings.admin_basic_password = previous_password
