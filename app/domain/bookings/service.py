@@ -1154,7 +1154,10 @@ async def mark_deposit_paid(
         await session.flush()
 
     should_send_email = (
-        commit and booking.lead_id and not manual_confirmation_required and email_adapter is not None
+        commit
+        and booking.lead_id
+        and not manual_confirmation_required
+        and email_adapter is not None
     )
     if should_send_email:
         lead = await session.get(Lead, booking.lead_id)

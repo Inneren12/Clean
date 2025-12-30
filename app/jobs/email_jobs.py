@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import and_, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.domain.bookings.db_models import Booking, EmailEvent
 from app.domain.invoices import service as invoice_service
@@ -67,16 +68,18 @@ async def run_invoice_notifications(
     )
 
     sent_stmt = (
-        select(Invoice, Lead)
-        .join(Lead, Lead.lead_id == Invoice.customer_id)
+        select(Invoice)
+        .options(selectinload(Invoice.payments))
         .where(
             Invoice.status == invoice_statuses.INVOICE_STATUS_SENT,
-            Lead.email.isnot(None),
             ~sent_exists.correlate(Invoice),
         )
     )
     result = await session.execute(sent_stmt)
-    for invoice, lead in result.all():
+    for invoice in result.scalars():
+        lead = await invoice_service.fetch_customer(session, invoice)
+        if not lead or not lead.email:
+            continue
         public_link, pdf_link = await _invoice_public_links(session, invoice, link_base)
         delivered = await email_service.send_invoice_sent_email(
             session,
@@ -91,8 +94,8 @@ async def run_invoice_notifications(
 
     today = datetime.now(tz=timezone.utc).date()
     overdue_stmt = (
-        select(Invoice, Lead)
-        .join(Lead, Lead.lead_id == Invoice.customer_id)
+        select(Invoice)
+        .options(selectinload(Invoice.payments))
         .where(
             Invoice.due_date.isnot(None),
             Invoice.due_date < today,
@@ -103,13 +106,16 @@ async def run_invoice_notifications(
                     invoice_statuses.INVOICE_STATUS_OVERDUE,
                 }
             ),
-            Lead.email.isnot(None),
             sent_exists.correlate(Invoice),
             ~overdue_exists.correlate(Invoice),
         )
     )
     overdue_result = await session.execute(overdue_stmt)
-    for invoice, lead in overdue_result.all():
+    for invoice in overdue_result.scalars():
+        lead = await invoice_service.fetch_customer(session, invoice)
+        if not lead or not lead.email:
+            continue
+        invoice.balance_due_cents = invoice_service.outstanding_balance_cents(invoice)
         public_link, _pdf_link = await _invoice_public_links(session, invoice, link_base)
         delivered = await email_service.send_invoice_overdue_email(
             session, adapter, invoice, lead, public_link=public_link

@@ -7,6 +7,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.bookings.db_models import Booking, EmailEvent
+from app.domain.invoices import service as invoice_service
 from app.domain.invoices.db_models import Invoice
 from app.domain.leads.db_models import Lead
 from app.infra.email import EmailAdapter
@@ -264,12 +265,15 @@ def _render_invoice_sent(invoice: Invoice, lead: Lead, public_link: str, pdf_lin
 
 def _render_invoice_overdue(invoice: Invoice, lead: Lead, public_link: str) -> tuple[str, str]:
     due_label = invoice.due_date.isoformat() if invoice.due_date else "your due date"
+    balance_cents = getattr(invoice, "balance_due_cents", None)
+    if balance_cents is None:
+        balance_cents = invoice_service.outstanding_balance_cents(invoice)
     subject = f"Invoice {invoice.invoice_number} is overdue"
     body = (
         f"Hi {lead.name},\n\n"
         f"Our records show invoice {invoice.invoice_number} was due on {due_label} and still has a balance.\n"
         f"View and pay online: {public_link}\n"
-        f"Balance: {_format_money(invoice.total_cents, invoice.currency)}\n\n"
+        f"Balance: {_format_money(balance_cents, invoice.currency)}\n\n"
         "If you've already paid, please ignore this message or reply with the receipt so we can update our records."
     )
     return subject, body

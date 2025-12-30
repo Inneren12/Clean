@@ -3,9 +3,11 @@ from datetime import date, datetime, timedelta, timezone
 
 import sqlalchemy as sa
 
+import uuid
+
 from app.domain.bookings.db_models import Booking, EmailEvent
 from app.domain.invoices import statuses as invoice_statuses
-from app.domain.invoices.db_models import Invoice
+from app.domain.invoices.db_models import Invoice, Payment
 from app.domain.leads.db_models import Lead
 from app.domain.nps.db_models import NpsResponse
 from app.infra.email import EmailAdapter
@@ -31,6 +33,7 @@ def _make_lead(name: str = "Customer") -> Lead:
         postal_code="T5A",
         address="1 Test St",
         preferred_dates=["Mon"],
+        referral_code=uuid.uuid4().hex[:16],
         structured_inputs={"beds": 1, "baths": 1},
         estimate_snapshot={
             "price_cents": 10000,
@@ -116,6 +119,16 @@ def test_invoice_notifications_cover_sent_and_overdue(async_session_maker):
                 total_cents=10500,
             )
             session.add(invoice)
+            await session.flush()
+            payment = Payment(
+                invoice_id=invoice.invoice_id,
+                provider="stripe",
+                method=invoice_statuses.PAYMENT_METHOD_CARD,
+                amount_cents=5000,
+                currency="cad",
+                status=invoice_statuses.PAYMENT_STATUS_SUCCEEDED,
+            )
+            session.add(payment)
             await session.commit()
             return invoice.invoice_id
 
@@ -142,6 +155,8 @@ def test_invoice_notifications_cover_sent_and_overdue(async_session_maker):
         assert first_result == {"sent": 1, "overdue": 0}
         assert second_result == {"sent": 0, "overdue": 1}
         assert len(adapter.sent) == 2
+        overdue_body = adapter.sent[-1][2]
+        assert "Balance: CAD 55.00" in overdue_body
 
         async def _event_counts() -> tuple[int, int]:
             async with async_session_maker() as session:
