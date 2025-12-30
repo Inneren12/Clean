@@ -59,6 +59,7 @@ def test_admin_page_renders_lang_toggle(client):
         assert response.status_code == 200
         assert "/ui/lang?lang=en" in response.text
         assert "/ui/lang?lang=ru" in response.text
+        assert "<svg" in response.text
     finally:
         settings.admin_basic_username = previous_username
         settings.admin_basic_password = previous_password
