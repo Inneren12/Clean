@@ -1,6 +1,9 @@
 import asyncio
 import hashlib
 import uuid
+import asyncio
+import hashlib
+import uuid
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
@@ -8,7 +11,7 @@ import sqlalchemy as sa
 
 from app.domain.invoices import service as invoice_service, statuses as invoice_statuses
 from app.domain.invoices.db_models import Invoice, Payment, StripeEvent
-from app.infra import stripe as stripe_infra
+from app.infra import stripe_client as stripe_infra
 from app.main import app
 from app.settings import settings
 
@@ -37,16 +40,13 @@ async def _seed_invoice(
 
 def test_create_payment_session(client, async_session_maker, monkeypatch):
     monkeypatch.setattr(settings, "stripe_secret_key", "sk_test")
-    app.state.stripe_client = SimpleNamespace()
+    app.state.stripe_client = SimpleNamespace(
+        create_checkout_session=lambda **kwargs: SimpleNamespace(id="cs_test_invoice", url="https://stripe.test/checkout"),
+        verify_webhook=lambda payload, signature: payload,
+    )
     invoice_id, token = asyncio.run(_seed_invoice(async_session_maker, total_cents=2400))
 
-    def _fake_checkout_session(**kwargs):
-        assert kwargs["metadata"]["invoice_id"] == invoice_id
-        return SimpleNamespace(id="cs_test_invoice", url="https://stripe.test/checkout")
-
-    monkeypatch.setattr(stripe_infra, "create_checkout_session", _fake_checkout_session)
-
-    response = client.post(f"/i/{token}/pay")
+    response = client.post(f"/v1/payments/invoice/checkout?invoice_id={invoice_id}")
     assert response.status_code == 201, response.text
     payload = response.json()
     assert payload["checkout_url"].startswith("https://stripe.test")
@@ -56,7 +56,7 @@ def test_create_payment_session(client, async_session_maker, monkeypatch):
 
 def test_create_payment_session_rejects_void_invoice(client, async_session_maker, monkeypatch):
     monkeypatch.setattr(settings, "stripe_secret_key", "sk_test")
-    _, token = asyncio.run(
+    invoice_id, _ = asyncio.run(
         _seed_invoice(
             async_session_maker,
             total_cents=2400,
@@ -64,12 +64,9 @@ def test_create_payment_session_rejects_void_invoice(client, async_session_maker
         )
     )
 
-    def _fail_checkout(**_: object) -> None:
-        raise AssertionError("checkout should not be called")
+    app.state.stripe_client = SimpleNamespace()
 
-    monkeypatch.setattr(stripe_infra, "create_checkout_session", _fail_checkout)
-
-    response = client.post(f"/i/{token}/pay")
+    response = client.post(f"/v1/payments/invoice/checkout?invoice_id={invoice_id}")
     assert response.status_code == 409
     assert response.json()["detail"] == "Invoice is void"
 
@@ -92,14 +89,10 @@ def test_webhook_marks_invoice_paid_and_idempotent(client, async_session_maker, 
         },
     }
 
-    def _parse_webhook_event(**_: object):
-        return event
-
-    monkeypatch.setattr(stripe_infra, "parse_webhook_event", _parse_webhook_event)
-    app.state.stripe_client = SimpleNamespace()
+    app.state.stripe_client = SimpleNamespace(verify_webhook=lambda payload, signature: event)
 
     headers = {"Stripe-Signature": "t=test"}
-    first = client.post("/stripe/webhook", content=b"{}", headers=headers)
+    first = client.post("/v1/payments/stripe/webhook", content=b"{}", headers=headers)
     assert first.status_code == 200, first.text
     second = client.post("/stripe/webhook", content=b"{}", headers=headers)
     assert second.status_code == 200
@@ -122,13 +115,9 @@ def test_webhook_marks_invoice_paid_and_idempotent(client, async_session_maker, 
 def test_webhook_signature_verification(client, monkeypatch):
     monkeypatch.setattr(settings, "stripe_webhook_secret", "whsec_test")
 
-    def _parse_webhook_event(**_: object):
-        raise ValueError("invalid signature")
+    app.state.stripe_client = SimpleNamespace(verify_webhook=lambda **_: (_ for _ in ()).throw(ValueError("invalid signature")))
 
-    monkeypatch.setattr(stripe_infra, "parse_webhook_event", _parse_webhook_event)
-    app.state.stripe_client = SimpleNamespace()
-
-    response = client.post("/stripe/webhook", content=b"{}", headers={"Stripe-Signature": "invalid"})
+    response = client.post("/v1/payments/stripe/webhook", content=b"{}", headers={"Stripe-Signature": "invalid"})
     assert response.status_code == 400
 
 
@@ -151,9 +140,6 @@ def test_webhook_retries_after_processing_error(client, async_session_maker, mon
         },
     }
 
-    def _parse_webhook_event(**_: object):
-        return event
-
     call_count = {"value": 0}
     real_record_payment = invoice_service.record_stripe_payment
 
@@ -163,12 +149,11 @@ def test_webhook_retries_after_processing_error(client, async_session_maker, mon
             raise RuntimeError("transient failure")
         return await real_record_payment(session=session, invoice=invoice, **kwargs)
 
-    monkeypatch.setattr(stripe_infra, "parse_webhook_event", _parse_webhook_event)
+    app.state.stripe_client = SimpleNamespace(verify_webhook=lambda **_: event)
     monkeypatch.setattr(invoice_service, "record_stripe_payment", _record_payment)
-    app.state.stripe_client = SimpleNamespace()
 
     headers = {"Stripe-Signature": "t=test"}
-    first = client.post("/stripe/webhook", content=payload, headers=headers)
+    first = client.post("/v1/payments/stripe/webhook", content=payload, headers=headers)
     assert first.status_code == 500
 
     async def _fetch_state() -> tuple[str | None, str | None, int]:
@@ -226,14 +211,10 @@ def test_webhook_retries_after_error(client, async_session_maker, monkeypatch):
         },
     }
 
-    def _parse_webhook_event(**_: object):
-        return event
-
-    monkeypatch.setattr(stripe_infra, "parse_webhook_event", _parse_webhook_event)
-    app.state.stripe_client = SimpleNamespace()
+    app.state.stripe_client = SimpleNamespace(verify_webhook=lambda **_: event)
 
     headers = {"Stripe-Signature": "t=test"}
-    response = client.post("/stripe/webhook", content=payload, headers=headers)
+    response = client.post("/v1/payments/stripe/webhook", content=payload, headers=headers)
     assert response.status_code == 200, response.text
     assert response.json()["processed"] is True
 

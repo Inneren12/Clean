@@ -107,9 +107,16 @@ class Payment(Base):
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
     )
-    invoice_id: Mapped[str] = mapped_column(ForeignKey("invoices.invoice_id"), nullable=False, index=True)
+    invoice_id: Mapped[str | None] = mapped_column(
+        ForeignKey("invoices.invoice_id"), nullable=True, index=True
+    )
+    booking_id: Mapped[str | None] = mapped_column(
+        ForeignKey("bookings.booking_id"), nullable=True, index=True
+    )
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     provider_ref: Mapped[str | None] = mapped_column(String(255))
+    checkout_session_id: Mapped[str | None] = mapped_column(String(255))
+    payment_intent_id: Mapped[str | None] = mapped_column(String(255))
     method: Mapped[str] = mapped_column(String(32), nullable=False)
     amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     currency: Mapped[str] = mapped_column(String(8), nullable=False)
@@ -122,11 +129,12 @@ class Payment(Base):
         nullable=False,
     )
 
-    invoice: Mapped[Invoice] = relationship("Invoice", back_populates="payments")
+    invoice: Mapped[Invoice | None] = relationship("Invoice", back_populates="payments")
 
     __table_args__ = (
         Index("ix_invoice_payments_invoice_status", "invoice_id", "status"),
         Index("ix_invoice_payments_provider_ref", "provider_ref"),
+        Index("ix_invoice_payments_checkout_session", "checkout_session_id"),
         UniqueConstraint("provider", "provider_ref", name="uq_invoice_payments_provider_ref"),
     )
 

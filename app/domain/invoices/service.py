@@ -181,25 +181,49 @@ async def register_payment(
     received_at: datetime | None = None,
     reference: str | None = None,
     provider_ref: str | None = None,
+    checkout_session_id: str | None = None,
+    payment_intent_id: str | None = None,
 ) -> Payment | None:
     if invoice.status == statuses.INVOICE_STATUS_VOID:
         raise ValueError("Cannot record payments on a void invoice")
     if amount_cents <= 0:
         raise ValueError("Payment amount must be positive")
 
+    existing_payment: Payment | None = None
     if provider_ref:
         existing_payment = await session.scalar(
             select(Payment)
             .where(Payment.provider == provider, Payment.provider_ref == provider_ref)
             .with_for_update(of=Payment)
         )
-        if existing_payment:
-            return None
+    if existing_payment is None and checkout_session_id:
+        existing_payment = await session.scalar(
+            select(Payment)
+            .where(
+                Payment.invoice_id == invoice.invoice_id,
+                Payment.checkout_session_id == checkout_session_id,
+            )
+            .with_for_update(of=Payment)
+        )
+
+    if existing_payment:
+        existing_payment.status = status
+        existing_payment.amount_cents = amount_cents
+        existing_payment.currency = currency.upper()
+        existing_payment.received_at = received_at or existing_payment.received_at
+        existing_payment.reference = reference or existing_payment.reference
+        existing_payment.payment_intent_id = payment_intent_id or provider_ref
+        existing_payment.checkout_session_id = checkout_session_id or existing_payment.checkout_session_id
+        await _refresh_invoice_payment_status(session, invoice)
+        await session.flush()
+        return existing_payment
 
     payment = Payment(
         invoice_id=invoice.invoice_id,
         provider=provider,
         provider_ref=provider_ref,
+        checkout_session_id=checkout_session_id,
+        payment_intent_id=payment_intent_id or provider_ref,
         method=method,
         amount_cents=amount_cents,
         currency=currency.upper(),
@@ -233,6 +257,8 @@ async def record_stripe_payment(
     provider_ref: str | None,
     reference: str | None,
     received_at: datetime,
+    checkout_session_id: str | None = None,
+    payment_intent_id: str | None = None,
 ) -> Payment | None:
     normalized_status = status.upper()
     normalized_currency = currency.upper()
@@ -252,6 +278,8 @@ async def record_stripe_payment(
         status=normalized_status,
         received_at=received_at,
         reference=reference,
+        checkout_session_id=checkout_session_id,
+        payment_intent_id=payment_intent_id or provider_ref,
     )
 
 
