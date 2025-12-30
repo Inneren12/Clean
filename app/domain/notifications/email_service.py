@@ -7,6 +7,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.bookings.db_models import Booking, EmailEvent
+from app.domain.invoices.db_models import Invoice
 from app.domain.leads.db_models import Lead
 from app.infra.email import EmailAdapter
 
@@ -18,6 +19,8 @@ EMAIL_TYPE_BOOKING_CONFIRMED = "booking_confirmed"
 EMAIL_TYPE_BOOKING_REMINDER = "booking_reminder_24h"
 EMAIL_TYPE_BOOKING_COMPLETED = "booking_completed"
 EMAIL_TYPE_NPS_SURVEY = "nps_survey"
+EMAIL_TYPE_INVOICE_SENT = "invoice_sent"
+EMAIL_TYPE_INVOICE_OVERDUE = "invoice_overdue"
 REMINDER_STATUSES = {"CONFIRMED", "PENDING"}
 
 
@@ -106,10 +109,21 @@ async def _try_send_email(
         return False
 
 
-async def _already_sent(session: AsyncSession, booking_id: str, email_type: str) -> bool:
-    stmt = select(EmailEvent.event_id).where(
-        and_(EmailEvent.booking_id == booking_id, EmailEvent.email_type == email_type)
-    )
+async def _already_sent(
+    session: AsyncSession,
+    email_type: str,
+    *,
+    booking_id: str | None = None,
+    invoice_id: str | None = None,
+) -> bool:
+    if booking_id is None and invoice_id is None:
+        raise ValueError("email_event_scope_missing")
+    conditions = [EmailEvent.email_type == email_type]
+    if booking_id is not None:
+        conditions.append(EmailEvent.booking_id == booking_id)
+    if invoice_id is not None:
+        conditions.append(EmailEvent.invoice_id == invoice_id)
+    stmt = select(EmailEvent.event_id).where(and_(*conditions))
     result = await session.execute(stmt)
     return result.scalar_one_or_none() is not None
 
@@ -122,10 +136,14 @@ async def _send_with_record(
     email_type: str,
     render: Callable[[Booking, Lead], tuple[str, str]],
     dedupe: bool = True,
+    *,
+    invoice_id: str | None = None,
 ) -> bool:
     if not lead.email:
         return False
-    if dedupe and await _already_sent(session, booking.booking_id, email_type):
+    if dedupe and await _already_sent(
+        session, email_type, booking_id=booking.booking_id, invoice_id=invoice_id
+    ):
         return False
 
     subject, body = render(booking, lead)
@@ -141,6 +159,7 @@ async def _send_with_record(
 
     event = EmailEvent(
         booking_id=booking.booking_id,
+        invoice_id=invoice_id,
         email_type=email_type,
         recipient=lead.email,
         subject=subject,
@@ -223,6 +242,118 @@ async def send_nps_survey_email(
         render=lambda _booking, _lead: _render_nps_survey(_lead, survey_link),
         dedupe=dedupe,
     )
+
+
+def _format_money(cents: int, currency: str) -> str:
+    dollars = cents / 100
+    return f"{currency.upper()} {dollars:,.2f}"
+
+
+def _render_invoice_sent(invoice: Invoice, lead: Lead, public_link: str, pdf_link: str) -> tuple[str, str]:
+    subject = f"Invoice {invoice.invoice_number}"
+    body = (
+        f"Hi {lead.name},\n\n"
+        f"Here's your invoice ({invoice.invoice_number}).\n"
+        f"View online: {public_link}\n"
+        f"Download PDF: {pdf_link}\n"
+        f"Total due: {_format_money(invoice.total_cents, invoice.currency)}\n\n"
+        "If you have questions, reply to this email."
+    )
+    return subject, body
+
+
+def _render_invoice_overdue(invoice: Invoice, lead: Lead, public_link: str) -> tuple[str, str]:
+    due_label = invoice.due_date.isoformat() if invoice.due_date else "your due date"
+    subject = f"Invoice {invoice.invoice_number} is overdue"
+    body = (
+        f"Hi {lead.name},\n\n"
+        f"Our records show invoice {invoice.invoice_number} was due on {due_label} and still has a balance.\n"
+        f"View and pay online: {public_link}\n"
+        f"Balance: {_format_money(invoice.total_cents, invoice.currency)}\n\n"
+        "If you've already paid, please ignore this message or reply with the receipt so we can update our records."
+    )
+    return subject, body
+
+
+async def send_invoice_sent_email(
+    session: AsyncSession,
+    adapter: EmailAdapter | None,
+    invoice: Invoice,
+    lead: Lead,
+    *,
+    public_link: str,
+    public_link_pdf: str,
+    dedupe: bool = True,
+) -> bool:
+    if not lead.email:
+        return False
+    if dedupe and await _already_sent(
+        session, EMAIL_TYPE_INVOICE_SENT, invoice_id=invoice.invoice_id
+    ):
+        return False
+
+    subject, body = _render_invoice_sent(invoice, lead, public_link, public_link_pdf)
+    delivered = await _try_send_email(
+        adapter,
+        lead.email,
+        subject,
+        body,
+        context={"invoice_id": invoice.invoice_id, "email_type": EMAIL_TYPE_INVOICE_SENT},
+    )
+    if not delivered:
+        return False
+
+    event = EmailEvent(
+        booking_id=invoice.order_id,
+        invoice_id=invoice.invoice_id,
+        email_type=EMAIL_TYPE_INVOICE_SENT,
+        recipient=lead.email,
+        subject=subject,
+        body=body,
+    )
+    session.add(event)
+    await session.commit()
+    return True
+
+
+async def send_invoice_overdue_email(
+    session: AsyncSession,
+    adapter: EmailAdapter | None,
+    invoice: Invoice,
+    lead: Lead,
+    *,
+    public_link: str,
+    dedupe: bool = True,
+) -> bool:
+    if not lead.email:
+        return False
+    if dedupe and await _already_sent(
+        session, EMAIL_TYPE_INVOICE_OVERDUE, invoice_id=invoice.invoice_id
+    ):
+        return False
+
+    subject, body = _render_invoice_overdue(invoice, lead, public_link)
+    delivered = await _try_send_email(
+        adapter,
+        lead.email,
+        subject,
+        body,
+        context={"invoice_id": invoice.invoice_id, "email_type": EMAIL_TYPE_INVOICE_OVERDUE},
+    )
+    if not delivered:
+        return False
+
+    event = EmailEvent(
+        booking_id=invoice.order_id,
+        invoice_id=invoice.invoice_id,
+        email_type=EMAIL_TYPE_INVOICE_OVERDUE,
+        recipient=lead.email,
+        subject=subject,
+        body=body,
+    )
+    session.add(event)
+    await session.commit()
+    return True
 
 
 async def scan_and_send_reminders(session: AsyncSession, adapter: EmailAdapter | None) -> dict[str, int]:

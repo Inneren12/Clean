@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import uuid
 from datetime import date, datetime, time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import (
     Boolean,
@@ -22,6 +24,7 @@ from app.domain.clients.db_models import ClientUser
 
 if TYPE_CHECKING:  # pragma: no cover
     from app.domain.workers.db_models import Worker
+    from app.domain.invoices.db_models import Invoice
 
 
 class Team(Base):
@@ -144,7 +147,12 @@ class EmailEvent(Base):
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
     )
-    booking_id: Mapped[str] = mapped_column(ForeignKey("bookings.booking_id"), nullable=False)
+    booking_id: Mapped[str | None] = mapped_column(
+        ForeignKey("bookings.booking_id"), nullable=True, index=True
+    )
+    invoice_id: Mapped[str | None] = mapped_column(
+        ForeignKey("invoices.invoice_id"), nullable=True, index=True
+    )
     email_type: Mapped[str] = mapped_column(String(64), nullable=False)
     recipient: Mapped[str] = mapped_column(String(255), nullable=False)
     subject: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -155,10 +163,12 @@ class EmailEvent(Base):
         nullable=False,
     )
 
-    booking: Mapped[Booking] = relationship("Booking", backref="email_events")
+    booking: Mapped[Booking | None] = relationship("Booking", backref="email_events")
+    invoice: Mapped[Optional["Invoice"]] = relationship("Invoice", backref="email_events")
 
     __table_args__ = (
         Index("ix_email_events_booking_type", "booking_id", "email_type"),
+        Index("ix_email_events_invoice_type", "invoice_id", "email_type"),
     )
 
 
