@@ -264,10 +264,16 @@ def test_checkout_then_payment_intent_single_payment(client, async_session_maker
 
     async def _fetch_state() -> tuple[int, str | None, str | None]:
         async with async_session_maker() as session:
-            payments = await session.scalars(sa.select(Payment).where(Payment.invoice_id == invoice_id))
-            payment_rows = payments.all()
+            payment_count = await session.scalar(
+                sa.select(sa.func.count()).select_from(Payment).where(Payment.invoice_id == invoice_id)
+            )
+            provider_ref = await session.scalar(
+                sa.select(Payment.provider_ref)
+                .where(Payment.invoice_id == invoice_id)
+                .limit(1)
+            )
             invoice = await session.get(Invoice, invoice_id)
-            return len(payment_rows), payment_rows[0].provider_ref if payment_rows else None, invoice.status if invoice else None
+            return int(payment_count or 0), provider_ref, invoice.status if invoice else None
 
     payment_count, provider_ref, invoice_status = asyncio.run(_fetch_state())
     assert payment_count == 1

@@ -76,7 +76,7 @@ def test_readyz_multi_head_current(monkeypatch, client, async_session_maker):
 def test_readyz_alembic_unavailable(monkeypatch, client, async_session_maker):
     asyncio.run(_set_alembic_version(async_session_maker, None))
     monkeypatch.setattr(
-        routes_health, "_load_expected_heads", lambda: (None, "skipped_no_alembic_files")
+        routes_health, "_load_expected_heads", lambda: ([], "skipped_no_alembic_files")
     )
 
     response = client.get("/readyz")

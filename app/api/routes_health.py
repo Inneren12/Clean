@@ -39,7 +39,16 @@ def _load_expected_heads() -> tuple[list[str] | None, str | None]:
     except Exception as exc:  # noqa: BLE001
         skip_reason = "skipped_no_alembic_files"
         if not _HEAD_CACHE["warning_logged"]:
-            logger.warning("migrations_check_skipped_no_alembic_files", extra={"error": str(exc)})
+            logger.warning(
+                "migrations_check_skipped_no_alembic_files",
+                extra={
+                    "extra": {
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                        "reason": "alembic config or script directory missing",
+                    }
+                },
+            )
             _HEAD_CACHE["warning_logged"] = True
         _HEAD_CACHE.update({"timestamp": now, "heads": None, "skip_reason": skip_reason})
         return None, skip_reason

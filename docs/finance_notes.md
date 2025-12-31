@@ -1,6 +1,7 @@
 # Finance reporting notes
 
 ## GST report limitations
-- Exempt or zero-rated transactions are not currently separated in the GST report.
+- Invoices in DRAFT or VOID status are excluded from the report.
+- Exempt or zero-rated transactions are not handled separately.
 - Refunds and credit notes are not yet reflected in GST totals.
-- The report aggregates invoices that are issued within the range and are not in DRAFT or VOID status.
+- Manual adjustments may be required for edge cases or corrections.
