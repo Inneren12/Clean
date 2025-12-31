@@ -54,19 +54,65 @@ def _validate_uuid_values(conn, table: str) -> None:
         raise RuntimeError(f"Invalid org_id value in {table}: {invalid[0]}")
 
 
-def _ensure_uuid_column(table: str) -> None:
+def _get_org_fk_names(inspector: sa.inspection.Inspector, table: str) -> list[str]:
+    fks = []
+    for fk in inspector.get_foreign_keys(table):
+        if fk.get("referred_table") == "organizations" and fk.get("constrained_columns") == ["org_id"]:
+            if fk.get("name"):
+                fks.append(fk["name"])
+    return fks
+
+
+def _create_org_fk(table: str) -> None:
+    op.create_foreign_key(
+        f"fk_{table}_org_id_organizations",
+        table,
+        "organizations",
+        ["org_id"],
+        ["org_id"],
+        ondelete="CASCADE",
+    )
+
+
+def _convert_org_id_column(table: str, inspector: sa.inspection.Inspector) -> bool:
     conn = op.get_bind()
-    if getattr(conn.engine.dialect, "name", "") == "sqlite":
-        return
+    if getattr(conn.engine.dialect, "name", "") != "postgresql":
+        return False
     _validate_uuid_values(conn, table)
     column_is_uuid = _column_is_uuid(conn, table)
-    with op.batch_alter_table(table, recreate_fks=True) as batch_op:
-        batch_op.alter_column(
-            "org_id",
-            type_=UUID_TYPE,
-            existing_type=UUID_TYPE if column_is_uuid else sa.String(length=36),
-            postgresql_using=None if column_is_uuid else "org_id::uuid",
-        )
+    if column_is_uuid:
+        return False
+
+    fk_names = _get_org_fk_names(inspector, table)
+    for fk in fk_names:
+        op.drop_constraint(fk, table_name=table, type_="foreignkey")
+
+    op.alter_column(
+        table,
+        "org_id",
+        type_=UUID_TYPE,
+        existing_type=sa.String(length=36),
+        postgresql_using="org_id::uuid",
+    )
+    return True
+
+
+def _ensure_organizations_uuid(inspector: sa.inspection.Inspector) -> bool:
+    conn = op.get_bind()
+    if getattr(conn.engine.dialect, "name", "") != "postgresql":
+        return False
+    column_is_uuid = _column_is_uuid(conn, "organizations")
+    if column_is_uuid:
+        return False
+
+    op.alter_column(
+        "organizations",
+        "org_id",
+        type_=UUID_TYPE,
+        existing_type=sa.String(length=36),
+        postgresql_using="org_id::uuid",
+    )
+    return True
 
 
 def _ensure_default_org() -> None:
@@ -112,8 +158,40 @@ def _ensure_default_org() -> None:
 
 
 def upgrade() -> None:
-    _ensure_uuid_column("organization_billing")
-    _ensure_uuid_column("organization_usage_events")
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    tables = [
+        "memberships",
+        "api_tokens",
+        "organization_billing",
+        "organization_usage_events",
+    ]
+
+    fk_dropped: dict[str, list[str]] = {}
+
+    if getattr(conn.engine.dialect, "name", "") == "postgresql":
+        if not _column_is_uuid(conn, "organizations"):
+            for table in tables:
+                fk_names = _get_org_fk_names(inspector, table)
+                if fk_names:
+                    fk_dropped[table] = fk_names
+                    for fk in fk_names:
+                        op.drop_constraint(fk, table_name=table, type_="foreignkey")
+
+            _ensure_organizations_uuid(inspector)
+
+        for table in tables:
+            changed = _convert_org_id_column(table, inspector)
+            if changed:
+                fk_dropped.setdefault(table, [])
+
+        inspector = sa.inspect(conn)
+        for table in tables:
+            if table in fk_dropped or (
+                _column_is_uuid(conn, table) and not _get_org_fk_names(inspector, table)
+            ):
+                _create_org_fk(table)
+
     _ensure_default_org()
 
 
