@@ -24,6 +24,10 @@ def _has_tenant_identity(request: Request) -> bool:
     return getattr(request.state, "saas_identity", None) is not None
 
 
+def has_tenant_identity(request: Request) -> bool:
+    return _has_tenant_identity(request)
+
+
 async def _plan_and_usage(session: AsyncSession, org_id: uuid.UUID) -> Tuple[Plan, dict[str, int]]:
     plan = await billing_service.get_current_plan(session, org_id)
     usage = await billing_service.usage_snapshot(session, org_id)
@@ -85,6 +89,8 @@ def record_usage(metric: str, quantity_getter: Callable[[Request], int], resourc
         request: Request,
         session: AsyncSession = Depends(get_db_session),
     ) -> None:
+        if not _has_tenant_identity(request):
+            return
         org_id = resolve_org_id(request)
         quantity = quantity_getter(request)
         resource_id = resource_id_getter(request) if resource_id_getter else None

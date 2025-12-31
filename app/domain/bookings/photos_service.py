@@ -181,12 +181,12 @@ async def get_photo(session: AsyncSession, order_id: str, photo_id: str) -> Orde
 
 async def delete_photo(
     session: AsyncSession, order_id: str, photo_id: str, *, storage: StorageBackend, org_id: uuid.UUID
-) -> None:
+) -> OrderPhoto:
     photo = await get_photo(session, order_id, photo_id)
     await session.execute(delete(OrderPhoto).where(OrderPhoto.photo_id == photo_id))
-    await session.commit()
     key = _storage_key(org_id, order_id, photo.filename)
     await storage.delete(key=key)
+    return photo
 
 
 def allowed_mime_types() -> Iterable[str]:

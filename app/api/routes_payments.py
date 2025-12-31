@@ -267,7 +267,7 @@ async def _handle_subscription_event(session: AsyncSession, event: Any) -> bool:
     subscription_id = _safe_get(payload_object, "subscription") or _safe_get(payload_object, "id")
     customer_id = _safe_get(payload_object, "customer")
     period_end_ts = _safe_get(payload_object, "current_period_end")
-    status = _safe_get(payload_object, "status") or "active"
+    status = _safe_get(payload_object, "status")
 
     if not org_id_raw:
         logger.info(
