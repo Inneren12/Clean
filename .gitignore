@@ -11,3 +11,4 @@ out/
 web/.env.local
 *.tsbuildinfo
 *.db
+var/
