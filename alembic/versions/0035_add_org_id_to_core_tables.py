@@ -12,6 +12,7 @@ import uuid
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import inspect
 
 revision = "0035_add_org_id_to_core_tables"
 down_revision = "0034_org_id_uuid_and_default_org"
@@ -20,6 +21,16 @@ depends_on = None
 
 UUID_TYPE = sa.Uuid(as_uuid=True)
 DEFAULT_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+
+# Required core tables - migration will fail if these are missing
+REQUIRED_CORE_TABLES = [
+    "teams",
+    "bookings",
+    "leads",
+    "invoices",
+    "workers",
+]
 
 
 # Define all core tables that need org_id
@@ -140,59 +151,39 @@ COMPOSITE_INDEXES = {
 
 
 def _table_exists(conn, table_name: str) -> bool:
-    """Check if a table exists in the database."""
-    result = conn.execute(
-        sa.text(
-            """
-            SELECT EXISTS (
-                SELECT FROM information_schema.tables
-                WHERE table_schema = 'public'
-                AND table_name = :table
-            )
-            """
-        ),
-        {"table": table_name},
-    )
-    return result.scalar() or False
+    """Check if a table exists in the database (cross-dialect)."""
+    insp = inspect(conn)
+    return insp.has_table(table_name)
 
 
 def _column_exists(conn, table_name: str, column_name: str) -> bool:
-    """Check if a column exists in a table."""
-    result = conn.execute(
-        sa.text(
-            """
-            SELECT EXISTS (
-                SELECT FROM information_schema.columns
-                WHERE table_schema = 'public'
-                AND table_name = :table
-                AND column_name = :column
-            )
-            """
-        ),
-        {"table": table_name, "column": column_name},
-    )
-    return result.scalar() or False
+    """Check if a column exists in a table (cross-dialect)."""
+    if not _table_exists(conn, table_name):
+        return False
+    insp = inspect(conn)
+    columns = insp.get_columns(table_name)
+    return any(c["name"] == column_name for c in columns)
 
 
-def _index_exists(conn, index_name: str) -> bool:
-    """Check if an index exists."""
-    result = conn.execute(
-        sa.text(
-            """
-            SELECT EXISTS (
-                SELECT FROM pg_indexes
-                WHERE schemaname = 'public'
-                AND indexname = :index
-            )
-            """
-        ),
-        {"index": index_name},
-    )
-    return result.scalar() or False
+def _index_exists(conn, table_name: str, index_name: str) -> bool:
+    """Check if an index exists on a table (cross-dialect)."""
+    if not _table_exists(conn, table_name):
+        return False
+    insp = inspect(conn)
+    indexes = insp.get_indexes(table_name)
+    return any(i["name"] == index_name for i in indexes)
 
 
 def upgrade() -> None:
     conn = op.get_bind()
+
+    # Fail-fast: Check for required core tables
+    missing_required = [t for t in REQUIRED_CORE_TABLES if not _table_exists(conn, t)]
+    if missing_required:
+        raise RuntimeError(
+            f"Migration 0035 requires the following tables to exist: {missing_required}. "
+            f"Cannot proceed with multi-tenant migration without core business tables."
+        )
 
     # Step 1: Add org_id column to all core tables (nullable with default)
     for table in CORE_TABLES:
@@ -211,7 +202,7 @@ def upgrade() -> None:
                 "org_id",
                 UUID_TYPE,
                 nullable=True,
-                server_default=sa.text(f"'{DEFAULT_ORG_ID}'::uuid"),
+                server_default=sa.text(f"'{DEFAULT_ORG_ID}'"),
             ),
         )
 
@@ -235,7 +226,24 @@ def upgrade() -> None:
             {"default_org_id": str(DEFAULT_ORG_ID)},
         )
 
-    # Step 3: Set NOT NULL constraint
+    # Step 3: Drop server_default to prevent silent fallback
+    for table in CORE_TABLES:
+        if not _table_exists(conn, table):
+            continue
+
+        if not _column_exists(conn, table, "org_id"):
+            continue
+
+        print(f"✓ Dropping server_default on {table}.org_id")
+        with op.batch_alter_table(table) as batch_op:
+            batch_op.alter_column(
+                "org_id",
+                server_default=None,
+                existing_type=UUID_TYPE,
+                existing_nullable=True,
+            )
+
+    # Step 4: Set NOT NULL constraint
     for table in CORE_TABLES:
         if not _table_exists(conn, table):
             continue
@@ -244,14 +252,15 @@ def upgrade() -> None:
             continue
 
         print(f"✓ Setting NOT NULL constraint on {table}.org_id")
-        op.alter_column(
-            table,
-            "org_id",
-            nullable=False,
-            existing_type=UUID_TYPE,
-        )
+        with op.batch_alter_table(table) as batch_op:
+            batch_op.alter_column(
+                "org_id",
+                nullable=False,
+                existing_type=UUID_TYPE,
+                existing_server_default=None,
+            )
 
-    # Step 4: Add foreign key constraints
+    # Step 5: Add foreign key constraints
     for table in CORE_TABLES:
         if not _table_exists(conn, table):
             continue
@@ -260,16 +269,15 @@ def upgrade() -> None:
             continue
 
         print(f"✓ Adding FK constraint to {table}")
-        op.create_foreign_key(
-            f"fk_{table}_org_id_organizations",
-            table,
-            "organizations",
-            ["org_id"],
-            ["org_id"],
-            ondelete="CASCADE",
-        )
+        with op.batch_alter_table(table) as batch_op:
+            batch_op.create_foreign_key(
+                f"fk_{table}_org_id_organizations",
+                "organizations",
+                ["org_id"],
+                ["org_id"],
+            )
 
-    # Step 5: Add single-column indexes on org_id
+    # Step 6: Add single-column indexes on org_id
     for table in CORE_TABLES:
         if not _table_exists(conn, table):
             continue
@@ -288,20 +296,20 @@ def upgrade() -> None:
                 continue
 
         index_name = f"ix_{table}_org_id"
-        if _index_exists(conn, index_name):
+        if _index_exists(conn, table, index_name):
             print(f"ℹ️  Index {index_name} already exists, skipping...")
             continue
 
         print(f"✓ Creating index {index_name}")
         op.create_index(index_name, table, ["org_id"])
 
-    # Step 6: Add composite indexes for efficient multi-tenant queries
+    # Step 7: Add composite indexes for efficient multi-tenant queries
     for table, indexes in COMPOSITE_INDEXES.items():
         if not _table_exists(conn, table):
             continue
 
         for columns, index_name in indexes:
-            if _index_exists(conn, index_name):
+            if _index_exists(conn, table, index_name):
                 print(f"ℹ️  Index {index_name} already exists, skipping...")
                 continue
 
@@ -327,7 +335,7 @@ def downgrade() -> None:
             continue
 
         for _, index_name in indexes:
-            if not _index_exists(conn, index_name):
+            if not _index_exists(conn, table, index_name):
                 continue
 
             print(f"✓ Dropping index {index_name}")
@@ -339,7 +347,7 @@ def downgrade() -> None:
             continue
 
         index_name = f"ix_{table}_org_id"
-        if not _index_exists(conn, index_name):
+        if not _index_exists(conn, table, index_name):
             continue
 
         print(f"✓ Dropping index {index_name}")
@@ -355,7 +363,8 @@ def downgrade() -> None:
 
         fk_name = f"fk_{table}_org_id_organizations"
         print(f"✓ Dropping FK constraint {fk_name}")
-        op.drop_constraint(fk_name, table_name=table, type_="foreignkey")
+        with op.batch_alter_table(table) as batch_op:
+            batch_op.drop_constraint(fk_name, type_="foreignkey")
 
     # Step 4: Drop org_id columns
     for table in CORE_TABLES:

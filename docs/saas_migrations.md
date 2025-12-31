@@ -12,9 +12,10 @@
 2. **Миграция `0035_add_org_id_to_core_tables` автоматически выполняет:**
    - Добавляет столбец `org_id` (UUID) во все бизнес-таблицы
    - Устанавливает значение Default-организации (`00000000-0000-0000-0000-000000000001`) для всех существующих строк
+   - **Удаляет server_default** чтобы предотвратить молчаливый fallback к DEFAULT_ORG_ID
    - Создаёт индексы по `org_id` для основных таблиц (bookings, invoices, workers, leads, teams и т.д.)
    - Создаёт композитные индексы для эффективных запросов (например, `org_id + status`, `org_id + created_at`)
-   - Настраивает внешние ключи на `organizations.org_id` с каскадным удалением
+   - Настраивает внешние ключи на `organizations.org_id` (БЕЗ каскадного удаления для безопасности)
 3. Миграция обрабатывает **30+ таблиц** включая:
    - **Bookings**: teams, bookings, email_events, order_photos, team_working_hours, team_blackouts
    - **Leads**: chat_sessions, leads, referral_credits
@@ -46,5 +47,5 @@
 ## Примечания
 - Не изменяйте `package.json` и `package-lock.json` в рамках миграции.
 - Публичный UI инвойсов остаётся на английском, даже после включения новых организаций.
-- Миграция `0035` является **staged migration** (поэтапная): добавление nullable столбца → backfill → NOT NULL → FK → indexes. Это минимизирует downtime.
+- Миграция `0035` является **staged migration** (поэтапная): добавление nullable столбца → backfill → **DROP DEFAULT** → NOT NULL → FK → indexes. Это минимизирует downtime и предотвращает silent fallback.
 - Rollback поддерживается через `alembic downgrade -1`, но будет **необратимым** для данных, созданных после миграции в контексте нескольких организаций.

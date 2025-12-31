@@ -12,9 +12,10 @@ This migration adds `org_id` column to 30+ core business tables to enable multi-
 
 1. Add `org_id` column (nullable, with server default to DEFAULT_ORG_ID)
 2. Backfill any NULL values
-3. Set NOT NULL constraint
-4. Add foreign key constraints to `organizations` table
-5. Create indexes (single and composite) for query performance
+3. **Drop server default** to prevent silent fallback to DEFAULT_ORG_ID
+4. Set NOT NULL constraint
+5. Add foreign key constraints to `organizations` table (NO CASCADE delete)
+6. Create indexes (single and composite) for query performance
 
 ## Pre-Migration Checklist
 
@@ -28,7 +29,29 @@ alembic current
 # 0034_org_id_uuid_and_default_org (head)
 ```
 
-### 2. Verify Default Organization Exists
+### 2. Verify Required Core Tables Exist
+
+**IMPORTANT**: Migration 0035 will fail fast if any of these required tables are missing:
+- `teams`
+- `bookings`
+- `leads`
+- `invoices`
+- `workers`
+
+```sql
+-- Verify required tables exist
+SELECT table_name
+FROM information_schema.tables
+WHERE table_schema = 'public'
+  AND table_name IN ('teams', 'bookings', 'leads', 'invoices', 'workers')
+ORDER BY table_name;
+
+-- Expected: 5 rows (all required tables)
+```
+
+If any required tables are missing, the migration will fail with a clear error message. This is intentional to prevent incomplete multi-tenant setup.
+
+### 3. Verify Default Organization Exists
 
 ```sql
 -- Connect to your database and run:
@@ -44,7 +67,7 @@ If the default org doesn't exist, run migration 0034 first:
 alembic upgrade 0034
 ```
 
-### 3. Database Backup
+### 4. Database Backup
 
 **CRITICAL**: Always create a backup before running schema migrations.
 
@@ -56,7 +79,7 @@ pg_dump -h <host> -U <user> -d <database> -F c -f backup_pre_migration_0035_$(da
 ls -lh backup_pre_migration_0035_*.dump
 ```
 
-### 4. Estimate Migration Duration
+### 5. Estimate Migration Duration
 
 The migration duration depends on the number of rows in your tables. Use this query to estimate:
 
@@ -82,7 +105,7 @@ ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;
 - 500K - 1M rows: 5-10 minutes
 - > 1M rows: 10-15 minutes
 
-### 5. Plan Maintenance Window (Optional)
+### 6. Plan Maintenance Window (Optional)
 
 While the migration is designed to run with minimal downtime, consider scheduling during low-traffic periods for large deployments.
 
@@ -133,6 +156,7 @@ alembic upgrade head
 # Expected output includes:
 # ✓ Adding org_id column to <table>
 # ✓ Backfilling org_id in <table>
+# ✓ Dropping server_default on <table>.org_id
 # ✓ Setting NOT NULL constraint on <table>.org_id
 # ✓ Adding FK constraint to <table>
 # ✓ Creating index ix_<table>_org_id
@@ -168,7 +192,21 @@ ORDER BY table_name;
 
 -- Expected: 30+ rows, all with data_type='uuid', is_nullable='NO'
 
--- 2. Verify all rows have org_id set to default org
+-- 2. Verify server_default was dropped (no silent fallback)
+SELECT
+    table_name,
+    column_name,
+    column_default
+FROM information_schema.columns
+WHERE column_name = 'org_id'
+  AND table_schema = 'public'
+  AND table_name IN ('bookings', 'invoices', 'leads', 'teams', 'workers')
+ORDER BY table_name;
+
+-- Expected: column_default should be NULL for all tables
+-- This ensures new inserts without org_id will fail, not silently default
+
+-- 3. Verify all rows have org_id set to default org
 SELECT
     'bookings' AS table_name,
     COUNT(*) AS total_rows,
@@ -185,7 +223,7 @@ SELECT 'teams', COUNT(*), COUNT(org_id), COUNT(DISTINCT org_id) FROM teams;
 -- Expected: total_rows = rows_with_org_id for all tables
 -- Expected: distinct_org_ids = 1 (only default org)
 
--- 3. Verify foreign key constraints exist
+-- 4. Verify foreign key constraints exist (no CASCADE delete)
 SELECT
     tc.table_name,
     tc.constraint_name,
@@ -204,8 +242,9 @@ WHERE tc.constraint_type = 'FOREIGN KEY'
 ORDER BY tc.table_name;
 
 -- Expected: 30+ rows showing FK constraints from each table to organizations
+-- NOTE: This migration does NOT use CASCADE delete for safety
 
--- 4. Verify indexes were created
+-- 5. Verify indexes were created
 SELECT
     schemaname,
     tablename,
@@ -416,13 +455,15 @@ SET statement_timeout = '30min';
 -- Then retry migration
 ```
 
-### Issue: Duplicate Key Error on Unique Constraint
+### Issue: Future Unique Constraint Conflicts (Multi-Tenant Data)
 
-**Symptom**: Error related to unique constraint violations
+**Note**: Migration 0035 itself does NOT modify unique constraints. This issue only applies when you start using multiple organizations.
 
-**Cause**: Some tables have unique constraints that don't include org_id
+**Symptom**: After migration, when creating data for multiple orgs, you may see unique constraint violations
 
-**Solution**: This is expected. The next sprint (Sprint 3/4) will update unique constraints to include org_id for proper multi-tenant isolation.
+**Cause**: Some tables have unique constraints that don't include org_id (e.g., `teams.name` is unique globally, not per-org)
+
+**Solution**: The schema migration (0035) completes successfully. However, for proper multi-tenant isolation, Sprint 3/4 will update unique constraints to include org_id scope (e.g., `UNIQUE(org_id, name)` instead of `UNIQUE(name)`).
 
 ## Performance Considerations
 
