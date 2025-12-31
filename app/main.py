@@ -36,6 +36,7 @@ from app.domain.errors import DomainError
 from app.infra.db import get_session_factory
 from app.infra.email import EmailAdapter, resolve_email_adapter
 from app.infra.logging import configure_logging
+from app.infra.metrics import configure_metrics, metrics
 from app.infra.security import RateLimiter, create_rate_limiter, resolve_client_key
 from app.settings import settings
 
@@ -108,6 +109,22 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class MetricsMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app: FastAPI, metrics_client) -> None:
+        super().__init__(app)
+        self.metrics = metrics_client
+
+    async def dispatch(self, request: Request, call_next: Callable):
+        try:
+            response = await call_next(request)
+        except Exception:
+            self.metrics.record_http_5xx(request.method, request.url.path)
+            raise
+        if response.status_code >= 500:
+            self.metrics.record_http_5xx(request.method, request.url.path)
+        return response
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: FastAPI, limiter: RateLimiter, app_settings) -> None:
         super().__init__(app)
@@ -177,6 +194,7 @@ def _validate_prod_config(app_settings) -> None:
 
 def create_app(app_settings) -> FastAPI:
     configure_logging()
+    metrics_client = configure_metrics(app_settings.metrics_enabled)
     _validate_prod_config(app_settings)
     app = FastAPI(title="Cleaning Economy Bot", version="1.0.0")
 
@@ -184,6 +202,7 @@ def create_app(app_settings) -> FastAPI:
 
     rate_limiter = create_rate_limiter(app_settings)
     app.state.rate_limiter = rate_limiter
+    app.state.metrics = metrics_client
     app.state.app_settings = app_settings
     app.state.db_session_factory = get_session_factory()
     app.state.export_transport = None
@@ -196,6 +215,7 @@ def create_app(app_settings) -> FastAPI:
         await rate_limiter.close()
 
     app.add_middleware(RateLimitMiddleware, limiter=rate_limiter, app_settings=app_settings)
+    app.add_middleware(MetricsMiddleware, metrics_client=metrics_client)
     app.add_middleware(LoggingMiddleware)
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
@@ -285,6 +305,10 @@ def create_app(app_settings) -> FastAPI:
     app.include_router(bookings_router)
     app.include_router(leads_router)
     app.include_router(admin_router)
+    if app_settings.metrics_enabled:
+        from app.api.routes_metrics import router as metrics_router
+
+        app.include_router(metrics_router)
     _try_include_style_guide(app)
     return app
 

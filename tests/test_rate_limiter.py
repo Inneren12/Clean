@@ -5,7 +5,7 @@ import anyio
 import pytest
 from redis.exceptions import ResponseError
 
-from app.infra.security import InMemoryRateLimiter, RedisRateLimiter
+from app.infra.security import InMemoryRateLimiter, RedisRateLimiter, create_rate_limiter
 
 
 class FakeRedis:
@@ -154,3 +154,16 @@ async def test_redis_rate_limiter_uses_lua_script():
     assert fake_redis.evalsha_calls > 0
 
     await limiter.close()
+
+
+@pytest.mark.anyio
+async def test_rate_limiter_defaults_to_inmemory(monkeypatch):
+    class AppSettings:
+        redis_url = None
+        rate_limit_per_minute = 5
+        rate_limit_cleanup_minutes = 1
+
+    limiter = create_rate_limiter(AppSettings())
+
+    assert isinstance(limiter, InMemoryRateLimiter)
+    assert await limiter.allow("client-5")

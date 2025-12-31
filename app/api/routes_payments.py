@@ -20,6 +20,7 @@ from app.domain.saas import billing_service
 from app.domain.saas.plans import get_plan
 from app.infra import stripe_client as stripe_infra
 from app.infra.db import get_db_session
+from app.infra.metrics import metrics
 from app.settings import settings
 
 router = APIRouter()
@@ -463,6 +464,7 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
     try:
         event = stripe_client.verify_webhook(payload=payload, signature=sig_header)
     except Exception as exc:  # noqa: BLE001
+        metrics.record_webhook("error")
         logger.warning("stripe_webhook_invalid", extra={"extra": {"reason": type(exc).__name__}})
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Stripe webhook") from exc
 
@@ -488,6 +490,7 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
                     "stripe_webhook_duplicate",
                     extra={"extra": {"event_id": event_id, "status": existing.status}},
                 )
+                metrics.record_webhook("ignored")
                 return {"received": True, "processed": False}
 
             if existing.status == "processing":
@@ -495,6 +498,7 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
                     "stripe_webhook_duplicate",
                     extra={"extra": {"event_id": event_id, "status": existing.status}},
                 )
+                metrics.record_webhook("ignored")
                 return {"received": True, "processed": False}
 
             record = existing
@@ -514,6 +518,7 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
                 "stripe_webhook_error",
                 extra={"extra": {"event_id": event_id, "reason": type(exc).__name__}},
             )
+            metrics.record_webhook("error")
 
     if processing_error is not None:
         raise HTTPException(
@@ -521,6 +526,7 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
             detail="Stripe webhook processing error",
         ) from processing_error
 
+    metrics.record_webhook("processed" if processed else "ignored")
     return {"received": True, "processed": processed}
 
 
