@@ -14,6 +14,7 @@ from datetime import time
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
+import uuid
 
 from app.domain.analytics import db_models as analytics_db_models  # noqa: F401
 from app.domain.bookings import db_models as booking_db_models  # noqa: F401
@@ -32,10 +33,13 @@ from app.domain.disputes import db_models as dispute_db_models  # noqa: F401
 from app.domain.policy_overrides import db_models as policy_override_db_models  # noqa: F401
 from app.domain.admin_audit import db_models as admin_audit_db_models  # noqa: F401
 from app.domain.documents import db_models as document_db_models  # noqa: F401
+from app.domain.saas import db_models as saas_db_models  # noqa: F401
 from app.infra.bot_store import InMemoryBotStore
 from app.infra.db import Base, get_db_session
 from app.main import app
 from app.settings import settings
+
+DEFAULT_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
 @pytest.fixture(scope="session")
@@ -50,6 +54,9 @@ def test_engine():
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
             await conn.execute(sa.insert(booking_db_models.Team).values(team_id=1, name="Default Team"))
+            await conn.execute(
+                sa.insert(saas_db_models.Organization).values(org_id=DEFAULT_ORG_ID, name="Default Org")
+            )
             await conn.execute(
                 sa.insert(booking_db_models.TeamWorkingHours),
                 [
@@ -109,6 +116,9 @@ def clean_database(test_engine):
             for table in reversed(Base.metadata.sorted_tables):
                 await conn.execute(table.delete())
             await conn.execute(sa.insert(booking_db_models.Team).values(team_id=1, name="Default Team"))
+            await conn.execute(
+                sa.insert(saas_db_models.Organization).values(org_id=DEFAULT_ORG_ID, name="Default Org")
+            )
             await conn.execute(
                 sa.insert(booking_db_models.TeamWorkingHours),
                 [

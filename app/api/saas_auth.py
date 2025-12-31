@@ -1,0 +1,139 @@
+import logging
+import uuid
+from dataclasses import dataclass
+from typing import Iterable
+
+import sqlalchemy as sa
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import HTTPBearer
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from app.api.admin_auth import AdminIdentity, AdminPermission, AdminRole, ROLE_PERMISSIONS
+from app.domain.saas.db_models import Membership, MembershipRole, User
+from app.infra.auth import decode_access_token
+
+logger = logging.getLogger(__name__)
+
+bearer_security = HTTPBearer(auto_error=False)
+
+
+@dataclass
+class SaaSIdentity:
+    user_id: uuid.UUID
+    org_id: uuid.UUID
+    role: MembershipRole
+    email: str
+
+
+ROLE_TO_ADMIN_ROLE: dict[MembershipRole, AdminRole] = {
+    MembershipRole.OWNER: AdminRole.OWNER,
+    MembershipRole.ADMIN: AdminRole.ADMIN,
+    MembershipRole.DISPATCHER: AdminRole.DISPATCHER,
+    MembershipRole.FINANCE: AdminRole.FINANCE,
+    MembershipRole.VIEWER: AdminRole.VIEWER,
+}
+
+
+def _get_cached_identity(request: Request) -> "SaaSIdentity | None":
+    return getattr(request.state, "saas_identity", None)
+
+
+async def _load_identity(request: Request, token: str | None) -> SaaSIdentity | None:
+    if not token:
+        return None
+    try:
+        payload = decode_access_token(token, request.app.state.app_settings.auth_secret_key)
+    except Exception:  # noqa: BLE001
+        logger.info("saas_token_invalid")
+        return None
+
+    try:
+        user_id = uuid.UUID(str(payload.get("sub")))
+        org_id = uuid.UUID(str(payload.get("org_id")))
+        role_raw = payload.get("role")
+        role = MembershipRole(role_raw)
+    except Exception:  # noqa: BLE001
+        logger.info("saas_token_payload_invalid")
+        return None
+
+    session_factory = getattr(request.app.state, "db_session_factory", None)
+    if not session_factory:
+        return SaaSIdentity(user_id=user_id, org_id=org_id, role=role, email="")
+
+    async with session_factory() as session:
+        result = await session.execute(
+            sa.select(User.email, User.is_active, Membership.role, Membership.is_active)
+            .join(Membership, Membership.user_id == User.user_id)
+            .where(
+                User.user_id == user_id,
+                Membership.org_id == org_id,
+            )
+        )
+        row = result.first()
+        if not row:
+            return None
+        email, user_active, membership_role, is_active = row
+        if not user_active or not is_active or membership_role != role:
+            return None
+        return SaaSIdentity(user_id=user_id, org_id=org_id, role=role, email=email)
+
+
+class TenantSessionMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+        token = None
+        authorization: str | None = request.headers.get("Authorization")
+        if authorization and authorization.lower().startswith("bearer "):
+            token = authorization.split(" ", 1)[1]
+        if not token:
+            token = request.cookies.get("saas_session")
+
+        identity = await _load_identity(request, token)
+        if identity:
+            request.state.saas_identity = identity
+            request.state.current_user_id = identity.user_id
+            request.state.current_org_id = identity.org_id
+            admin_role = ROLE_TO_ADMIN_ROLE.get(identity.role)
+            if admin_role:
+                request.state.admin_identity = AdminIdentity(
+                    username=identity.email or str(identity.user_id),
+                    role=admin_role,
+                )
+        return await call_next(request)
+
+
+def require_saas_user(identity: SaaSIdentity | None = Depends(_get_cached_identity)):
+    if not identity:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    return identity
+
+
+def require_org(org_id: uuid.UUID):
+    async def _require(identity: SaaSIdentity = Depends(require_saas_user)) -> SaaSIdentity:
+        if identity.org_id != org_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+        return identity
+
+    return _require
+
+
+def require_role(*roles: MembershipRole):
+    async def _require(identity: SaaSIdentity = Depends(require_saas_user)) -> SaaSIdentity:
+        if roles and identity.role not in roles:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+        return identity
+
+    return _require
+
+
+def require_permissions(*permissions: AdminPermission):
+    async def _require(identity: SaaSIdentity = Depends(require_saas_user)) -> SaaSIdentity:
+        admin_role = ROLE_TO_ADMIN_ROLE.get(identity.role)
+        if not admin_role:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+        granted = ROLE_PERMISSIONS.get(admin_role, set())
+        missing = set(permissions) - granted
+        if missing:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+        return identity
+
+    return _require
