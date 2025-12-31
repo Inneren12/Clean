@@ -9,10 +9,25 @@
 
 ## 2. Привязать существующие данные к org_id
 1. Остановите приложение и сделайте бэкап базы данных.
-2. Для каждой бизнес-таблицы добавьте столбец `org_id` (UUID), установите значение `Default`-организации для всех текущих строк.
-3. Создайте индексы по `org_id` для таблиц с основными запросами (bookings, invoices, workers и т.д.).
-4. Если применимы внешние ключи, настройте их на `organizations.org_id`.
-5. Миграция `0034` также переводит связанные таблицы (`organization_billing`, `organization_usage_events`) на UUID-тип и пересобирает внешние ключи.
+2. **Миграция `0035_add_org_id_to_core_tables` автоматически выполняет:**
+   - Добавляет столбец `org_id` (UUID) во все бизнес-таблицы
+   - Устанавливает значение Default-организации (`00000000-0000-0000-0000-000000000001`) для всех существующих строк
+   - Создаёт индексы по `org_id` для основных таблиц (bookings, invoices, workers, leads, teams и т.д.)
+   - Создаёт композитные индексы для эффективных запросов (например, `org_id + status`, `org_id + created_at`)
+   - Настраивает внешние ключи на `organizations.org_id` с каскадным удалением
+3. Миграция обрабатывает **30+ таблиц** включая:
+   - **Bookings**: teams, bookings, email_events, order_photos, team_working_hours, team_blackouts
+   - **Leads**: chat_sessions, leads, referral_credits
+   - **Invoices**: invoice_number_sequences, invoices, invoice_items, invoice_payments, stripe_events, invoice_public_tokens
+   - **Workers**: workers
+   - **Documents**: document_templates, documents
+   - **Subscriptions**: subscriptions, subscription_addons
+   - **Disputes**: disputes, financial_adjustment_events
+   - **Admin/Audit**: admin_audit_logs
+   - **Checklists**: checklist_templates, checklist_template_items, checklist_runs, checklist_run_items
+   - **Addons**: addon_definitions, order_addons
+   - **Clients**: client_users
+4. Миграция `0034` также переводит связанные таблицы (`organization_billing`, `organization_usage_events`) на UUID-тип и пересобирает внешние ключи.
 
 ## 3. Прогнать миграции и проверить запросы
 1. Выполните `alembic upgrade head` после обновления кода.
@@ -31,5 +46,5 @@
 ## Примечания
 - Не изменяйте `package.json` и `package-lock.json` в рамках миграции.
 - Публичный UI инвойсов остаётся на английском, даже после включения новых организаций.
-
-TODO: добавить `org_id` в основные бизнес-таблицы (teams, bookings, invoices, workers, photos) и обеспечить фильтрацию запросов по организации.
+- Миграция `0035` является **staged migration** (поэтапная): добавление nullable столбца → backfill → NOT NULL → FK → indexes. Это минимизирует downtime.
+- Rollback поддерживается через `alembic downgrade -1`, но будет **необратимым** для данных, созданных после миграции в контексте нескольких организаций.
