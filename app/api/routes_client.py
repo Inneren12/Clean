@@ -8,8 +8,10 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api import entitlements
 from app.dependencies import get_db_session
 from app.domain.bookings.db_models import Booking, OrderPhoto
+from app.domain.bookings import photos_service
 from app.domain.bookings import schemas as booking_schemas
 from app.domain.bookings import service as booking_service
 from app.domain.clients import schemas as client_schemas
@@ -20,9 +22,26 @@ from app.domain.subscriptions import schemas as subscription_schemas
 from app.domain.subscriptions import service as subscription_service
 from app.domain.subscriptions.db_models import Subscription
 from app.settings import settings
+from app.infra.storage import resolve_storage_backend
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+async def _signed_url_for_photo(photo: OrderPhoto, request: Request):
+    storage = resolve_storage_backend(request.app.state)
+    org_id = entitlements.resolve_org_id(request)
+    ttl = settings.order_photo_signed_url_ttl_seconds
+    download_url = str(
+        request.url_for("signed_download_order_photo", order_id=photo.order_id, photo_id=photo.photo_id)
+    )
+    signed_url = await storage.generate_signed_get_url(
+        key=photos_service.storage_key_for_photo(photo, org_id),
+        expires_in=ttl,
+        resource_url=download_url,
+    )
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
+    return booking_schemas.SignedUrlResponse(url=signed_url, expires_at=expires_at)
 
 SESSION_COOKIE_NAME = "client_session"
 
@@ -303,6 +322,26 @@ async def order_detail(
         photos_available=bool(booking.consent_photos),
         photos_count=photos_count or 0,
     )
+
+
+@router.get(
+    "/client/orders/{order_id}/photos/{photo_id}/signed_url",
+    response_model=booking_schemas.SignedUrlResponse,
+)
+async def client_photo_signed_url(
+    order_id: str,
+    photo_id: str,
+    request: Request,
+    identity: client_schemas.ClientIdentity = Depends(require_identity),
+    session: AsyncSession = Depends(get_db_session),
+) -> booking_schemas.SignedUrlResponse:
+    booking = await _get_client_booking(session, order_id, identity.client_id)
+    if not booking.consent_photos:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Photo access not granted")
+    photo = await photos_service.get_photo(session, order_id, photo_id)
+    if photo.order_id != booking.booking_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
+    return await _signed_url_for_photo(photo, request)
 
 
 @router.get("/client/invoices/{invoice_id}")

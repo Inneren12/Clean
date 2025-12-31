@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import re
+import time
 import uuid
 from pathlib import Path
 from typing import Iterable
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.bookings.db_models import Booking, OrderPhoto
 from app.domain.bookings.schemas import PhotoPhase
+from app.infra.storage.backends import LocalStorageBackend, StorageBackend
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -21,10 +23,6 @@ def _allowed_mime_types() -> set[str]:
 
 def _max_bytes() -> int:
     return settings.order_photo_max_bytes
-
-
-def _upload_root() -> Path:
-    return Path(settings.order_upload_root)
 
 
 async def fetch_order(session: AsyncSession, order_id: str) -> Booking:
@@ -51,16 +49,25 @@ def _safe_suffix(original: str | None) -> str:
     return suffix if re.match(r"^[A-Za-z0-9_.-]+$", suffix) else ""
 
 
-def _ensure_directory(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
+def _safe_component(value: str, field: str) -> str:
+    if not re.match(r"^[A-Za-z0-9_.-]+$", value):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {field}",
+        )
+    return value
 
 
-def _target_path(order_id: str, original_name: str | None) -> Path:
+def _target_filename(original_name: str | None) -> str:
     suffix = _safe_suffix(original_name)
-    filename = f"{uuid.uuid4().hex}{suffix}"
-    order_dir = _upload_root() / str(order_id)
-    _ensure_directory(order_dir)
-    return order_dir / filename
+    return f"{uuid.uuid4().hex}{suffix}"
+
+
+def _storage_key(org_id: uuid.UUID, order_id: str, filename: str) -> str:
+    safe_order = _safe_component(str(order_id), "order_id")
+    safe_org = _safe_component(str(org_id), "org_id")
+    safe_filename = _safe_component(filename, "filename")
+    return f"orders/{safe_org}/{safe_order}/{safe_filename}"
 
 
 def _validate_content_type(content_type: str | None) -> str:
@@ -77,28 +84,36 @@ async def save_photo(
     upload: UploadFile,
     phase: PhotoPhase,
     uploaded_by: str,
+    org_id: uuid.UUID,
+    storage: StorageBackend,
 ) -> OrderPhoto:
     content_type = _validate_content_type(upload.content_type)
-    target = _target_path(order.booking_id, upload.filename)
+    filename = _target_filename(upload.filename)
+    key = _storage_key(org_id, order.booking_id, filename)
     hasher = hashlib.sha256()
     size = 0
 
     try:
-        with target.open("wb") as buffer:
+        async def _stream():
+            nonlocal size
             while True:
                 chunk = await upload.read(64 * 1024)
                 if not chunk:
                     break
                 size += len(chunk)
                 if size > _max_bytes():
-                    raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large")
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large"
+                    )
                 hasher.update(chunk)
-                buffer.write(chunk)
+                yield chunk
+
+        await storage.put(key=key, body=_stream(), content_type=content_type)
 
         photo = OrderPhoto(
             order_id=order.booking_id,
             phase=phase.value,
-            filename=target.name,
+            filename=filename,
             original_filename=upload.filename,
             content_type=content_type,
             size_bytes=size,
@@ -112,8 +127,7 @@ async def save_photo(
             await session.refresh(photo)
         except Exception as exc:  # noqa: BLE001
             await session.rollback()
-            if target.exists():
-                target.unlink(missing_ok=True)
+            await storage.delete(key=key)
             logger.exception(
                 "order_photo_save_failed_db", extra={"extra": {"order_id": order.booking_id}}
             )
@@ -133,12 +147,10 @@ async def save_photo(
         )
         return photo
     except HTTPException:
-        if target.exists():
-            target.unlink(missing_ok=True)
+        await storage.delete(key=key)
         raise
     except Exception:  # noqa: BLE001
-        if target.exists():
-            target.unlink(missing_ok=True)
+        await storage.delete(key=key)
         logger.exception("order_photo_save_failed", extra={"extra": {"order_id": order.booking_id}})
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Upload failed")
     finally:
@@ -167,18 +179,29 @@ async def get_photo(session: AsyncSession, order_id: str, photo_id: str) -> Orde
     return photo
 
 
-async def delete_photo(session: AsyncSession, order_id: str, photo_id: str) -> None:
+async def delete_photo(
+    session: AsyncSession, order_id: str, photo_id: str, *, storage: StorageBackend, org_id: uuid.UUID
+) -> None:
     photo = await get_photo(session, order_id, photo_id)
-    path = _upload_root() / order_id / photo.filename
     await session.execute(delete(OrderPhoto).where(OrderPhoto.photo_id == photo_id))
     await session.commit()
-    if path.exists():
-        path.unlink(missing_ok=True)
-
-
-def photo_path(photo: OrderPhoto) -> Path:
-    return _upload_root() / photo.order_id / photo.filename
+    key = _storage_key(org_id, order_id, photo.filename)
+    await storage.delete(key=key)
 
 
 def allowed_mime_types() -> Iterable[str]:
     return _allowed_mime_types()
+
+
+def storage_key_for_photo(photo: OrderPhoto, org_id: uuid.UUID) -> str:
+    return _storage_key(org_id, photo.order_id, photo.filename)
+
+
+def validate_local_signature(storage: StorageBackend, key: str, expires_raw: str, signature: str) -> bool:
+    if not isinstance(storage, LocalStorageBackend):
+        return False
+    try:
+        expires_at = int(expires_raw)
+    except ValueError:
+        return False
+    return storage.validate_signature(key=key, expires_at=expires_at, signature=signature)

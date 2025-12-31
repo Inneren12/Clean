@@ -143,6 +143,11 @@ class OrderPhotoListResponse(BaseModel):
     photos: list[OrderPhotoResponse]
 
 
+class SignedUrlResponse(BaseModel):
+    url: str
+    expires_at: datetime
+
+
 class ConsentPhotosUpdateRequest(BaseModel):
     consent_photos: bool
 

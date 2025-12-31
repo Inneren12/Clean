@@ -103,9 +103,11 @@ def restore_admin_settings():
 def enable_test_mode():
     settings.testing = True
     settings.deposits_enabled = False
+    settings.app_env = "dev"
     from app.infra.email import resolve_email_adapter
 
     app.state.email_adapter = resolve_email_adapter(settings)
+    app.state.storage_backend = None
     yield
 
 

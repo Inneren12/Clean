@@ -1,7 +1,9 @@
 import logging
+import time
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import entitlements
@@ -20,10 +22,30 @@ from app.domain.bookings import photos_service
 from app.domain.bookings import schemas as booking_schemas
 from app.domain.reason_logs import schemas as reason_schemas
 from app.domain.reason_logs import service as reason_service
+from app.infra.storage import resolve_storage_backend
 from app.domain.saas import billing_service
+from app.settings import settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+async def _signed_url_for_photo(
+    photo: booking_schemas.OrderPhotoResponse | photos_service.OrderPhoto,  # type: ignore[type-arg]
+    request: Request,
+    storage,
+    org_id,
+) -> booking_schemas.SignedUrlResponse:
+    key = photos_service.storage_key_for_photo(photo, org_id)
+    ttl = settings.order_photo_signed_url_ttl_seconds
+    download_url = str(
+        request.url_for("signed_download_order_photo", order_id=photo.order_id, photo_id=photo.photo_id)
+    )
+    signed_url = await storage.generate_signed_get_url(
+        key=key, expires_in=ttl, resource_url=download_url
+    )
+    expires_at = datetime.fromtimestamp(int(time.time()) + ttl, tz=timezone.utc)
+    return booking_schemas.SignedUrlResponse(url=signed_url, expires_at=expires_at)
 
 
 def _order_addon_response(model) -> addon_schemas.OrderAddonResponse:
@@ -181,10 +203,14 @@ async def upload_order_photo(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Photo consent not granted")
 
     uploaded_by = identity.role.value or identity.username
-    photo = await photos_service.save_photo(session, order, file, parsed_phase, uploaded_by)
+    storage = resolve_storage_backend(request.app.state)
+    org_id = entitlements.resolve_org_id(request)
+    photo = await photos_service.save_photo(
+        session, order, file, parsed_phase, uploaded_by, org_id, storage
+    )
     await billing_service.record_usage_event(
         session,
-        entitlements.resolve_org_id(request),
+        org_id,
         metric="storage_bytes",
         quantity=photo.size_bytes,
         resource_id=photo.photo_id,
@@ -237,20 +263,104 @@ async def list_order_photos(
 
 
 @router.get(
+    "/v1/orders/{order_id}/photos/{photo_id}/signed_url",
+    response_model=booking_schemas.SignedUrlResponse,
+)
+async def signed_order_photo_url(
+    order_id: str,
+    photo_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    identity: AdminIdentity = Depends(require_dispatch),
+) -> booking_schemas.SignedUrlResponse:
+    _ = identity
+    photo = await photos_service.get_photo(session, order_id, photo_id)
+    storage = resolve_storage_backend(request.app.state)
+    org_id = entitlements.resolve_org_id(request)
+    return await _signed_url_for_photo(photo, request, storage, org_id)
+
+
+@router.get(
+    "/v1/orders/{order_id}/photos/{photo_id}/signed-download",
+    name="signed_download_order_photo",
+)
+async def signed_download_order_photo(
+    order_id: str,
+    photo_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+) -> Response:
+    photo = await photos_service.get_photo(session, order_id, photo_id)
+    storage = resolve_storage_backend(request.app.state)
+    org_id = entitlements.resolve_org_id(request)
+    key = photos_service.storage_key_for_photo(photo, org_id)
+    sig = request.query_params.get("sig")
+    exp = request.query_params.get("exp")
+
+    if isinstance(storage, photos_service.LocalStorageBackend):
+        if not (sig and exp and photos_service.validate_local_signature(storage, key, exp, sig)):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid signature")
+        file_path = storage.path_for(key)
+        if not file_path.exists():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File missing")
+        return FileResponse(
+            path=file_path,
+            media_type=photo.content_type,
+            filename=photo.original_filename or photo.filename,
+        )
+
+    signed_url = await storage.generate_signed_get_url(
+        key=key,
+        expires_in=settings.order_photo_signed_url_ttl_seconds,
+        resource_url=str(request.url),
+    )
+    return RedirectResponse(url=signed_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+
+@router.get(
     "/v1/orders/{order_id}/photos/{photo_id}/download",
     response_class=FileResponse,
 )
 async def download_order_photo(
     order_id: str,
     photo_id: str,
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
-) -> FileResponse:
+) -> Response:
     _ = identity
     photo = await photos_service.get_photo(session, order_id, photo_id)
-    file_path = photos_service.photo_path(photo)
-    if not file_path.exists():
+    storage = resolve_storage_backend(request.app.state)
+    org_id = entitlements.resolve_org_id(request)
+    key = photos_service.storage_key_for_photo(photo, org_id)
+    ttl = settings.order_photo_signed_url_ttl_seconds
+
+    signature = request.query_params.get("sig")
+    expires_raw = request.query_params.get("exp")
+    has_valid_token = False
+    if signature and expires_raw:
+        has_valid_token = photos_service.validate_local_signature(storage, key, expires_raw, signature)
+
+    if settings.app_env != "dev" and not has_valid_token:
+        download_url = str(request.url_for("download_order_photo", order_id=order_id, photo_id=photo_id))
+        signed_url = await storage.generate_signed_get_url(
+            key=key, expires_in=ttl, resource_url=download_url
+        )
+        return RedirectResponse(url=signed_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+    if not storage.supports_direct_io():
+        download_url = str(request.url_for("download_order_photo", order_id=order_id, photo_id=photo_id))
+        signed_url = await storage.generate_signed_get_url(
+            key=key, expires_in=ttl, resource_url=download_url
+        )
+        return RedirectResponse(url=signed_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+    file_path = storage.path_for(key) if hasattr(storage, "path_for") else None
+    if not file_path or not file_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File missing")
+
+    if (signature or expires_raw) and not has_valid_token:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid signature")
 
     logger.info(
         "order_photo_download",
@@ -273,10 +383,13 @@ async def download_order_photo(
 async def delete_order_photo(
     order_id: str,
     photo_id: str,
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
     _admin: AdminIdentity = Depends(require_admin),
 ) -> None:
-    await photos_service.delete_photo(session, order_id, photo_id)
+    storage = resolve_storage_backend(request.app.state)
+    org_id = entitlements.resolve_org_id(request)
+    await photos_service.delete_photo(session, order_id, photo_id, storage=storage, org_id=org_id)
 
 
 @router.get(
@@ -290,11 +403,12 @@ async def admin_order_gallery(
     _admin: AdminIdentity = Depends(require_admin),
 ) -> HTMLResponse:
     photos = await photos_service.list_photos(session, order_id)
+    storage = resolve_storage_backend(request.app.state)
+    org_id = entitlements.resolve_org_id(request)
     items: list[str] = []
     for photo in photos:
-        download_url = request.url_for(
-            "download_order_photo", order_id=order_id, photo_id=photo.photo_id
-        )
+        signed = await _signed_url_for_photo(photo, request, storage, org_id)
+        download_url = signed.url
         items.append(
             f"<li><strong>{photo.phase}</strong> - {photo.original_filename or photo.filename} "
             f"({photo.size_bytes} bytes) - <a href=\"{download_url}\">Download</a></li>"
