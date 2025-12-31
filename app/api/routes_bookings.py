@@ -23,7 +23,6 @@ from app.domain.bookings import service as booking_service
 from app.domain.leads.db_models import Lead
 from app.domain.clients import service as client_service
 from app.domain.notifications import email_service
-from app.infra.metrics import metrics
 from app.infra import stripe as stripe_infra
 from app.settings import settings
 
@@ -373,69 +372,3 @@ async def cleanup_pending_bookings(
     return {"deleted": deleted}
 
 
-@router.post("/v1/stripe/webhook", status_code=status.HTTP_200_OK)
-async def stripe_webhook(http_request: Request, session: AsyncSession = Depends(get_db_session)) -> dict[str, bool]:
-    payload = await http_request.body()
-    sig_header = http_request.headers.get("Stripe-Signature")
-    if not settings.stripe_webhook_secret:
-        logger.warning(
-            "booking_dependency_unavailable",
-            extra={
-                "extra": {
-                    "dependency": "stripe_webhook",
-                    "path": http_request.url.path,
-                    "method": http_request.method,
-                }
-            },
-        )
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Stripe webhook disabled")
-
-    stripe_client = stripe_infra.resolve_client(http_request.app.state)
-    try:
-        event = stripe_infra.parse_webhook_event(
-            stripe_client=stripe_client,
-            payload=payload,
-            signature=sig_header,
-            webhook_secret=settings.stripe_webhook_secret,
-        )
-    except Exception as exc:  # noqa: BLE001
-        metrics.record_webhook("error")
-        logger.warning("stripe_webhook_invalid", extra={"extra": {"reason": type(exc).__name__}})
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Stripe webhook") from exc
-
-    def _safe_get(source: object, key: str, default: object | None = None):
-        if isinstance(source, dict):
-            return source.get(key, default)
-        return getattr(source, key, default)
-
-    event_type = _safe_get(event, "type")
-    data = _safe_get(event, "data", {}) or {}
-    payload_object = _safe_get(data, "object", {}) or {}
-    session_id = _safe_get(payload_object, "id")
-    payment_intent_id = _safe_get(payload_object, "payment_intent") or _safe_get(payload_object, "id")
-    payment_status = _safe_get(payload_object, "payment_status")
-
-    handled = False
-    try:
-        if event_type == "checkout.session.completed" and payment_status == "paid":
-            handled = True
-            await booking_service.mark_deposit_paid(
-                session=session,
-                checkout_session_id=session_id,
-                payment_intent_id=payment_intent_id,
-                email_adapter=getattr(http_request.app.state, "email_adapter", None),
-            )
-        elif event_type in {"checkout.session.expired", "payment_intent.payment_failed"}:
-            handled = True
-            await booking_service.mark_deposit_failed(
-                session=session,
-                checkout_session_id=session_id,
-                payment_intent_id=payment_intent_id,
-                failure_status="expired" if event_type == "checkout.session.expired" else "failed",
-            )
-    except Exception:  # noqa: BLE001
-        metrics.record_webhook("error")
-        raise
-
-    metrics.record_webhook("processed" if handled else "ignored")
-    return {"received": True}

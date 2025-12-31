@@ -310,6 +310,28 @@ async def _handle_webhook_event(session: AsyncSession, event: Any, email_adapter
         return await _handle_invoice_event(session, event)
     if isinstance(metadata, dict) and metadata.get("booking_id"):
         return await _handle_deposit_event(session, event, email_adapter)
+    event_type = _safe_get(event, "type")
+    session_id = _safe_get(payload_object, "id")
+    payment_intent_id = _safe_get(payload_object, "payment_intent") or _safe_get(payload_object, "id")
+    payment_status = _safe_get(payload_object, "payment_status")
+    if event_type == "checkout.session.completed" and payment_status == "paid":
+        await booking_service.mark_deposit_paid(
+            session=session,
+            checkout_session_id=session_id,
+            payment_intent_id=payment_intent_id,
+            email_adapter=email_adapter,
+            commit=False,
+        )
+        return True
+    if event_type in {"checkout.session.expired", "payment_intent.payment_failed"}:
+        await booking_service.mark_deposit_failed(
+            session=session,
+            checkout_session_id=session_id,
+            payment_intent_id=payment_intent_id,
+            failure_status="expired" if event_type == "checkout.session.expired" else "failed",
+            commit=False,
+        )
+        return True
     if (
         str(event_type or "").startswith("customer.subscription")
         or _safe_get(payload_object, "mode") == "subscription"

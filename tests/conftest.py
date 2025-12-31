@@ -90,6 +90,7 @@ def restore_admin_settings():
     original_testing = getattr(settings, "testing", False)
     original_deposits = getattr(settings, "deposits_enabled", True)
     original_metrics = getattr(settings, "metrics_enabled", True)
+    original_metrics_token = getattr(settings, "metrics_token", None)
     original_job_heartbeat = getattr(settings, "job_heartbeat_required", False)
     original_job_heartbeat_ttl = getattr(settings, "job_heartbeat_ttl_seconds", 300)
     original_legacy_basic_auth_enabled = getattr(settings, "legacy_basic_auth_enabled", True)
@@ -102,6 +103,7 @@ def restore_admin_settings():
     settings.testing = original_testing
     settings.deposits_enabled = original_deposits
     settings.metrics_enabled = original_metrics
+    settings.metrics_token = original_metrics_token
     settings.job_heartbeat_required = original_job_heartbeat
     settings.job_heartbeat_ttl_seconds = original_job_heartbeat_ttl
     settings.legacy_basic_auth_enabled = original_legacy_basic_auth_enabled
@@ -167,10 +169,12 @@ def client(async_session_maker):
 
     app.dependency_overrides[get_db_session] = override_db_session
     app.state.bot_store = InMemoryBotStore()
+    original_factory = getattr(app.state, "db_session_factory", None)
     app.state.db_session_factory = async_session_maker
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+    app.state.db_session_factory = original_factory
 
 
 @pytest.fixture()
@@ -183,7 +187,9 @@ def client_no_raise(async_session_maker):
 
     app.dependency_overrides[get_db_session] = override_db_session
     app.state.bot_store = InMemoryBotStore()
+    original_factory = getattr(app.state, "db_session_factory", None)
     app.state.db_session_factory = async_session_maker
     with TestClient(app, raise_server_exceptions=False) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+    app.state.db_session_factory = original_factory
