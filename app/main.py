@@ -219,8 +219,8 @@ def create_app(app_settings) -> FastAPI:
     app.add_middleware(LoggingMiddleware)
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
-    app.add_middleware(TenantSessionMiddleware)
     app.add_middleware(AdminAccessMiddleware)
+    app.add_middleware(TenantSessionMiddleware)
     app.add_middleware(AdminAuditMiddleware)
     app.add_middleware(WorkerAccessMiddleware)
 

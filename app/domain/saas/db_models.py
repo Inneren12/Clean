@@ -6,9 +6,11 @@ from enum import Enum
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.types import Uuid
 
 from app.infra.db import Base
+
+
+UUID_TYPE = sa.Uuid(as_uuid=True)
 
 
 class MembershipRole(str, Enum):
@@ -23,7 +25,7 @@ class MembershipRole(str, Enum):
 class Organization(Base):
     __tablename__ = "organizations"
 
-    org_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(sa.String(255), nullable=False, unique=True)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
@@ -39,7 +41,7 @@ class Organization(Base):
 class User(Base):
     __tablename__ = "users"
 
-    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(sa.String(255), nullable=False, unique=True, index=True)
     password_hash: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(sa.Boolean, default=True, server_default=sa.true())
@@ -57,9 +59,15 @@ class Membership(Base):
     )
 
     membership_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    org_id: Mapped[uuid.UUID] = mapped_column(Uuid, sa.ForeignKey("organizations.org_id", ondelete="CASCADE"))
-    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, sa.ForeignKey("users.user_id", ondelete="CASCADE"))
-    role: Mapped[MembershipRole] = mapped_column(sa.Enum(MembershipRole), nullable=False)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, sa.ForeignKey("organizations.org_id", ondelete="CASCADE")
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, sa.ForeignKey("users.user_id", ondelete="CASCADE")
+    )
+    role: Mapped[MembershipRole] = mapped_column(
+        sa.Enum(MembershipRole, name="membershiprole"), nullable=False
+    )
     is_active: Mapped[bool] = mapped_column(sa.Boolean, default=True, server_default=sa.true())
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
@@ -76,9 +84,13 @@ class ApiToken(Base):
     )
 
     token_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    org_id: Mapped[uuid.UUID] = mapped_column(Uuid, sa.ForeignKey("organizations.org_id", ondelete="CASCADE"))
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, sa.ForeignKey("organizations.org_id", ondelete="CASCADE")
+    )
     token_hash: Mapped[str] = mapped_column(sa.String(255), nullable=False)
-    role: Mapped[MembershipRole] = mapped_column(sa.Enum(MembershipRole), nullable=False)
+    role: Mapped[MembershipRole] = mapped_column(
+        sa.Enum(MembershipRole, name="membershiprole"), nullable=False
+    )
     description: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
     last_used_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -92,7 +104,9 @@ class OrganizationBilling(Base):
     __tablename__ = "organization_billing"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    org_id: Mapped[uuid.UUID] = mapped_column(Uuid, sa.ForeignKey("organizations.org_id", ondelete="CASCADE"))
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, sa.ForeignKey("organizations.org_id", ondelete="CASCADE")
+    )
     stripe_customer_id: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
     stripe_subscription_id: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
     plan_id: Mapped[str] = mapped_column(sa.String(64), nullable=False)
@@ -109,7 +123,9 @@ class OrganizationUsageEvent(Base):
     __tablename__ = "organization_usage_events"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    org_id: Mapped[uuid.UUID] = mapped_column(Uuid, sa.ForeignKey("organizations.org_id", ondelete="CASCADE"))
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, sa.ForeignKey("organizations.org_id", ondelete="CASCADE")
+    )
     metric: Mapped[str] = mapped_column(sa.String(64), nullable=False)
     quantity: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=1, server_default="1")
     resource_id: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
