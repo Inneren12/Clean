@@ -1178,10 +1178,10 @@ async def worker_complete_checklist(
 )
 async def worker_upload_photo(
     job_id: str,
+    request: Request,
     phase: str = Form(...),
     consent: bool = Form(False),
     file: UploadFile = File(...),
-    request: Request = None,
     identity: WorkerIdentity = Depends(require_worker),
     session: AsyncSession = Depends(get_db_session),
 ) -> booking_schemas.OrderPhotoResponse:
@@ -1195,6 +1195,11 @@ async def worker_upload_photo(
         parsed_phase = booking_schemas.PhotoPhase.from_any_case(phase)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    contents = await file.read()
+    size_bytes = len(contents or b"")
+    await entitlements.enforce_storage_entitlement(request, size_bytes, session=session)
+    await file.seek(0)
     storage = resolve_storage_backend(request.app.state)
     org_id = entitlements.resolve_org_id(request)
     photo = await photos_service.save_photo(
@@ -1215,6 +1220,14 @@ async def worker_upload_photo(
         before=None,
         after={"phase": parsed_phase.value, "order_id": booking.booking_id},
     )
+    if entitlements.has_tenant_identity(request):
+        await billing_service.record_usage_event(
+            session,
+            org_id,
+            metric="storage_bytes",
+            quantity=photo.size_bytes,
+            resource_id=photo.photo_id,
+        )
     await session.commit()
     return booking_schemas.OrderPhotoResponse(
         photo_id=photo.photo_id,
@@ -1300,16 +1313,13 @@ async def worker_delete_photo(
     storage = resolve_storage_backend(request.app.state)
     org_id = entitlements.resolve_org_id(request)
     await photos_service.delete_photo(
-        session, booking.booking_id, photo.photo_id, storage=storage, org_id=org_id
+        session,
+        booking.booking_id,
+        photo.photo_id,
+        storage=storage,
+        org_id=org_id,
+        record_usage=entitlements.has_tenant_identity(request),
     )
-    if entitlements.has_tenant_identity(request):
-        await billing_service.record_usage_event(
-            session,
-            org_id,
-            metric="storage_bytes",
-            quantity=-photo.size_bytes,
-            resource_id=photo.photo_id,
-        )
     await _audit(
         session,
         identity,

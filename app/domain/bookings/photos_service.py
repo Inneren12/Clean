@@ -11,6 +11,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.bookings.db_models import Booking, OrderPhoto
+from app.domain.saas import billing_service
 from app.domain.bookings.schemas import PhotoPhase
 from app.infra.storage.backends import LocalStorageBackend, StorageBackend
 from app.settings import settings
@@ -180,12 +181,49 @@ async def get_photo(session: AsyncSession, order_id: str, photo_id: str) -> Orde
 
 
 async def delete_photo(
-    session: AsyncSession, order_id: str, photo_id: str, *, storage: StorageBackend, org_id: uuid.UUID
+    session: AsyncSession,
+    order_id: str,
+    photo_id: str,
+    *,
+    storage: StorageBackend,
+    org_id: uuid.UUID,
+    record_usage: bool = False,
 ) -> OrderPhoto:
     photo = await get_photo(session, order_id, photo_id)
-    await session.execute(delete(OrderPhoto).where(OrderPhoto.photo_id == photo_id))
     key = _storage_key(org_id, order_id, photo.filename)
-    await storage.delete(key=key)
+
+    try:
+        await storage.delete(key=key)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "order_photo_storage_delete_failed",
+            extra={"extra": {"order_id": order_id, "photo_id": photo_id}},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete photo from storage",
+        ) from exc
+
+    try:
+        await session.execute(delete(OrderPhoto).where(OrderPhoto.photo_id == photo_id))
+        if record_usage:
+            await billing_service.record_usage_event(
+                session,
+                org_id,
+                metric="storage_bytes",
+                quantity=-photo.size_bytes,
+                resource_id=photo.photo_id,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "order_photo_delete_failed",
+            extra={"extra": {"order_id": order_id, "photo_id": photo_id}},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete photo record",
+        ) from exc
+
     return photo
 
 

@@ -29,7 +29,12 @@ def _stub_stripe(session_id: str) -> object:
         return StubCheckoutSession(session_id, "https://example.com/checkout", "pi_test")
 
     checkout = SimpleNamespace(Session=SimpleNamespace(create=staticmethod(_create)))
-    return SimpleNamespace(api_key=None, checkout=checkout, Webhook=stripe.Webhook)
+    verify_webhook = staticmethod(
+        lambda payload, signature: stripe.Webhook.construct_event(
+            payload, signature, settings.stripe_webhook_secret
+        )
+    )
+    return SimpleNamespace(api_key=None, checkout=checkout, Webhook=stripe.Webhook, verify_webhook=verify_webhook)
 
 
 def _seed_lead(async_session_maker) -> str:
@@ -347,7 +352,7 @@ def test_webhook_confirms_booking(client, async_session_maker):
         signature = stripe.WebhookSignature._compute_signature(signed_payload, settings.stripe_webhook_secret)
         headers = {"Stripe-Signature": f"t={timestamp},v1={signature}"}
 
-        webhook_response = client.post("/v1/stripe/webhook", content=body, headers=headers)
+        webhook_response = client.post("/v1/payments/stripe/webhook", content=body, headers=headers)
         assert webhook_response.status_code == 200
 
         async def _fetch() -> Booking:
@@ -391,7 +396,7 @@ def test_webhook_requires_paid_status(client, async_session_maker):
         signature = stripe.WebhookSignature._compute_signature(signed_payload, settings.stripe_webhook_secret)
         headers = {"Stripe-Signature": f"t={timestamp},v1={signature}"}
 
-        webhook_response = client.post("/v1/stripe/webhook", content=body, headers=headers)
+        webhook_response = client.post("/v1/payments/stripe/webhook", content=body, headers=headers)
         assert webhook_response.status_code == 200
 
         async def _fetch() -> Booking:
@@ -434,7 +439,7 @@ def test_webhook_expired_cancels_pending(client, async_session_maker):
         signature = stripe.WebhookSignature._compute_signature(signed_payload, settings.stripe_webhook_secret)
         headers = {"Stripe-Signature": f"t={timestamp},v1={signature}"}
 
-        webhook_response = client.post("/v1/stripe/webhook", content=body, headers=headers)
+        webhook_response = client.post("/v1/payments/stripe/webhook", content=body, headers=headers)
         assert webhook_response.status_code == 200
 
         async def _fetch() -> Booking:

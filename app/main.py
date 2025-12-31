@@ -115,13 +115,15 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         self.metrics = metrics_client
 
     async def dispatch(self, request: Request, call_next: Callable):
+        route = request.scope.get("route")
+        path_label = getattr(route, "path", request.url.path)
         try:
             response = await call_next(request)
         except Exception:
-            self.metrics.record_http_5xx(request.method, request.url.path)
+            self.metrics.record_http_5xx(request.method, path_label)
             raise
         if response.status_code >= 500:
-            self.metrics.record_http_5xx(request.method, request.url.path)
+            self.metrics.record_http_5xx(request.method, path_label)
         return response
 
 

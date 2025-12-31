@@ -124,6 +124,7 @@ class Settings(BaseSettings):
     testing: bool = Field(False, env="TESTING")
     deposits_enabled: bool = Field(True, env="DEPOSITS_ENABLED")
     metrics_enabled: bool = Field(True, env="METRICS_ENABLED")
+    metrics_token: str | None = Field(None, env="METRICS_TOKEN")
     job_heartbeat_required: bool = Field(False, env="JOB_HEARTBEAT_REQUIRED")
     job_heartbeat_ttl_seconds: int = Field(300, env="JOB_HEARTBEAT_TTL_SECONDS")
     default_org_id: uuid.UUID = Field(

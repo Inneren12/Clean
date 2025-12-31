@@ -30,4 +30,4 @@ Minimum production monitoring should cover availability, async jobs, and storage
 ## Access control
 
 - Place `/v1/admin` behind Cloudflare Access (or another zero-trust gateway) to require SSO/MFA before reaching FastAPI. Keep an allowlist for monitoring probes hitting `/healthz` and `/readyz`.
-- Dashboard `/metrics` (enabled when `METRICS_ENABLED=true`) and add alerts for the counters above plus booking lifecycle volume via `bookings_total`.
+- Dashboard `/metrics` (enabled when `METRICS_ENABLED=true`) and add alerts for the counters above plus booking lifecycle volume via `bookings_total`. Protect `/metrics` behind ingress/zero-trust where possible; if direct exposure is required, set `METRICS_TOKEN` and require `Authorization: Bearer <token>`.

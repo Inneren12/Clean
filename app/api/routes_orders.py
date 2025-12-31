@@ -390,15 +390,14 @@ async def delete_order_photo(
 ) -> None:
     storage = resolve_storage_backend(request.app.state)
     org_id = entitlements.resolve_org_id(request)
-    photo = await photos_service.delete_photo(session, order_id, photo_id, storage=storage, org_id=org_id)
-    if entitlements.has_tenant_identity(request):
-        await billing_service.record_usage_event(
-            session,
-            org_id,
-            metric="storage_bytes",
-            quantity=-photo.size_bytes,
-            resource_id=photo.photo_id,
-        )
+    photo = await photos_service.delete_photo(
+        session,
+        order_id,
+        photo_id,
+        storage=storage,
+        org_id=org_id,
+        record_usage=entitlements.has_tenant_identity(request),
+    )
     await session.commit()
 
 
