@@ -335,13 +335,14 @@ async def create_booking(
                 extra={"extra": {"booking_id": booking.booking_id, "lead_id": booking.lead_id}},
             )
 
-    await billing_service.record_usage_event(
-        session,
-        org_id,
-        metric="booking_created",
-        quantity=1,
-        resource_id=booking.booking_id,
-    )
+    if entitlements.has_tenant_identity(http_request):
+        await billing_service.record_usage_event(
+            session,
+            org_id,
+            metric="booking_created",
+            quantity=1,
+            resource_id=booking.booking_id,
+        )
     await session.commit()
 
     return booking_schemas.BookingResponse(

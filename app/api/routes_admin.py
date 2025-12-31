@@ -2892,13 +2892,14 @@ async def admin_workers_create(
     )
     session.add(worker)
     await session.flush()
-    await billing_service.record_usage_event(
-        session,
-        entitlements.resolve_org_id(request),
-        metric="worker_created",
-        quantity=1,
-        resource_id=str(worker.worker_id),
-    )
+    if entitlements.has_tenant_identity(request) and worker.is_active:
+        await billing_service.record_usage_event(
+            session,
+            entitlements.resolve_org_id(request),
+            metric="worker_created",
+            quantity=1,
+            resource_id=str(worker.worker_id),
+        )
     await audit_service.record_action(
         session,
         identity=identity,
@@ -2983,6 +2984,15 @@ async def admin_workers_update(
     worker.hourly_rate_cents = int(hourly_rate_raw) if hourly_rate_raw else None
     if "is_active" in form:
         worker.is_active = form.get("is_active") == "on" or form.get("is_active") == "1"
+
+    if entitlements.has_tenant_identity(request) and before["is_active"] != worker.is_active:
+        await billing_service.record_usage_event(
+            session,
+            entitlements.resolve_org_id(request),
+            metric="worker_created",
+            quantity=1 if worker.is_active else -1,
+            resource_id=str(worker.worker_id),
+        )
 
     await audit_service.record_action(
         session,

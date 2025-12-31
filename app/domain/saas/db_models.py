@@ -102,6 +102,7 @@ class ApiToken(Base):
 
 class OrganizationBilling(Base):
     __tablename__ = "organization_billing"
+    __table_args__ = (sa.UniqueConstraint("org_id", name="uq_org_billing_org"),)
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     org_id: Mapped[uuid.UUID] = mapped_column(

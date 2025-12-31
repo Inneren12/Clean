@@ -5,6 +5,8 @@ import uuid
 from typing import Any
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.saas.db_models import OrganizationBilling, OrganizationUsageEvent
@@ -14,6 +16,11 @@ from app.domain.saas.plans import Plan, get_plan
 ACTIVE_SUBSCRIPTION_STATES = {"active", "trialing", "past_due"}
 
 
+def normalize_subscription_status(status: str | None) -> str:
+    normalized = str(status).lower() if status else "incomplete"
+    return normalized
+
+
 async def get_or_create_billing(session: AsyncSession, org_id: uuid.UUID) -> OrganizationBilling:
     stmt = sa.select(OrganizationBilling).where(OrganizationBilling.org_id == org_id).with_for_update()
     result = await session.execute(stmt)
@@ -21,10 +28,24 @@ async def get_or_create_billing(session: AsyncSession, org_id: uuid.UUID) -> Org
     if billing:
         return billing
 
-    billing = OrganizationBilling(org_id=org_id, plan_id="free", status="inactive")
-    session.add(billing)
-    await session.flush()
-    return billing
+    bind = session.get_bind()
+    dialect = getattr(getattr(bind, "dialect", None), "name", "") if bind else ""
+    if dialect == "sqlite":
+        insert_stmt = (
+            sqlite_insert(OrganizationBilling)
+            .values(org_id=org_id, plan_id="free", status="inactive")
+            .on_conflict_do_nothing(index_elements=[OrganizationBilling.org_id])
+        )
+    else:
+        insert_stmt = (
+            pg_insert(OrganizationBilling)
+            .values(org_id=org_id, plan_id="free", status="inactive")
+            .on_conflict_do_nothing(index_elements=[OrganizationBilling.org_id])
+        )
+
+    await session.execute(insert_stmt)
+    result = await session.execute(stmt)
+    return result.scalar_one()
 
 
 async def set_plan(
@@ -39,7 +60,7 @@ async def set_plan(
 ) -> OrganizationBilling:
     billing = await get_or_create_billing(session, org_id)
     billing.plan_id = plan_id
-    billing.status = status
+    billing.status = normalize_subscription_status(status)
     billing.stripe_customer_id = stripe_customer_id or billing.stripe_customer_id
     billing.stripe_subscription_id = stripe_subscription_id or billing.stripe_subscription_id
     billing.current_period_end = current_period_end
@@ -83,13 +104,14 @@ async def update_from_subscription_payload(session: AsyncSession, payload: Any) 
     if period_end_ts:
         current_period_end = dt.datetime.fromtimestamp(int(period_end_ts), tz=dt.timezone.utc)
 
-    status = getattr(subscription, "status", None) or subscription.get("status") if isinstance(subscription, dict) else None
+    status_raw = getattr(subscription, "status", None) or subscription.get("status") if isinstance(subscription, dict) else None
+    status = normalize_subscription_status(status_raw)
     resolved_plan = get_plan(plan_id)
     billing = await set_plan(
         session,
         org_id,
         plan_id=resolved_plan.plan_id,
-        status=status or "active",
+        status=status,
         stripe_customer_id=stripe_customer_id if stripe_customer_id else None,
         stripe_subscription_id=subscription_id,
         current_period_end=current_period_end,
@@ -125,7 +147,7 @@ async def usage_snapshot(session: AsyncSession, org_id: uuid.UUID) -> dict[str, 
     now = dt.datetime.now(tz=dt.timezone.utc)
     start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    workers_query = sa.select(sa.func.count(sa.distinct(OrganizationUsageEvent.resource_id))).where(
+    workers_query = sa.select(sa.func.coalesce(sa.func.sum(OrganizationUsageEvent.quantity), 0)).where(
         OrganizationUsageEvent.org_id == org_id, OrganizationUsageEvent.metric == "worker_created"
     )
     bookings_query = sa.select(sa.func.count()).where(

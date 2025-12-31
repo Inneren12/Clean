@@ -4,6 +4,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import sqlalchemy as sa
+
+from app.domain.saas import billing_service, service as saas_service
+from app.domain.saas.db_models import OrganizationUsageEvent
 
 from app.domain.bookings.db_models import Booking
 from app.domain.leads.db_models import Lead
@@ -52,6 +56,21 @@ async def _create_booking(async_session_maker, consent: bool = False) -> str:
         await session.commit()
         await session.refresh(booking)
         return booking.booking_id
+
+
+def _create_saas_token(async_session_maker):
+    async def _inner():
+        async with async_session_maker() as session:
+            org = await saas_service.create_organization(session, "Photo Tenant")
+            user = await saas_service.create_user(session, "photo-owner@example.com", "pw")
+            membership = await saas_service.create_membership(
+                session, org, user, saas_service.MembershipRole.OWNER
+            )
+            token = saas_service.build_access_token(user, membership)
+            await session.commit()
+            return token, org.org_id
+
+    return asyncio.run(_inner())
 
 
 @pytest.fixture()
@@ -252,3 +271,36 @@ def test_staff_can_list_photos_without_consent(client, async_session_maker, uplo
     assert dispatcher_list_resp.status_code == 200
     assert len(dispatcher_list_resp.json()["photos"]) == 1
     assert dispatcher_list_resp.json()["photos"][0]["photo_id"] == photo_id
+
+
+def test_storage_usage_decrements_for_saas(client, async_session_maker, upload_root):
+    token, org_id = _create_saas_token(async_session_maker)
+    booking_id = asyncio.run(_create_booking(async_session_maker, consent=True))
+
+    files = {"file": ("before.jpg", b"abc", "image/jpeg")}
+    upload = client.post(
+        f"/v1/orders/{booking_id}/photos",
+        data={"phase": "before"},
+        files=files,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert upload.status_code == 201
+    photo_id = upload.json()["photo_id"]
+
+    delete = client.delete(
+        f"/v1/orders/{booking_id}/photos/{photo_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert delete.status_code == 204
+
+    async def _storage_total() -> int:
+        async with async_session_maker() as session:
+            total = await session.scalar(
+                sa.select(sa.func.coalesce(sa.func.sum(OrganizationUsageEvent.quantity), 0)).where(
+                    OrganizationUsageEvent.org_id == org_id,
+                    OrganizationUsageEvent.metric == "storage_bytes",
+                )
+            )
+            return int(total or 0)
+
+    assert asyncio.run(_storage_total()) == 0

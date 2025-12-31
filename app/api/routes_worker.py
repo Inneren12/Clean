@@ -1302,6 +1302,14 @@ async def worker_delete_photo(
     await photos_service.delete_photo(
         session, booking.booking_id, photo.photo_id, storage=storage, org_id=org_id
     )
+    if entitlements.has_tenant_identity(request):
+        await billing_service.record_usage_event(
+            session,
+            org_id,
+            metric="storage_bytes",
+            quantity=-photo.size_bytes,
+            resource_id=photo.photo_id,
+        )
     await _audit(
         session,
         identity,
