@@ -19,7 +19,9 @@ def upgrade() -> None:
     op.create_table(
         "organization_billing",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("org_id", UUID_TYPE, sa.ForeignKey("organizations.org_id", ondelete="CASCADE")),
+        sa.Column(
+            "org_id", UUID_TYPE, sa.ForeignKey("organizations.org_id", ondelete="CASCADE"), nullable=False
+        ),
         sa.Column("stripe_customer_id", sa.String(length=255), nullable=True),
         sa.Column("stripe_subscription_id", sa.String(length=255), nullable=True),
         sa.Column("plan_id", sa.String(length=64), nullable=False),
@@ -32,7 +34,9 @@ def upgrade() -> None:
     op.create_table(
         "organization_usage_events",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("org_id", UUID_TYPE, sa.ForeignKey("organizations.org_id", ondelete="CASCADE")),
+        sa.Column(
+            "org_id", UUID_TYPE, sa.ForeignKey("organizations.org_id", ondelete="CASCADE"), nullable=False
+        ),
         sa.Column("metric", sa.String(length=64), nullable=False),
         sa.Column("quantity", sa.Integer(), server_default="1", nullable=False),
         sa.Column("resource_id", sa.String(length=64), nullable=True),
