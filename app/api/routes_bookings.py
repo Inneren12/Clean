@@ -23,6 +23,7 @@ from app.domain.bookings import service as booking_service
 from app.domain.leads.db_models import Lead
 from app.domain.clients import service as client_service
 from app.domain.notifications import email_service
+from app.infra.metrics import metrics
 from app.infra import stripe as stripe_infra
 from app.settings import settings
 
@@ -397,6 +398,7 @@ async def stripe_webhook(http_request: Request, session: AsyncSession = Depends(
             webhook_secret=settings.stripe_webhook_secret,
         )
     except Exception as exc:  # noqa: BLE001
+        metrics.record_webhook("error")
         logger.warning("stripe_webhook_invalid", extra={"extra": {"reason": type(exc).__name__}})
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Stripe webhook") from exc
 
@@ -412,19 +414,27 @@ async def stripe_webhook(http_request: Request, session: AsyncSession = Depends(
     payment_intent_id = _safe_get(payload_object, "payment_intent") or _safe_get(payload_object, "id")
     payment_status = _safe_get(payload_object, "payment_status")
 
-    if event_type == "checkout.session.completed" and payment_status == "paid":
-        await booking_service.mark_deposit_paid(
-            session=session,
-            checkout_session_id=session_id,
-            payment_intent_id=payment_intent_id,
-            email_adapter=getattr(http_request.app.state, "email_adapter", None),
-        )
-    elif event_type in {"checkout.session.expired", "payment_intent.payment_failed"}:
-        await booking_service.mark_deposit_failed(
-            session=session,
-            checkout_session_id=session_id,
-            payment_intent_id=payment_intent_id,
-            failure_status="expired" if event_type == "checkout.session.expired" else "failed",
-        )
+    handled = False
+    try:
+        if event_type == "checkout.session.completed" and payment_status == "paid":
+            handled = True
+            await booking_service.mark_deposit_paid(
+                session=session,
+                checkout_session_id=session_id,
+                payment_intent_id=payment_intent_id,
+                email_adapter=getattr(http_request.app.state, "email_adapter", None),
+            )
+        elif event_type in {"checkout.session.expired", "payment_intent.payment_failed"}:
+            handled = True
+            await booking_service.mark_deposit_failed(
+                session=session,
+                checkout_session_id=session_id,
+                payment_intent_id=payment_intent_id,
+                failure_status="expired" if event_type == "checkout.session.expired" else "failed",
+            )
+    except Exception:  # noqa: BLE001
+        metrics.record_webhook("error")
+        raise
 
+    metrics.record_webhook("processed" if handled else "ignored")
     return {"received": True}

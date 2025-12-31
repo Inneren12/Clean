@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.infra.db import get_session_factory
 from app.infra.email import EmailAdapter, resolve_email_adapter
+from app.infra.metrics import configure_metrics, metrics
+from app.jobs.heartbeat import record_heartbeat
 from app.jobs import email_jobs
 from app.settings import settings
 
@@ -24,6 +26,16 @@ async def _run_job(
     async with session_factory() as session:
         result = await runner(session)
     logger.info("job_complete", extra={"extra": {"job": name, **result}})
+    _record_email_job_metrics(name, result)
+
+
+def _record_email_job_metrics(job: str, result: dict[str, int]) -> None:
+    sent_total = result.get("sent", 0) + result.get("overdue", 0)
+    skipped_total = result.get("skipped", 0)
+    if sent_total:
+        metrics.record_email_job(job, "sent", sent_total)
+    if skipped_total:
+        metrics.record_email_job(job, "skipped", skipped_total)
 
 
 def _job_runner(name: str, base_url: str | None = None) -> Callable:
@@ -46,6 +58,7 @@ async def main(argv: list[str] | None = None) -> None:
 
     global _ADAPTER
     _ADAPTER = resolve_email_adapter(settings)
+    configure_metrics(settings.metrics_enabled)
     session_factory = get_session_factory()
 
     job_names = args.jobs or ["booking-reminders", "invoice-reminders", "nps-send"]
@@ -56,7 +69,9 @@ async def main(argv: list[str] | None = None) -> None:
             try:
                 await _run_job(name, session_factory, runner)
             except Exception as exc:  # noqa: BLE001
+                metrics.record_email_job(name, "error")
                 logger.warning("job_failed", extra={"extra": {"job": name, "reason": type(exc).__name__}})
+        await record_heartbeat(session_factory, name="jobs-runner")
         if args.once:
             break
         await asyncio.sleep(max(args.interval, 1))

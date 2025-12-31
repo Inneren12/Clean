@@ -1,5 +1,6 @@
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from alembic.config import Config
@@ -8,6 +9,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
+
+from app.domain.ops.db_models import JobHeartbeat
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -125,15 +128,66 @@ async def _database_status(request: Request) -> dict[str, Any]:
     }
 
 
+async def _jobs_status(request: Request) -> dict[str, Any]:
+    app_settings = getattr(request.app.state, "app_settings", None)
+    heartbeat_required = bool(getattr(app_settings, "job_heartbeat_required", False)) if app_settings else False
+    if not heartbeat_required:
+        return {"ok": True, "enabled": False, "message": "job heartbeat check disabled"}
+
+    session_factory = getattr(request.app.state, "db_session_factory", None)
+    if session_factory is None:
+        return {
+            "ok": False,
+            "enabled": True,
+            "message": "database session factory unavailable",
+        }
+
+    ttl_seconds = int(getattr(app_settings, "job_heartbeat_ttl_seconds", 300)) if app_settings else 300
+    try:
+        async with session_factory() as session:
+            record = await session.get(JobHeartbeat, "jobs-runner")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("jobs_check_failed", exc_info=exc)
+        return {
+            "ok": False,
+            "enabled": True,
+            "message": "job heartbeat check failed",
+            "error": type(exc).__name__,
+        }
+
+    if record is None:
+        return {
+            "ok": False,
+            "enabled": True,
+            "message": "job heartbeat missing",
+            "threshold_seconds": ttl_seconds,
+        }
+
+    last_seen = record.last_heartbeat
+    if last_seen.tzinfo is None:
+        last_seen = last_seen.replace(tzinfo=timezone.utc)
+
+    age_seconds = (datetime.now(tz=timezone.utc) - last_seen).total_seconds()
+    return {
+        "ok": age_seconds <= ttl_seconds,
+        "enabled": True,
+        "last_heartbeat": last_seen.isoformat(),
+        "age_seconds": age_seconds,
+        "threshold_seconds": ttl_seconds,
+    }
+
+
 @router.get("/readyz")
 async def readyz(request: Request) -> JSONResponse:
     database = await _database_status(request)
+    jobs = await _jobs_status(request)
 
-    overall_ok = bool(database.get("ok")) and bool(database.get("migrations_current"))
+    overall_ok = bool(database.get("ok")) and bool(database.get("migrations_current")) and bool(jobs.get("ok"))
     status_code = 200 if overall_ok else 503
 
     payload = {
         "status": "ok" if overall_ok else "unhealthy",
         "database": database,
+        "jobs": jobs,
     }
     return JSONResponse(status_code=status_code, content=payload)

@@ -31,6 +31,7 @@ from app.domain.leads.db_models import Lead
 from app.domain.leads.service import grant_referral_credit
 from app.domain.invoices import statuses as invoice_statuses
 from app.domain.invoices.db_models import Payment
+from app.infra.metrics import metrics
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -931,6 +932,7 @@ async def create_booking(
         session.add(booking)
         await session.flush()
         await session.refresh(booking)
+        metrics.record_booking("created")
         return booking
 
     if manage_transaction:
@@ -977,6 +979,7 @@ async def cancel_booking(session: AsyncSession, booking: Booking) -> Booking:
     booking.status = "CANCELLED"
     await session.commit()
     await session.refresh(booking)
+    metrics.record_booking("cancelled")
     return booking
 
 

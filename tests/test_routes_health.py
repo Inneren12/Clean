@@ -3,7 +3,11 @@ import asyncio
 import pytest
 from sqlalchemy import text
 
+from datetime import datetime, timedelta, timezone
+
 from app.api import routes_health
+from app.domain.ops.db_models import JobHeartbeat
+from app.settings import settings
 
 
 async def _set_alembic_version(async_session_maker, version: str | None) -> None:
@@ -19,6 +23,16 @@ async def _set_alembic_version(async_session_maker, version: str | None) -> None
                 text("INSERT INTO alembic_version (version_num) VALUES (:version)"),
                 {"version": version},
             )
+        await session.commit()
+
+
+async def _set_job_heartbeat(async_session_maker, age_seconds: int = 0) -> None:
+    async with async_session_maker() as session:
+        heartbeat = JobHeartbeat(
+            name="jobs-runner",
+            last_heartbeat=datetime.now(timezone.utc) - timedelta(seconds=age_seconds),
+        )
+        await session.merge(heartbeat)
         await session.commit()
 
 
@@ -88,3 +102,29 @@ def test_readyz_alembic_unavailable(monkeypatch, client, async_session_maker):
     assert payload["expected_head"] is None
     assert payload["expected_heads"] == []
     assert payload["migrations_check"] == "skipped_no_alembic_files"
+
+
+def test_readyz_jobs_heartbeat_missing(monkeypatch, client, async_session_maker):
+    settings.job_heartbeat_required = True
+    monkeypatch.setattr(routes_health, "_load_expected_heads", lambda: ([], "skipped_no_alembic_files"))
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 503
+    jobs = response.json()["jobs"]
+    assert jobs["enabled"] is True
+    assert jobs["ok"] is False
+
+
+def test_readyz_jobs_heartbeat_recent(monkeypatch, client, async_session_maker):
+    settings.job_heartbeat_required = True
+    settings.job_heartbeat_ttl_seconds = 300
+    monkeypatch.setattr(routes_health, "_load_expected_heads", lambda: ([], "skipped_no_alembic_files"))
+    asyncio.run(_set_job_heartbeat(async_session_maker, age_seconds=30))
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 200
+    jobs = response.json()["jobs"]
+    assert jobs["enabled"] is True
+    assert jobs["ok"] is True

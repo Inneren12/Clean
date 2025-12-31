@@ -34,6 +34,7 @@ from app.domain.policy_overrides import db_models as policy_override_db_models  
 from app.domain.admin_audit import db_models as admin_audit_db_models  # noqa: F401
 from app.domain.documents import db_models as document_db_models  # noqa: F401
 from app.domain.saas import db_models as saas_db_models  # noqa: F401
+from app.domain.ops import db_models as ops_db_models  # noqa: F401
 from app.infra.bot_store import InMemoryBotStore
 from app.infra.db import Base, get_db_session
 from app.main import app
@@ -89,6 +90,8 @@ def restore_admin_settings():
     original_testing = getattr(settings, "testing", False)
     original_deposits = getattr(settings, "deposits_enabled", True)
     original_metrics = getattr(settings, "metrics_enabled", True)
+    original_job_heartbeat = getattr(settings, "job_heartbeat_required", False)
+    original_job_heartbeat_ttl = getattr(settings, "job_heartbeat_ttl_seconds", 300)
     yield
     settings.admin_basic_username = original_username
     settings.admin_basic_password = original_password
@@ -97,6 +100,8 @@ def restore_admin_settings():
     settings.testing = original_testing
     settings.deposits_enabled = original_deposits
     settings.metrics_enabled = original_metrics
+    settings.job_heartbeat_required = original_job_heartbeat
+    settings.job_heartbeat_ttl_seconds = original_job_heartbeat_ttl
 
 
 @pytest.fixture(autouse=True)
