@@ -7,6 +7,7 @@ import pytest
 
 from app.domain.bookings.db_models import Booking
 from app.domain.leads.db_models import Lead
+from app.main import app
 from app.settings import settings
 
 
@@ -57,8 +58,10 @@ async def _create_booking(async_session_maker, consent: bool = False) -> str:
 def upload_root(tmp_path) -> Path:
     original_root = settings.order_upload_root
     settings.order_upload_root = str(tmp_path)
+    app.state.storage_backend = None
     yield tmp_path
     settings.order_upload_root = original_root
+    app.state.storage_backend = None
 
 
 @pytest.fixture()
@@ -142,6 +145,12 @@ def test_upload_with_consent_and_download_auth(client, async_session_maker, uplo
     assert listing.status_code == 200
     assert len(listing.json()["photos"]) == 1
 
+    signed = client.get(
+        f"/v1/orders/{booking_id}/photos/{photo_id}/signed_url", headers=admin_headers
+    )
+    assert signed.status_code == 200
+    signed_url = signed.json()["url"]
+
     download_url = f"/v1/orders/{booking_id}/photos/{photo_id}/download"
     unauthorized = client.get(download_url)
     assert unauthorized.status_code == 401
@@ -150,7 +159,13 @@ def test_upload_with_consent_and_download_auth(client, async_session_maker, uplo
     assert download.status_code == 200
     assert download.content == b"hello-image"
 
-    stored_files = list(Path(upload_root / booking_id).glob("*"))
+    signed_fetch = client.get(signed_url)
+    assert signed_fetch.status_code == 200
+    assert signed_fetch.content == b"hello-image"
+
+    stored_files = list(
+        Path(upload_root / "orders" / str(settings.default_org_id) / booking_id).glob("*")
+    )
     assert stored_files, "uploaded file should be written to disk"
 
 

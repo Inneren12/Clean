@@ -113,6 +113,14 @@ class Settings(BaseSettings):
     order_photo_allowed_mimes_raw: str = Field(
         "image/jpeg,image/png,image/webp", env="ORDER_PHOTO_ALLOWED_MIMES"
     )
+    order_storage_backend: Literal["local", "s3", "memory"] = Field("local", env="ORDER_STORAGE_BACKEND")
+    order_photo_signed_url_ttl_seconds: int = Field(600, env="ORDER_PHOTO_SIGNED_URL_TTL")
+    order_photo_signing_secret: str | None = Field(None, env="ORDER_PHOTO_SIGNING_SECRET")
+    s3_endpoint: str | None = Field(None, env="S3_ENDPOINT")
+    s3_bucket: str | None = Field(None, env="S3_BUCKET")
+    s3_access_key: str | None = Field(None, env="S3_ACCESS_KEY")
+    s3_secret_key: str | None = Field(None, env="S3_SECRET_KEY")
+    s3_region: str | None = Field(None, env="S3_REGION")
     testing: bool = Field(False, env="TESTING")
     deposits_enabled: bool = Field(True, env="DEPOSITS_ENABLED")
     metrics_enabled: bool = Field(True, env="METRICS_ENABLED")

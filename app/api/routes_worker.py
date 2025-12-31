@@ -1,5 +1,6 @@
 import html
 import logging
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from math import ceil
@@ -12,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api import entitlements
 from app.api.worker_auth import (
     SESSION_COOKIE_NAME,
     WorkerIdentity,
@@ -43,6 +45,7 @@ from app.domain.reason_logs import schemas as reason_schemas
 from app.domain.reason_logs import service as reason_service
 from app.domain.time_tracking import schemas as time_schemas
 from app.domain.time_tracking import service as time_service
+from app.infra.storage import resolve_storage_backend
 from app.infra.csrf import get_csrf_token, issue_csrf_token, render_csrf_input, require_csrf
 from app.infra.i18n import render_lang_toggle, resolve_lang, tr
 from app.settings import settings
@@ -50,6 +53,20 @@ from pydantic import BaseModel
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+async def _signed_url_for_photo(photo, request: Request, storage):
+    org_id = entitlements.resolve_org_id(request)
+    key = photos_service.storage_key_for_photo(photo, org_id)
+    ttl = settings.order_photo_signed_url_ttl_seconds
+    download_url = str(
+        request.url_for("signed_download_order_photo", order_id=photo.order_id, photo_id=photo.photo_id)
+    )
+    signed_url = await storage.generate_signed_get_url(
+        key=key, expires_in=ttl, resource_url=download_url
+    )
+    expires_at = datetime.fromtimestamp(int(time.time()) + ttl, tz=timezone.utc)
+    return booking_schemas.SignedUrlResponse(url=signed_url, expires_at=expires_at)
 
 
 class WorkerDisputeRequest(BaseModel):
@@ -1164,6 +1181,7 @@ async def worker_upload_photo(
     phase: str = Form(...),
     consent: bool = Form(False),
     file: UploadFile = File(...),
+    request: Request = None,
     identity: WorkerIdentity = Depends(require_worker),
     session: AsyncSession = Depends(get_db_session),
 ) -> booking_schemas.OrderPhotoResponse:
@@ -1177,12 +1195,16 @@ async def worker_upload_photo(
         parsed_phase = booking_schemas.PhotoPhase.from_any_case(phase)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    storage = resolve_storage_backend(request.app.state)
+    org_id = entitlements.resolve_org_id(request)
     photo = await photos_service.save_photo(
         session,
         booking,
         file,
         parsed_phase,
         identity.username,
+        org_id,
+        storage,
     )
     await _audit(
         session,
@@ -1239,6 +1261,25 @@ async def worker_list_photos(
     )
 
 
+@router.get(
+    "/worker/jobs/{job_id}/photos/{photo_id}/signed_url",
+    response_model=booking_schemas.SignedUrlResponse,
+)
+async def worker_signed_photo_url(
+    job_id: str,
+    photo_id: str,
+    request: Request,
+    identity: WorkerIdentity = Depends(require_worker),
+    session: AsyncSession = Depends(get_db_session),
+) -> booking_schemas.SignedUrlResponse:
+    booking = await _load_worker_booking(session, job_id, identity)
+    photo = await photos_service.get_photo(session, job_id, photo_id)
+    if photo.order_id != booking.booking_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
+    storage = resolve_storage_backend(request.app.state)
+    return await _signed_url_for_photo(photo, request, storage)
+
+
 @router.delete(
     "/worker/jobs/{job_id}/photos/{photo_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -1246,6 +1287,7 @@ async def worker_list_photos(
 async def worker_delete_photo(
     job_id: str,
     photo_id: str,
+    request: Request,
     identity: WorkerIdentity = Depends(require_worker),
     session: AsyncSession = Depends(get_db_session),
 ):
@@ -1255,7 +1297,11 @@ async def worker_delete_photo(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
     if photo.uploaded_by != identity.username:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot delete another worker's upload")
-    await photos_service.delete_photo(session, booking.booking_id, photo.photo_id)
+    storage = resolve_storage_backend(request.app.state)
+    org_id = entitlements.resolve_org_id(request)
+    await photos_service.delete_photo(
+        session, booking.booking_id, photo.photo_id, storage=storage, org_id=org_id
+    )
     await _audit(
         session,
         identity,

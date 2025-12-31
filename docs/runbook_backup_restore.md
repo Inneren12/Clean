@@ -46,18 +46,12 @@ Validation checklist after restore:
 
 ## Uploads backup (order photos/PDFs)
 
-Uploads live under `ORDER_UPLOAD_ROOT` (default `var/uploads/orders`). Production should mount this directory on durable, encrypted storage (e.g., block storage or an S3-compatible bucket via object-storage mount).
+Uploads now live in object storage when `ORDER_STORAGE_BACKEND=s3` (default is local filesystem for development). Production environments should use an S3-compatible bucket with **versioning enabled** so that uploads are protected automatically without relying on host-level rsync jobs.
 
 Strategy:
 
-- Nightly sync to object storage with versioning enabled.
-- Exclude transient temp files; include original photos and generated PDFs.
-- Retain at least 30 days of versions; use lifecycle rules to expire older copies.
+- Enable bucket versioning and server-side encryption on the uploads bucket.
+- Apply lifecycle rules: keep 30 days of non-current versions, expire delete markers after 30 days, and transition older versions to infrequent-access/Glacier tiers as appropriate.
+- For environments still using `ORDER_STORAGE_BACKEND=local` (development only), run ad-hoc copies to a versioned bucket for recovery.
 
-Example `rsync` from the app host to a mounted backup volume:
-
-```bash
-rsync -av --delete /srv/clean/var/uploads/orders /mnt/backup/clean/uploads
-```
-
-Restore by syncing the desired snapshot back to the application mount, then invalidate any CDN cache that serves uploaded files.
+Restore by copying the desired object version back into the bucket (or by promoting a previous version). After restore, invalidate any CDN cache that serves uploaded files.
