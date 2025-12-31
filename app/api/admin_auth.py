@@ -220,6 +220,10 @@ class AdminAccessMiddleware(BaseHTTPMiddleware):
         if cached:
             return await call_next(request)
 
+        saas_identity = getattr(request.state, "saas_identity", None)
+        if saas_identity:
+            return await call_next(request)
+
         if not settings.legacy_basic_auth_enabled:
             return await http_exception_handler(request, _build_auth_exception())
 

@@ -1,14 +1,14 @@
 import uuid
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.saas_auth import require_permissions
 from app.api.admin_auth import AdminPermission
+from app.api.saas_auth import require_permissions
 from app.domain.saas import service as saas_service
-from app.domain.saas.db_models import MembershipRole, Membership
+from app.domain.saas.db_models import Membership, MembershipRole
 from app.infra.db import get_db_session
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
@@ -53,11 +53,9 @@ class MemberListResponse(BaseModel):
 async def list_members(
     org_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    request: Request = None,
-    _identity=Depends(require_permissions(AdminPermission.ADMIN)),
+    identity=Depends(require_permissions(AdminPermission.ADMIN)),
 ) -> MemberListResponse:
-    current_org = getattr(request.state, "current_org_id", None) if request else None
-    if current_org and current_org != org_id:
+    if identity.org_id != org_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
     result = await session.execute(
         sa.select(Membership).where(Membership.org_id == org_id, Membership.is_active.is_(True))

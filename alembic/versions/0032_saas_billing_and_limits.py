@@ -12,12 +12,14 @@ down_revision = "0031_saas_multitenant_auth"
 branch_labels = None
 depends_on = None
 
+UUID_TYPE = sa.Uuid(as_uuid=True)
+
 
 def upgrade() -> None:
     op.create_table(
         "organization_billing",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("org_id", sa.String(length=36), sa.ForeignKey("organizations.org_id", ondelete="CASCADE")),
+        sa.Column("org_id", UUID_TYPE, sa.ForeignKey("organizations.org_id", ondelete="CASCADE")),
         sa.Column("stripe_customer_id", sa.String(length=255), nullable=True),
         sa.Column("stripe_subscription_id", sa.String(length=255), nullable=True),
         sa.Column("plan_id", sa.String(length=64), nullable=False),
@@ -30,7 +32,7 @@ def upgrade() -> None:
     op.create_table(
         "organization_usage_events",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("org_id", sa.String(length=36), sa.ForeignKey("organizations.org_id", ondelete="CASCADE")),
+        sa.Column("org_id", UUID_TYPE, sa.ForeignKey("organizations.org_id", ondelete="CASCADE")),
         sa.Column("metric", sa.String(length=64), nullable=False),
         sa.Column("quantity", sa.Integer(), server_default="1", nullable=False),
         sa.Column("resource_id", sa.String(length=64), nullable=True),

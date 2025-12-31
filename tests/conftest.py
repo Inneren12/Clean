@@ -92,6 +92,8 @@ def restore_admin_settings():
     original_metrics = getattr(settings, "metrics_enabled", True)
     original_job_heartbeat = getattr(settings, "job_heartbeat_required", False)
     original_job_heartbeat_ttl = getattr(settings, "job_heartbeat_ttl_seconds", 300)
+    original_legacy_basic_auth_enabled = getattr(settings, "legacy_basic_auth_enabled", True)
+    original_auth_secret_key = getattr(settings, "auth_secret_key", "")
     yield
     settings.admin_basic_username = original_username
     settings.admin_basic_password = original_password
@@ -102,6 +104,8 @@ def restore_admin_settings():
     settings.metrics_enabled = original_metrics
     settings.job_heartbeat_required = original_job_heartbeat
     settings.job_heartbeat_ttl_seconds = original_job_heartbeat_ttl
+    settings.legacy_basic_auth_enabled = original_legacy_basic_auth_enabled
+    settings.auth_secret_key = original_auth_secret_key
 
 
 @pytest.fixture(autouse=True)
