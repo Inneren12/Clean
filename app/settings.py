@@ -1,4 +1,5 @@
 import json
+import uuid
 from typing import Literal
 
 from pydantic import Field, field_validator
@@ -89,6 +90,18 @@ class Settings(BaseSettings):
         "http://localhost:3000/invoice-cancelled",
         env="STRIPE_INVOICE_CANCEL_URL",
     )
+    stripe_billing_success_url: str = Field(
+        "http://localhost:3000/billing/success?session_id={CHECKOUT_SESSION_ID}",
+        env="STRIPE_BILLING_SUCCESS_URL",
+    )
+    stripe_billing_cancel_url: str = Field(
+        "http://localhost:3000/billing/cancelled",
+        env="STRIPE_BILLING_CANCEL_URL",
+    )
+    stripe_billing_portal_return_url: str = Field(
+        "http://localhost:3000/billing",
+        env="STRIPE_BILLING_PORTAL_RETURN_URL",
+    )
     client_portal_secret: str = Field("dev-client-portal-secret", env="CLIENT_PORTAL_SECRET")
     worker_portal_secret: str | None = Field(None, env="WORKER_PORTAL_SECRET")
     client_portal_token_ttl_minutes: int = Field(30, env="CLIENT_PORTAL_TOKEN_TTL_MINUTES")
@@ -103,6 +116,9 @@ class Settings(BaseSettings):
     testing: bool = Field(False, env="TESTING")
     deposits_enabled: bool = Field(True, env="DEPOSITS_ENABLED")
     metrics_enabled: bool = Field(True, env="METRICS_ENABLED")
+    default_org_id: uuid.UUID = Field(
+        uuid.UUID("00000000-0000-0000-0000-000000000001"), env="DEFAULT_ORG_ID"
+    )
 
     model_config = SettingsConfigDict(env_file=".env", enable_decoding=False)
 

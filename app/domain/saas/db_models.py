@@ -86,3 +86,35 @@ class ApiToken(Base):
     )
 
     organization: Mapped[Organization] = relationship("Organization", back_populates="api_tokens")
+
+
+class OrganizationBilling(Base):
+    __tablename__ = "organization_billing"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(Uuid, sa.ForeignKey("organizations.org_id", ondelete="CASCADE"))
+    stripe_customer_id: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+    plan_id: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    status: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="inactive", server_default="inactive")
+    current_period_end: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+
+    organization: Mapped[Organization] = relationship("Organization")
+
+
+class OrganizationUsageEvent(Base):
+    __tablename__ = "organization_usage_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(Uuid, sa.ForeignKey("organizations.org_id", ondelete="CASCADE"))
+    metric: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    quantity: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=1, server_default="1")
+    resource_id: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+
+    organization: Mapped[Organization] = relationship("Organization")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -15,6 +16,8 @@ from app.domain.bookings import service as booking_service
 from app.domain.bookings.db_models import Booking
 from app.domain.invoices import schemas as invoice_schemas, service as invoice_service, statuses as invoice_statuses
 from app.domain.invoices.db_models import Invoice, StripeEvent
+from app.domain.saas import billing_service
+from app.domain.saas.plans import get_plan
 from app.infra import stripe_client as stripe_infra
 from app.infra.db import get_db_session
 from app.settings import settings
@@ -244,7 +247,61 @@ async def _handle_deposit_event(session: AsyncSession, event: Any, email_adapter
     return True
 
 
+async def _handle_subscription_event(session: AsyncSession, event: Any) -> bool:
+    event_type = _safe_get(event, "type", "") or ""
+    data = _safe_get(event, "data", {}) or {}
+    payload_object = _safe_get(data, "object", {}) or {}
+    metadata = _safe_get(payload_object, "metadata", {}) or {}
+
+    if str(event_type).startswith("customer.subscription"):
+        billing = await billing_service.update_from_subscription_payload(session, event)
+        return billing is not None
+
+    mode = _safe_get(payload_object, "mode")
+    if mode != "subscription":
+        return False
+
+    org_id_raw = metadata.get("org_id") if isinstance(metadata, dict) else None
+    plan_id = metadata.get("plan_id") if isinstance(metadata, dict) else None
+    subscription_id = _safe_get(payload_object, "subscription") or _safe_get(payload_object, "id")
+    customer_id = _safe_get(payload_object, "customer")
+    period_end_ts = _safe_get(payload_object, "current_period_end")
+    status = _safe_get(payload_object, "status") or "active"
+
+    if not org_id_raw:
+        logger.info(
+            "stripe_subscription_event_ignored",
+            extra={"extra": {"reason": "missing_org", "event_type": event_type}},
+        )
+        return False
+
+    try:
+        org_id = uuid.UUID(str(org_id_raw))
+    except Exception:  # noqa: BLE001
+        logger.info(
+            "stripe_subscription_event_ignored",
+            extra={"extra": {"reason": "invalid_org", "event_type": event_type}},
+        )
+        return False
+
+    current_period_end = None
+    if period_end_ts:
+        current_period_end = datetime.fromtimestamp(int(period_end_ts), tz=timezone.utc)
+
+    await billing_service.set_plan(
+        session,
+        org_id,
+        plan_id=get_plan(plan_id).plan_id,
+        status=status,
+        stripe_customer_id=customer_id if customer_id else None,
+        stripe_subscription_id=str(subscription_id) if subscription_id else None,
+        current_period_end=current_period_end,
+    )
+    return True
+
+
 async def _handle_webhook_event(session: AsyncSession, event: Any, email_adapter: Any) -> bool:
+    event_type = _safe_get(event, "type")
     data = _safe_get(event, "data", {}) or {}
     payload_object = _safe_get(data, "object", {}) or {}
     metadata = _safe_get(payload_object, "metadata", {}) or {}
@@ -252,6 +309,12 @@ async def _handle_webhook_event(session: AsyncSession, event: Any, email_adapter
         return await _handle_invoice_event(session, event)
     if isinstance(metadata, dict) and metadata.get("booking_id"):
         return await _handle_deposit_event(session, event, email_adapter)
+    if (
+        str(event_type or "").startswith("customer.subscription")
+        or _safe_get(payload_object, "mode") == "subscription"
+        or _safe_get(payload_object, "object") == "subscription"
+    ):
+        return await _handle_subscription_event(session, event)
     logger.info(
         "stripe_webhook_ignored",
         extra={"extra": {"reason": "missing_metadata", "event_type": _safe_get(event, "type")}},

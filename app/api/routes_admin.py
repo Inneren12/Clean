@@ -16,6 +16,7 @@ from sqlalchemy import func, select, or_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api import entitlements
 from app.api.admin_auth import (
     AdminIdentity,
     AdminPermission,
@@ -62,6 +63,7 @@ from app.domain.nps import schemas as nps_schemas, service as nps_service
 from app.domain.pricing.config_loader import load_pricing_config
 from app.domain.reason_logs import schemas as reason_schemas
 from app.domain.reason_logs import service as reason_service
+from app.domain.saas import billing_service
 from app.domain.retention import cleanup_retention
 from app.domain.subscriptions import schemas as subscription_schemas
 from app.domain.subscriptions import service as subscription_service
@@ -2857,6 +2859,7 @@ async def admin_workers_create(
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ) -> Response:
+    await entitlements.require_worker_entitlement(request, session=session)
     await require_csrf(request)
     form = await request.form()
     name = (form.get("name") or "").strip()
@@ -2888,6 +2891,14 @@ async def admin_workers_create(
         is_active=is_active,
     )
     session.add(worker)
+    await session.flush()
+    await billing_service.record_usage_event(
+        session,
+        entitlements.resolve_org_id(request),
+        metric="worker_created",
+        quantity=1,
+        resource_id=str(worker.worker_id),
+    )
     await audit_service.record_action(
         session,
         identity=identity,
