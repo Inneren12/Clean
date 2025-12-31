@@ -32,12 +32,19 @@
 ### Роли и права
 | Роль | Что видит/делает |
 | --- | --- |
-| Worker | Dashboard, My Jobs, Job details с time tracking, checklist, фото, add-ons, dispute/report issue. |
-| Dispatcher | Admin API, подтверждение/завершение бронирований, управление time tracking/checklist. |
-| Accountant/Finance | Admin UI Invoices (листинг, детализация, ручные платежи), отчёты invoice/payments. |
-| Admin/Owner | Все права: observability, invoices, add-ons каталог, отчёты, поддержка. |
-| Viewer | Просмотр административных экранов (observability, списки), без действий. |
+| Owner | Полный контроль: создание/удаление пользователей, выдача/отзыв приглашений, выбор ролей, все административные действия. |
+| Admin | Все операции админки и биллинга, может приглашать других (кроме владельца), управляет ролями. |
+| Dispatcher | Admin UI/observability + диспетчеризация: подтверждение/завершение бронирований, time tracking/checklist. |
+| Finance | Admin UI Invoices (листинг, детализация, ручные платежи), отчёты invoice/payments. |
+| Viewer | Только просмотр административных экранов (observability, списки). |
+| Worker | Worker Portal: Dashboard, My Jobs, Job details с time tracking, checklist, фото, add-ons, dispute/report issue. |
 | Client | Мини-кабинет: список заказов, детали заказа, счёт, подписки, повтор заказа, отзыв. |
+
+**SaaS модель и приглашения:**
+- Владельцы и администраторы могут создавать приглашения из **Admin UI → Organization → Invites**. Приглашение содержит email, роль и токен, который истекает автоматически; повторная отправка идемпотентна.
+- При переходе по ссылке вида `/accept-invite?token=…` пользователь создаёт учётную запись или привязывает существующую и получает membership в выбранной роли. Действие фиксируется в аудит-логе.
+- Список активных участников и их ролей доступен на странице **Admin UI → Organization → Users**. Роли можно менять без перезапуска сервиса; все операции пишутся в журнал аудита.
+- Работники теперь входят через обычную SaaS-аутентификацию (session cookie), а не через глобальный `WORKER_BASIC_*`. Старый basic режим можно оставить включённым флагом обратной совместимости.
 
 ### Вход в Worker Portal
 1. **Basic Auth**: `POST /worker/login` — передаёт Basic в заголовке и ставит cookie `worker_session`.
