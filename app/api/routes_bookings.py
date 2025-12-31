@@ -8,6 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.admin_auth import require_admin
+from app.api import entitlements
+from app.domain.saas import billing_service
 from app.domain.analytics.service import (
     EventType,
     estimated_duration_from_booking,
@@ -179,6 +181,8 @@ async def create_booking(
     session: AsyncSession = Depends(get_db_session),
 ) -> booking_schemas.BookingResponse:
     start = request.normalized_start()
+    org_id = entitlements.resolve_org_id(http_request)
+    await entitlements.require_booking_entitlement(http_request, session=session)
     lead: Lead | None = None
     if request.lead_id:
         lead = await session.get(Lead, request.lead_id)
@@ -330,6 +334,13 @@ async def create_booking(
                 extra={"extra": {"booking_id": booking.booking_id, "lead_id": booking.lead_id}},
             )
 
+    await billing_service.record_usage_event(
+        session,
+        org_id,
+        metric="booking_created",
+        quantity=1,
+        resource_id=booking.booking_id,
+    )
     await session.commit()
 
     return booking_schemas.BookingResponse(

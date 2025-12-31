@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api import entitlements
 from app.api.admin_auth import (
     AdminIdentity,
     AdminPermission,
@@ -19,6 +20,7 @@ from app.domain.bookings import photos_service
 from app.domain.bookings import schemas as booking_schemas
 from app.domain.reason_logs import schemas as reason_schemas
 from app.domain.reason_logs import service as reason_service
+from app.domain.saas import billing_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -149,11 +151,17 @@ async def upload_order_photo(
     phase: str = Form(...),
     admin_override: bool = Form(False),
     file: UploadFile = File(...),
+    request: Request = None,
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ) -> booking_schemas.OrderPhotoResponse:
     order = await photos_service.fetch_order(session, order_id)
     parsed_phase = booking_schemas.PhotoPhase.from_any_case(phase)
+
+    contents = await file.read()
+    size_bytes = len(contents or b"")
+    await entitlements.enforce_storage_entitlement(request, size_bytes, session=session)
+    await file.seek(0)
 
     if admin_override:
         has_admin_permission = AdminPermission.ADMIN in ROLE_PERMISSIONS.get(identity.role, set())
@@ -174,6 +182,14 @@ async def upload_order_photo(
 
     uploaded_by = identity.role.value or identity.username
     photo = await photos_service.save_photo(session, order, file, parsed_phase, uploaded_by)
+    await billing_service.record_usage_event(
+        session,
+        entitlements.resolve_org_id(request),
+        metric="storage_bytes",
+        quantity=photo.size_bytes,
+        resource_id=photo.photo_id,
+    )
+    await session.commit()
     return booking_schemas.OrderPhotoResponse(
         photo_id=photo.photo_id,
         order_id=photo.order_id,

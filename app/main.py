@@ -30,6 +30,7 @@ from app.api.routes_auth import router as auth_router
 from app.api.worker_auth import WorkerAccessMiddleware
 from app.api.routes_public import router as public_router
 from app.api.routes_leads import router as leads_router
+from app.api.routes_billing import router as billing_router
 from app.api.saas_auth import TenantSessionMiddleware
 from app.domain.errors import DomainError
 from app.infra.db import get_session_factory
@@ -275,6 +276,7 @@ def create_app(app_settings) -> FastAPI:
     app.include_router(chat_router)
     app.include_router(client_router)
     app.include_router(payments_router)
+    app.include_router(billing_router)
     app.include_router(orders_router)
     app.include_router(checklists_router)
     app.include_router(time_tracking_router)
