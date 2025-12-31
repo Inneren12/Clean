@@ -21,6 +21,7 @@ class AdminRole(str, Enum):
     ADMIN = "admin"
     DISPATCHER = "dispatcher"
     ACCOUNTANT = "accountant"
+    FINANCE = "finance"
     VIEWER = "viewer"
 
 
@@ -36,6 +37,7 @@ ROLE_PERMISSIONS: dict[AdminRole, set[AdminPermission]] = {
     AdminRole.ADMIN: {AdminPermission.VIEW, AdminPermission.DISPATCH, AdminPermission.FINANCE, AdminPermission.ADMIN},
     AdminRole.DISPATCHER: {AdminPermission.VIEW, AdminPermission.DISPATCH},
     AdminRole.ACCOUNTANT: {AdminPermission.VIEW, AdminPermission.FINANCE},
+    AdminRole.FINANCE: {AdminPermission.VIEW, AdminPermission.FINANCE},
     AdminRole.VIEWER: {AdminPermission.VIEW},
 }
 
@@ -213,6 +215,13 @@ class AdminAccessMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):  # type: ignore[override]
         if not request.url.path.startswith("/v1/admin"):
             return await call_next(request)
+
+        cached: AdminIdentity | None = getattr(request.state, "admin_identity", None)
+        if cached:
+            return await call_next(request)
+
+        if not settings.legacy_basic_auth_enabled:
+            return await http_exception_handler(request, _build_auth_exception())
 
         try:
             credentials = _credentials_from_header(request)

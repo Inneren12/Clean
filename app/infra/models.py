@@ -9,4 +9,5 @@ from app.domain.bookings import db_models as booking_db_models  # noqa: F401
 from app.domain.subscriptions import db_models as subscription_db_models  # noqa: F401
 from app.domain.workers import db_models as worker_db_models  # noqa: F401
 from app.domain.invoices import db_models as invoice_db_models  # noqa: F401
+from app.domain.saas import db_models as saas_db_models  # noqa: F401
 

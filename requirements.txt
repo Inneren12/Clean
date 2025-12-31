@@ -13,3 +13,4 @@ email-validator==2.2.0
 stripe==11.2.0
 redis==5.0.8
 fakeredis==2.23.2
+PyJWT==2.10.1
