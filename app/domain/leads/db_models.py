@@ -7,12 +7,14 @@ from datetime import datetime
 
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
 from app.domain.leads.statuses import default_lead_status
+from app.domain.saas.db_models import UUID_TYPE
 from app.infra.db import Base
+from app.settings import settings
 
 
 CHARSET = string.ascii_uppercase + string.digits
@@ -44,6 +46,12 @@ class Lead(Base):
         String(36),
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("organizations.org_id", ondelete="CASCADE"),
+        nullable=False,
+        default=lambda: settings.default_org_id,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     phone: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -95,6 +103,12 @@ class Lead(Base):
         back_populates="referred",
         foreign_keys="ReferralCredit.referred_lead_id",
         uselist=False,
+    )
+
+    __table_args__ = (
+        Index("ix_leads_org_id", "org_id"),
+        Index("ix_leads_org_status", "org_id", "status"),
+        Index("ix_leads_org_created_at", "org_id", "created_at"),
     )
 
     def __init__(self, **kwargs: object) -> None:

@@ -1,10 +1,13 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
+import uuid
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.domain.saas.db_models import UUID_TYPE
 from app.infra.db import Base
+from app.settings import settings
 
 if TYPE_CHECKING:  # pragma: no cover
     from app.domain.bookings.db_models import Booking, Team
@@ -14,6 +17,12 @@ class Worker(Base):
     __tablename__ = "workers"
 
     worker_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("organizations.org_id", ondelete="CASCADE"),
+        nullable=False,
+        default=lambda: settings.default_org_id,
+    )
     team_id: Mapped[int] = mapped_column(ForeignKey("teams.team_id"), nullable=False)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     phone: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -36,4 +45,9 @@ class Worker(Base):
     team: Mapped["Team"] = relationship("Team")
     bookings: Mapped[list["Booking"]] = relationship(
         "Booking", back_populates="assigned_worker"
+    )
+
+    __table_args__ = (
+        Index("ix_workers_org_id", "org_id"),
+        Index("ix_workers_org_active", "org_id", "is_active"),
     )

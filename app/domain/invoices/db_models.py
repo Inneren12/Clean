@@ -17,7 +17,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.domain.saas.db_models import UUID_TYPE
 from app.infra.db import Base
+from app.settings import settings
 
 
 class InvoiceNumberSequence(Base):
@@ -42,6 +44,12 @@ class Invoice(Base):
         String(36),
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("organizations.org_id", ondelete="CASCADE"),
+        nullable=False,
+        default=lambda: settings.default_org_id,
     )
     invoice_number: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
     order_id: Mapped[str | None] = mapped_column(ForeignKey("bookings.booking_id"), index=True)
@@ -84,6 +92,12 @@ class Invoice(Base):
         uselist=False,
     )
 
+    __table_args__ = (
+        Index("ix_invoices_org_id", "org_id"),
+        Index("ix_invoices_org_status", "org_id", "status"),
+        Index("ix_invoices_org_created_at", "org_id", "created_at"),
+    )
+
 
 class InvoiceItem(Base):
     __tablename__ = "invoice_items"
@@ -123,6 +137,12 @@ class Payment(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     reference: Mapped[str | None] = mapped_column(String(255))
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("organizations.org_id", ondelete="CASCADE"),
+        nullable=False,
+        default=lambda: settings.default_org_id,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -132,6 +152,8 @@ class Payment(Base):
     invoice: Mapped[Invoice | None] = relationship("Invoice", back_populates="payments")
 
     __table_args__ = (
+        Index("ix_invoice_payments_org_id", "org_id"),
+        Index("ix_invoice_payments_org_status", "org_id", "status"),
         Index("ix_invoice_payments_invoice_status", "invoice_id", "status"),
         Index("ix_invoice_payments_provider_ref", "provider_ref"),
         Index("ix_invoice_payments_checkout_session", "checkout_session_id"),

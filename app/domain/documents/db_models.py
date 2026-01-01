@@ -7,7 +7,9 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, LargeBinar
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
+from app.domain.saas.db_models import UUID_TYPE
 from app.infra.db import Base
+from app.settings import settings
 
 
 class DocumentTemplate(Base):
@@ -33,6 +35,12 @@ class Document(Base):
     document_id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
     )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("organizations.org_id", ondelete="CASCADE"),
+        nullable=False,
+        default=lambda: settings.default_org_id,
+    )
     document_type: Mapped[str] = mapped_column(String(64), nullable=False)
     reference_id: Mapped[str] = mapped_column(String(64), nullable=False)
     template_id: Mapped[int] = mapped_column(ForeignKey("document_templates.template_id"), nullable=False)
@@ -46,6 +54,8 @@ class Document(Base):
     template: Mapped[DocumentTemplate] = relationship("DocumentTemplate", back_populates="documents")
 
     __table_args__ = (
+        Index("ix_documents_org_id", "org_id"),
+        Index("ix_documents_org_type", "org_id", "document_type"),
         UniqueConstraint("document_type", "reference_id", name="uq_document_reference"),
         Index("ix_documents_reference_type", "reference_id", "document_type"),
     )

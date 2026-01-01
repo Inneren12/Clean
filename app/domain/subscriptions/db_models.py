@@ -3,10 +3,12 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.domain.saas.db_models import UUID_TYPE
 from app.infra.db import Base
+from app.settings import settings
 
 
 class Subscription(Base):
@@ -14,6 +16,12 @@ class Subscription(Base):
 
     subscription_id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("organizations.org_id", ondelete="CASCADE"),
+        nullable=False,
+        default=lambda: settings.default_org_id,
     )
     client_id: Mapped[str] = mapped_column(ForeignKey("client_users.client_id"), index=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -33,6 +41,12 @@ class Subscription(Base):
         "SubscriptionAddon", back_populates="subscription", cascade="all, delete-orphan"
     )
     orders = relationship("Booking", back_populates="subscription")
+
+    __table_args__ = (
+        Index("ix_subscriptions_org_id", "org_id"),
+        Index("ix_subscriptions_org_status", "org_id", "status"),
+        Index("ix_subscriptions_org_created_at", "org_id", "created_at"),
+    )
 
 
 class SubscriptionAddon(Base):
