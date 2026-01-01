@@ -22,6 +22,19 @@ def resolve_org_id(request: Request) -> uuid.UUID:
     org_id = getattr(request.state, "current_org_id", None)
     if org_id is not None:
         return uuid.UUID(str(org_id))
+
+    if settings.testing:
+        header_value = request.headers.get("X-Test-Org")
+        if header_value:
+            try:
+                org_uuid = uuid.UUID(header_value)
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid X-Test-Org header",
+                ) from exc
+            request.state.current_org_id = org_uuid
+            return org_uuid
     return settings.default_org_id
 
 

@@ -85,3 +85,24 @@ def client(async_session_maker):
         yield test_client
     app.dependency_overrides.clear()
     app.state.db_session_factory = original_factory
+
+
+@pytest.fixture(autouse=True)
+def _smoke_org_header_support():
+    from app.main import app
+
+    if not getattr(app.state, "smoke_org_header_middleware_added", False):
+
+        @app.middleware("http")
+        async def _inject_test_org(request, call_next):  # type: ignore[override]
+            header_value = request.headers.get("X-Test-Org")
+            if header_value:
+                try:
+                    request.state.current_org_id = uuid.UUID(header_value)
+                except Exception:  # noqa: BLE001
+                    pass
+            return await call_next(request)
+
+        app.state.smoke_org_header_middleware_added = True
+
+    yield
