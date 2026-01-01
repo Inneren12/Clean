@@ -353,6 +353,8 @@ async def download_order_photo(
     key = photos_service.storage_key_for_photo(photo, org_id)
     ttl = settings.order_photo_signed_url_ttl_seconds
 
+    signature = request.query_params.get("sig")
+    expires_raw = request.query_params.get("exp")
     has_valid_token = storage.validate_signed_get_url(key=key, url=str(request.url))
 
     if settings.app_env != "dev" and not has_valid_token:

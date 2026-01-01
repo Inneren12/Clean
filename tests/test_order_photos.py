@@ -1,8 +1,12 @@
 import asyncio
 import base64
+import hashlib
+import hmac
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlparse
 
 import jwt
 import pytest
@@ -249,6 +253,35 @@ def test_signed_download_rejects_expired_token(client, async_session_maker, uplo
     )
 
     assert response.status_code == 401
+
+
+def test_local_signed_url_validation_roundtrip(tmp_path):
+    backend = LocalStorageBackend(root=tmp_path, signing_secret="secret")
+    key = "orders/123/photo.jpg"
+    base_resource = "http://example.test/orders/123/photos/abc/download"
+
+    signed_url = asyncio.run(
+        backend.generate_signed_get_url(key=key, expires_in=60, resource_url=base_resource)
+    )
+
+    assert backend.validate_signed_get_url(key=key, url=signed_url)
+
+    parsed = urlparse(signed_url)
+    params = dict(parse_qsl(parsed.query))
+    params["sig"] = "0" * len(params["sig"])
+    tampered_url = parsed._replace(query=urlencode(params)).geturl()
+
+    assert not backend.validate_signed_get_url(key=key, url=tampered_url)
+
+    expired_at = int(time.time()) - 5
+    expired_sig = hmac.new(
+        backend.signing_secret.encode(), f"{key}:{expired_at}".encode(), hashlib.sha256
+    ).hexdigest()
+    params["exp"] = str(expired_at)
+    params["sig"] = expired_sig
+    expired_url = parsed._replace(query=urlencode(params)).geturl()
+
+    assert not backend.validate_signed_get_url(key=key, url=expired_url)
 
 
 def test_admin_override_uploads_without_consent(client, async_session_maker, upload_root, admin_headers):
