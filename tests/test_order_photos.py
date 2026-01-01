@@ -11,6 +11,9 @@ import sqlalchemy as sa
 from app.api.photo_tokens import build_photo_download_token
 from app.domain.saas import billing_service, service as saas_service
 from app.domain.saas.db_models import OrganizationUsageEvent
+from app.domain.bookings.db_models import OrderPhotoTombstone
+from app.infra.storage.backends import LocalStorageBackend
+from app.jobs import storage_janitor
 
 from app.domain.bookings.db_models import Booking
 from app.domain.leads.db_models import Lead
@@ -364,3 +367,53 @@ def test_storage_usage_decrements_for_saas(client, async_session_maker, upload_r
             return int(total or 0)
 
     assert asyncio.run(_storage_total()) == 0
+
+
+def test_delete_failure_creates_tombstone_and_janitor_cleans(client, async_session_maker, upload_root, admin_headers):
+    class FailingDeleteStorage(LocalStorageBackend):
+        def __init__(self, root: Path):
+            super().__init__(root)
+            self.fail_once = True
+
+        async def delete(self, *, key: str) -> None:  # type: ignore[override]
+            if self.fail_once:
+                self.fail_once = False
+                raise RuntimeError("boom")
+            await super().delete(key=key)
+
+    storage = FailingDeleteStorage(upload_root)
+    app.state.storage_backend = storage
+
+    booking_id, photo_id, _ = _create_photo_with_signed_url(
+        client, async_session_maker, upload_root, admin_headers
+    )
+
+    delete_resp = client.delete(
+        f"/v1/orders/{booking_id}/photos/{photo_id}",
+        headers=admin_headers,
+    )
+    assert delete_resp.status_code == 204
+
+    async def _fetch_tombstone():
+        async with async_session_maker() as session:
+            return await session.scalar(sa.select(OrderPhotoTombstone))
+
+    tombstone = asyncio.run(_fetch_tombstone())
+    assert tombstone is not None
+    assert tombstone.processed_at is None
+    assert tombstone.attempts == 1
+
+    async def _run_janitor():
+        async with async_session_maker() as session:
+            return await storage_janitor.run_storage_janitor(
+                session, storage, retry_interval_seconds=0
+            )
+
+    result = asyncio.run(_run_janitor())
+    assert result["processed"] == 1
+
+    tombstone_after = asyncio.run(_fetch_tombstone())
+    assert tombstone_after is not None
+    assert tombstone_after.processed_at is not None
+    assert tombstone_after.last_error is None
+    app.state.storage_backend = None

@@ -26,10 +26,18 @@ def _new_backend() -> StorageBackend:
             secret_key=settings.s3_secret_key,
             region=settings.s3_region,
             endpoint=settings.s3_endpoint,
+            connect_timeout=settings.s3_connect_timeout_seconds,
+            read_timeout=settings.s3_read_timeout_seconds,
+            max_attempts=settings.s3_max_attempts,
+            max_payload_bytes=settings.order_photo_max_bytes,
         )
     if backend == "memory":
         return InMemoryStorageBackend()
     raise RuntimeError(f"Unsupported storage backend: {backend}")
+
+
+def new_storage_backend() -> StorageBackend:
+    return _new_backend()
 
 
 def resolve_storage_backend(state: Any) -> StorageBackend:
