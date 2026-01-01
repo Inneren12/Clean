@@ -29,7 +29,7 @@ groups:
           description: "No jobs-runner heartbeat within 10m. Restart the scheduler or investigate crashes."
 
       - alert: EmailDeadLettersGrowing
-        expr: rate(email_dlq_messages{status="dead"}[15m]) > 0
+        expr: email_dlq_messages{status="dead"} > 0
         for: 15m
         labels:
           severity: ticket

@@ -34,6 +34,7 @@ def upgrade() -> None:
     )
     op.create_index("ix_saas_sessions_user", "saas_sessions", ["user_id"])
     op.create_index("ix_saas_sessions_org", "saas_sessions", ["org_id"])
+    op.create_index("ix_saas_sessions_refresh_token", "saas_sessions", ["refresh_token_hash"])
 
     op.create_table(
         "token_events",
@@ -56,6 +57,7 @@ def downgrade() -> None:
     op.drop_index("ix_token_events_user", table_name="token_events")
     op.drop_index("ix_token_events_session", table_name="token_events")
     op.drop_table("token_events")
+    op.drop_index("ix_saas_sessions_refresh_token", table_name="saas_sessions")
     op.drop_index("ix_saas_sessions_org", table_name="saas_sessions")
     op.drop_index("ix_saas_sessions_user", table_name="saas_sessions")
     op.drop_table("saas_sessions")

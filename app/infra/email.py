@@ -1,4 +1,5 @@
 import logging
+import random
 import smtplib
 from email.message import EmailMessage
 from email.utils import formataddr
@@ -52,7 +53,7 @@ class EmailAdapter:
             )
         except CircuitBreakerOpenError:
             logger.warning("email_circuit_open", extra={"extra": {"recipient": recipient}})
-            raise
+            return False
         return True
 
     async def send_request_received(self, lead: Any) -> None:
@@ -191,21 +192,40 @@ async def _post_with_retry(
     headers: dict[str, str],
     json: dict[str, Any],
 ) -> httpx.Response:
-    delay = settings.email_retry_backoff_seconds
-    attempts = settings.email_max_retries
+    max_attempts = settings.email_http_max_attempts
+    base_backoff = settings.email_http_backoff_seconds
+    max_backoff = settings.email_http_backoff_max_seconds
     last_exc: Exception | None = None
-    for attempt in range(1, attempts + 1):
+
+    for attempt in range(1, max_attempts + 1):
         try:
-            return await client.post(
+            response = await client.post(
                 "https://api.sendgrid.com/v3/mail/send",
                 headers=headers,
                 json=json,
                 timeout=settings.email_timeout_seconds,
             )
-        except Exception as exc:  # noqa: BLE001
+            # Retry on 429 or 5xx
+            if response.status_code in (429,) or response.status_code >= 500:
+                if attempt < max_attempts:
+                    delay = min(base_backoff * (2 ** (attempt - 1)), max_backoff)
+                    jitter = delay * random.uniform(0.0, 0.3)
+                    await anyio.sleep(delay + jitter)
+                    continue
+            return response
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
             last_exc = exc
-            if attempt == attempts:
-                raise
-            await anyio.sleep(delay)
-            delay *= 2
-    raise last_exc  # pragma: no cover
+            if attempt < max_attempts:
+                delay = min(base_backoff * (2 ** (attempt - 1)), max_backoff)
+                jitter = delay * random.uniform(0.0, 0.3)
+                await anyio.sleep(delay + jitter)
+                continue
+            raise
+        except Exception:
+            # Don't retry on other exceptions
+            raise
+
+    if last_exc:
+        raise last_exc
+    # This should not be reached, but for type safety
+    raise RuntimeError("email_http_retry_exhausted")  # pragma: no cover
