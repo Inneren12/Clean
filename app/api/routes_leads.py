@@ -19,8 +19,8 @@ from app.domain.leads.db_models import Lead
 from app.domain.leads.service import ensure_unique_referral_code
 from app.domain.leads.schemas import LeadCreateRequest, LeadResponse
 from app.domain.leads.statuses import LEAD_STATUS_NEW
+from app.domain.pricing.config_loader import PricingConfig
 from app.domain.pricing.estimator import estimate
-from app.domain.pricing.models import PricingConfig
 from app.infra.captcha import verify_turnstile
 from app.infra.export import export_lead_async
 from app.infra.email import EmailAdapter

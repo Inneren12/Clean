@@ -2,6 +2,20 @@ from enum import Enum
 from typing import List, Optional
 from pydantic import BaseModel, Field, conint, confloat, ConfigDict
 
+# Re-export PricingConfig for backward compatibility
+# (actual implementation in config_loader.py)
+from app.domain.pricing.config_loader import PricingConfig
+
+__all__ = [
+    "PricingConfig",
+    "CleaningType",
+    "Frequency",
+    "AddOns",
+    "EstimateRequest",
+    "EstimateBreakdown",
+    "EstimateResponse",
+]
+
 
 class CleaningType(str, Enum):
     standard = "standard"
