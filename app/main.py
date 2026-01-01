@@ -216,7 +216,7 @@ def _validate_prod_config(app_settings) -> None:
     if errors:
         for error in errors:
             logger.error("startup_config_error", extra={"extra": {"detail": error}})
-        raise RuntimeError("Invalid production configuration; see logs for details")
+        raise RuntimeError("Invalid production configuration: " + "; ".join(errors))
 
 
 def create_app(app_settings) -> FastAPI:

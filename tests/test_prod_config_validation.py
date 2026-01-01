@@ -36,7 +36,7 @@ def _disable_pytest_shortcuts(monkeypatch):
     monkeypatch.setattr(main, "sys", types.SimpleNamespace(argv=["app.py"]))
 
 
-def test_validate_prod_config_rejects_weak_secrets(monkeypatch, caplog):
+def test_validate_prod_config_rejects_weak_secrets(monkeypatch):
     settings_obj = _settings(
         auth_secret_key="dev-auth-secret",
         client_portal_secret="dev-client-portal-secret",
@@ -45,19 +45,14 @@ def test_validate_prod_config_rejects_weak_secrets(monkeypatch, caplog):
     )
     _disable_pytest_shortcuts(monkeypatch)
 
-    with caplog.at_level("ERROR"):
-        with pytest.raises(RuntimeError):
-            main._validate_prod_config(settings_obj)
+    with pytest.raises(RuntimeError) as excinfo:
+        main._validate_prod_config(settings_obj)
 
-    details = [
-        getattr(record, "extra", {}).get("detail") or record.__dict__.get("extra", {}).get("detail")
-        for record in caplog.records
-    ]
-    errors = "\n".join(str(detail) for detail in details if detail)
-    assert "AUTH_SECRET_KEY" in errors
-    assert "CLIENT_PORTAL_SECRET" in errors
-    assert "WORKER_PORTAL_SECRET" in errors
-    assert "METRICS_TOKEN" in errors
+    message = str(excinfo.value)
+    assert "AUTH_SECRET_KEY" in message
+    assert "CLIENT_PORTAL_SECRET" in message
+    assert "WORKER_PORTAL_SECRET" in message
+    assert "METRICS_TOKEN" in message
 
 
 def test_validate_prod_config_accepts_strong_secrets(monkeypatch):
