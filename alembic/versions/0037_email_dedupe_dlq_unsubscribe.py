@@ -24,6 +24,28 @@ DEFAULT_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 def upgrade() -> None:
     bind = op.get_bind()
     dialect = bind.dialect.name if bind else ""
+
+    # Ensure the Alembic version table can store this revision id (33+ chars).
+    if dialect == "sqlite":
+        try:
+            with op.batch_alter_table("alembic_version") as batch_op:
+                batch_op.alter_column(
+                    "version_num",
+                    existing_type=sa.String(length=32),
+                    type_=sa.String(length=64),
+                    existing_nullable=False,
+                )
+        except sa.exc.OperationalError:
+            # SQLite may not support widening in-place; lengths are not enforced there.
+            pass
+    else:
+        op.alter_column(
+            "alembic_version",
+            "version_num",
+            existing_type=sa.String(length=32),
+            type_=sa.String(length=64),
+            existing_nullable=False,
+        )
     op.add_column("email_events", sa.Column("dedupe_key", sa.String(length=255), nullable=True))
 
     date_expr = "strftime('%Y-%m-%d', created_at)" if dialect == "sqlite" else "to_char(date(created_at), 'YYYY-MM-DD')"
@@ -38,10 +60,17 @@ def upgrade() -> None:
         """
     )
 
-    op.alter_column("email_events", "dedupe_key", nullable=False)
-    op.create_unique_constraint(
-        "uq_email_events_org_dedupe", "email_events", ["org_id", "dedupe_key"]
-    )
+    if dialect == "sqlite":
+        with op.batch_alter_table("email_events") as batch_op:
+            batch_op.alter_column("dedupe_key", nullable=False)
+            batch_op.create_unique_constraint(
+                "uq_email_events_org_dedupe", ["org_id", "dedupe_key"]
+            )
+    else:
+        op.alter_column("email_events", "dedupe_key", nullable=False)
+        op.create_unique_constraint(
+            "uq_email_events_org_dedupe", "email_events", ["org_id", "dedupe_key"]
+        )
 
     op.create_table(
         "email_failures",
@@ -86,17 +115,15 @@ def upgrade() -> None:
         sa.Column("recipient", sa.String(length=255), nullable=False),
         sa.Column("scope", sa.String(length=64), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.UniqueConstraint("org_id", "recipient", "scope", name="uq_unsubscribe_recipient_scope"),
     )
     op.create_index(
         "ix_unsubscribe_org_recipient", "unsubscribe", ["org_id", "recipient"], unique=False
     )
-    op.create_unique_constraint(
-        "uq_unsubscribe_recipient_scope", "unsubscribe", ["org_id", "recipient", "scope"]
-    )
 
 
 def downgrade() -> None:
-    op.drop_constraint("uq_unsubscribe_recipient_scope", "unsubscribe", type_="unique")
+    # Leave alembic_version.version_num widened; shrinking risks truncation.
     op.drop_index("ix_unsubscribe_org_recipient", table_name="unsubscribe")
     op.drop_table("unsubscribe")
 
