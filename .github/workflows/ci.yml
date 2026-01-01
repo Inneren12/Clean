@@ -77,11 +77,61 @@ jobs:
               raise SystemExit("Postgres not ready in time")
           PY
 
-      - name: Run migrations
-        run: alembic upgrade head
+      - name: "🛡️ GATE: Postgres migrations must apply cleanly"
+        run: |
+          echo "::group::Running Alembic migrations"
+          alembic upgrade head
+          echo "::endgroup::"
+          echo "✅ Migrations applied successfully"
 
-      - name: Run tests
-        run: pytest
+      - name: "🛡️ GATE: Database schema validation"
+        run: |
+          echo "::group::Verifying critical tables and columns exist"
+          python - <<'PY'
+          import os
+          import psycopg
+
+          dsn = os.environ["DATABASE_URL"].replace("postgresql+psycopg://", "postgresql://", 1)
+
+          with psycopg.connect(dsn) as conn:
+              with conn.cursor() as cur:
+                  # Verify critical org_id columns exist (from migration 0035)
+                  critical_tables = [
+                      "bookings", "leads", "invoices", "teams",
+                      "workers", "stripe_events", "organizations"
+                  ]
+
+                  for table in critical_tables:
+                      cur.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table}' AND column_name = 'org_id';")
+                      result = cur.fetchone()
+                      if table != "organizations":  # organizations has org_id as PK
+                          assert result is not None, f"Table {table} missing org_id column!"
+                      print(f"✓ Table '{table}' schema verified")
+
+                  print("\n✅ All critical tables have required org_id columns")
+          PY
+          echo "::endgroup::"
+
+      - name: "🔥 GATE: Smoke tests (critical flows)"
+        run: |
+          echo "::group::Running smoke tests"
+          pytest -v -m smoke --tb=short
+          echo "::endgroup::"
+          echo "✅ All smoke tests passed"
+
+      - name: "🔒 GATE: Security regression tests (org isolation)"
+        run: |
+          echo "::group::Running security tests"
+          pytest -v -m security --tb=short
+          echo "::endgroup::"
+          echo "✅ All security tests passed (org isolation enforced)"
+
+      - name: "✅ Run all remaining tests"
+        run: |
+          echo "::group::Running full test suite"
+          pytest -v --tb=short
+          echo "::endgroup::"
+          echo "✅ All tests passed - ready for production"
 
   web:
     runs-on: ubuntu-latest

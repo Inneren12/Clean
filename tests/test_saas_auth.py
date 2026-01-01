@@ -8,6 +8,7 @@ from app.settings import settings
 from tests.conftest import DEFAULT_ORG_ID
 
 
+@pytest.mark.security
 @pytest.mark.anyio
 async def test_duplicate_email_globally_unique(async_session_maker):
     async with async_session_maker() as session:
@@ -28,6 +29,8 @@ async def test_duplicate_email_globally_unique(async_session_maker):
             await saas_service.create_user(session, email="owner@example.com", password="secret2")
 
 
+@pytest.mark.security
+@pytest.mark.org_isolation
 @pytest.mark.anyio
 async def test_tenant_isolation_on_member_listing(async_session_maker, client):
     async with async_session_maker() as session:
@@ -51,6 +54,7 @@ async def test_tenant_isolation_on_member_listing(async_session_maker, client):
     assert forbidden.status_code == 403
 
 
+@pytest.mark.security
 @pytest.mark.anyio
 async def test_rbac_finance_denied_for_viewer(async_session_maker, client):
     async with async_session_maker() as session:
@@ -73,6 +77,7 @@ async def test_rbac_finance_denied_for_viewer(async_session_maker, client):
     assert resp.status_code == 403
 
 
+@pytest.mark.security
 @pytest.mark.anyio
 async def test_saas_middleware_bypasses_admin_basic_auth(async_session_maker, client):
     settings.legacy_basic_auth_enabled = False
@@ -93,6 +98,8 @@ async def test_saas_middleware_bypasses_admin_basic_auth(async_session_maker, cl
     assert response.status_code == 200
 
 
+@pytest.mark.security
+@pytest.mark.org_isolation
 @pytest.mark.anyio
 async def test_cross_org_member_listing_forbidden(async_session_maker, client):
     settings.legacy_basic_auth_enabled = False
@@ -114,6 +121,7 @@ async def test_cross_org_member_listing_forbidden(async_session_maker, client):
     assert response.status_code == 403
 
 
+@pytest.mark.security
 @pytest.mark.anyio
 async def test_admin_routes_require_token_when_legacy_disabled(client):
     settings.legacy_basic_auth_enabled = False

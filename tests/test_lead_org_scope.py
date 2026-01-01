@@ -51,6 +51,8 @@ def _create_lead(client, *, name: str, org_id: uuid.UUID) -> str:
     return response.json()["lead_id"]
 
 
+@pytest.mark.security
+@pytest.mark.org_isolation
 @pytest.mark.anyio
 async def test_leads_are_org_scoped(client, async_session_maker):
     org_a = uuid.uuid4()

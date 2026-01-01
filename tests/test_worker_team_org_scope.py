@@ -97,6 +97,8 @@ async def _seed_org_workers(async_session_maker):
     }
 
 
+@pytest.mark.security
+@pytest.mark.org_isolation
 @pytest.mark.anyio
 async def test_worker_list_and_detail_are_org_scoped(client, async_session_maker):
     seeded = await _seed_org_workers(async_session_maker)
@@ -127,6 +129,8 @@ async def test_worker_list_and_detail_are_org_scoped(client, async_session_maker
     assert update_other_org.status_code == 404
 
 
+@pytest.mark.security
+@pytest.mark.org_isolation
 @pytest.mark.anyio
 async def test_worker_create_rejects_other_org_team(client, async_session_maker):
     seeded = await _seed_org_workers(async_session_maker)
@@ -145,6 +149,8 @@ async def test_worker_create_rejects_other_org_team(client, async_session_maker)
     assert create_resp.status_code == 404
 
 
+@pytest.mark.security
+@pytest.mark.org_isolation
 @pytest.mark.anyio
 async def test_team_schedule_endpoints_are_org_scoped(client, async_session_maker):
     seeded = await _seed_org_workers(async_session_maker)

@@ -23,6 +23,8 @@ def admin_credentials():
     yield
 
 
+@pytest.mark.security
+@pytest.mark.org_isolation
 @pytest.mark.anyio
 async def test_org_scoped_bookings(client, async_session_maker):
     org_a = uuid.uuid4()
