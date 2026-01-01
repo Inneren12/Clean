@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     database_url: str = Field(
         "postgresql+psycopg://postgres:postgres@postgres:5432/cleaning",
     )
+    database_pool_size: int = Field(5)
+    database_max_overflow: int = Field(5)
+    database_pool_timeout_seconds: float = Field(30.0)
+    database_statement_timeout_ms: int = Field(5000)
+
     email_mode: Literal["off", "sendgrid", "smtp"] = Field("off")
     email_from: str | None = Field(None)
     email_from_name: str | None = Field(None)
@@ -37,6 +42,7 @@ class Settings(BaseSettings):
     smtp_username: str | None = Field(None)
     smtp_password: str | None = Field(None)
     smtp_use_tls: bool = Field(True)
+
     owner_basic_username: str | None = Field(None)
     owner_basic_password: str | None = Field(None)
     admin_basic_username: str | None = Field(None)
@@ -50,17 +56,22 @@ class Settings(BaseSettings):
     worker_basic_username: str | None = Field(None)
     worker_basic_password: str | None = Field(None)
     worker_team_id: int = Field(1)
+
     legacy_basic_auth_enabled: bool = Field(True)
     auth_secret_key: str = Field("dev-auth-secret")
     auth_token_ttl_minutes: int = Field(60 * 24)
+
     admin_notification_email: str | None = Field(None)
+
     public_base_url: str | None = Field(None)
     invoice_public_token_secret: str | None = Field(None)
+
     export_mode: Literal["off", "webhook", "sheets"] = Field("off")
     export_webhook_url: str | None = Field(None)
     export_webhook_timeout_seconds: int = Field(5)
     export_webhook_max_retries: int = Field(3)
     export_webhook_backoff_seconds: float = Field(1.0)
+
     export_webhook_allowed_hosts_raw: str | None = Field(
         None,
         validation_alias="export_webhook_allowed_hosts",
@@ -93,14 +104,16 @@ class Settings(BaseSettings):
     stripe_billing_portal_return_url: str = Field(
         "http://localhost:3000/billing",
     )
-    client_portal_secret: str = Field("dev-client-portal-secret")
-    worker_portal_secret: str | None = Field(None)
-    client_portal_token_ttl_minutes: int = Field(30)
-    client_portal_base_url: str | None = Field(None)
-    deposit_percent: float = Field(0.25)
-    deposit_currency: str = Field("cad")
-    order_upload_root: str = Field("var/uploads/orders")
-    order_photo_max_bytes: int = Field(10 * 1024 * 1024)
+    stripe_circuit_failure_threshold: int = Field(5, env="STRIPE_CIRCUIT_FAILURE_THRESHOLD")
+    stripe_circuit_recovery_seconds: float = Field(30.0, env="STRIPE_CIRCUIT_RECOVERY_SECONDS")
+    client_portal_secret: str = Field("dev-client-portal-secret", env="CLIENT_PORTAL_SECRET")
+    worker_portal_secret: str | None = Field(None, env="WORKER_PORTAL_SECRET")
+    client_portal_token_ttl_minutes: int = Field(30, env="CLIENT_PORTAL_TOKEN_TTL_MINUTES")
+    client_portal_base_url: str | None = Field(None, env="CLIENT_PORTAL_BASE_URL")
+    deposit_percent: float = Field(0.25, env="DEPOSIT_PERCENT")
+    deposit_currency: str = Field("cad", env="DEPOSIT_CURRENCY")
+    order_upload_root: str = Field("var/uploads/orders", env="ORDER_UPLOAD_ROOT")
+    order_photo_max_bytes: int = Field(10 * 1024 * 1024, env="ORDER_PHOTO_MAX_BYTES")
     order_photo_allowed_mimes_raw: str = Field(
         "image/jpeg,image/png,image/webp"
     )
@@ -112,6 +125,14 @@ class Settings(BaseSettings):
     s3_access_key: str | None = Field(None, env="S3_ACCESS_KEY")
     s3_secret_key: str | None = Field(None, env="S3_SECRET_KEY")
     s3_region: str | None = Field(None, env="S3_REGION")
+    s3_connect_timeout_seconds: float = Field(3.0, env="S3_CONNECT_TIMEOUT_SECONDS")
+    s3_read_timeout_seconds: float = Field(10.0, env="S3_READ_TIMEOUT_SECONDS")
+    s3_max_attempts: int = Field(4, env="S3_MAX_ATTEMPTS")
+    storage_delete_retry_interval_seconds: int = Field(
+        30, env="STORAGE_DELETE_RETRY_INTERVAL_SECONDS"
+    )
+    storage_delete_max_attempts: int = Field(5, env="STORAGE_DELETE_MAX_ATTEMPTS")
+    storage_delete_batch_size: int = Field(50, env="STORAGE_DELETE_BATCH_SIZE")
     testing: bool = Field(False, env="TESTING")
     deposits_enabled: bool = Field(True, env="DEPOSITS_ENABLED")
     metrics_enabled: bool = Field(True, env="METRICS_ENABLED")
@@ -120,6 +141,10 @@ class Settings(BaseSettings):
     job_heartbeat_ttl_seconds: int = Field(300, env="JOB_HEARTBEAT_TTL_SECONDS")
     email_max_retries: int = Field(3, env="EMAIL_MAX_RETRIES")
     email_retry_backoff_seconds: float = Field(60.0, env="EMAIL_RETRY_BACKOFF_SECONDS")
+    email_timeout_seconds: float = Field(10.0, env="EMAIL_TIMEOUT_SECONDS")
+    smtp_timeout_seconds: float = Field(10.0, env="SMTP_TIMEOUT_SECONDS")
+    email_circuit_failure_threshold: int = Field(5, env="EMAIL_CIRCUIT_FAILURE_THRESHOLD")
+    email_circuit_recovery_seconds: float = Field(30.0, env="EMAIL_CIRCUIT_RECOVERY_SECONDS")
     email_unsubscribe_secret: str | None = Field(None, env="EMAIL_UNSUBSCRIBE_SECRET")
     email_unsubscribe_ttl_minutes: int = Field(7 * 24 * 60, env="EMAIL_UNSUBSCRIBE_TTL_MINUTES")
     default_org_id: uuid.UUID = Field(

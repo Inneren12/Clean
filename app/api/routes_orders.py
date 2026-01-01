@@ -315,14 +315,11 @@ async def signed_download_order_photo(
 
     storage = resolve_storage_backend(request.app.state)
     key = photos_service.storage_key_for_photo(photo, token_org_id)
-    sig = request.query_params.get("sig")
-    exp = request.query_params.get("exp")
-
-    if isinstance(storage, photos_service.LocalStorageBackend):
-        if not (sig and exp and photos_service.validate_local_signature(storage, key, exp, sig)):
+    if storage.supports_direct_io():
+        if not storage.validate_signed_get_url(key=key, url=str(request.url)):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid signature")
-        file_path = storage.path_for(key)
-        if not file_path.exists():
+        file_path = storage.path_for(key) if hasattr(storage, "path_for") else None
+        if not file_path or not file_path.exists():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File missing")
         return FileResponse(
             path=file_path,
@@ -358,9 +355,7 @@ async def download_order_photo(
 
     signature = request.query_params.get("sig")
     expires_raw = request.query_params.get("exp")
-    has_valid_token = False
-    if signature and expires_raw:
-        has_valid_token = photos_service.validate_local_signature(storage, key, expires_raw, signature)
+    has_valid_token = storage.validate_signed_get_url(key=key, url=str(request.url))
 
     if settings.app_env != "dev" and not has_valid_token:
         download_url = str(request.url_for("download_order_photo", order_id=order_id, photo_id=photo_id))

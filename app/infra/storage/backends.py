@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncIterator, Optional
+from urllib.parse import parse_qsl, urlparse
 
 import boto3
 from botocore.client import Config
@@ -44,6 +45,11 @@ class StorageBackend(ABC):
         self, *, key: str, expires_in: int, resource_url: str | None = None
     ) -> str:
         """Generate a signed URL to fetch an object."""
+
+    def validate_signed_get_url(self, *, key: str, url: str) -> bool:
+        """Validate a signed URL for direct IO backends."""
+
+        return False
 
     def supports_direct_io(self) -> bool:
         """Whether the backend can be read directly without a signed URL."""
@@ -130,6 +136,19 @@ class LocalStorageBackend(StorageBackend):
         separator = "&" if "?" in resource_url else "?"
         return f"{resource_url}{separator}exp={expires_at}&sig={signature}"
 
+    def validate_signed_get_url(self, *, key: str, url: str) -> bool:
+        parsed = urlparse(url)
+        params = dict(parse_qsl(parsed.query))
+        sig = params.get("sig")
+        exp_raw = params.get("exp")
+        if not sig or not exp_raw:
+            return False
+        try:
+            expires_at = int(exp_raw)
+        except ValueError:
+            return False
+        return self.validate_signature(key=key, expires_at=expires_at, signature=sig)
+
     def supports_direct_io(self) -> bool:
         return True
 
@@ -154,6 +173,10 @@ class S3StorageBackend(StorageBackend):
         secret_key: str,
         region: str | None = None,
         endpoint: str | None = None,
+        connect_timeout: float = 3.0,
+        read_timeout: float = 10.0,
+        max_attempts: int = 4,
+        max_payload_bytes: int | None = None,
     ) -> None:
         session = boto3.session.Session()
         self.client = session.client(
@@ -162,9 +185,15 @@ class S3StorageBackend(StorageBackend):
             region_name=region,
             aws_access_key_id=access_key,
             aws_secret_access_key=secret_key,
-            config=Config(signature_version="s3v4"),
+            config=Config(
+                signature_version="s3v4",
+                connect_timeout=connect_timeout,
+                read_timeout=read_timeout,
+                retries={"mode": "standard", "max_attempts": max(1, max_attempts)},
+            ),
         )
         self.bucket = bucket
+        self.max_payload_bytes = max_payload_bytes
 
     async def put(
         self, *, key: str, body: AsyncIterator[bytes], content_type: str
@@ -172,6 +201,8 @@ class S3StorageBackend(StorageBackend):
         buffer = bytearray()
         async for chunk in body:
             buffer.extend(chunk)
+            if self.max_payload_bytes and len(buffer) > self.max_payload_bytes:
+                raise ValueError("Payload exceeds configured upload limit")
         data = bytes(buffer)
 
         def _upload() -> None:

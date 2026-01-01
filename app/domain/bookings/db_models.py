@@ -238,6 +238,30 @@ class OrderPhoto(Base):
     )
 
 
+class OrderPhotoTombstone(Base):
+    __tablename__ = "order_photo_tombstones"
+
+    tombstone_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, default=uuid.uuid4
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, nullable=False)
+    order_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    photo_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(String(255))
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_order_photo_tombstones_pending", "processed_at", "created_at"),
+        Index("ix_order_photo_tombstones_org", "org_id"),
+    )
+
+
 class TeamWorkingHours(Base):
     __tablename__ = "team_working_hours"
 
