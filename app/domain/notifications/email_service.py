@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import asyncio
 import hashlib
 import hmac
 import json
@@ -9,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +20,7 @@ from app.domain.invoices.db_models import Invoice
 from app.domain.leads.db_models import Lead
 from app.domain.notifications.db_models import EmailFailure, Unsubscribe
 from app.infra.email import EmailAdapter
+from app.infra.metrics import metrics
 from app.settings import settings
 
 LOCAL_TZ = ZoneInfo("America/Edmonton")
@@ -51,6 +53,19 @@ EMAIL_SCOPES = {
     EMAIL_TYPE_BOOKING_COMPLETED: SCOPE_MARKETING,
     EMAIL_TYPE_NPS_SURVEY: SCOPE_NPS,
 }
+
+
+def _record_email_metric(email_type: str, status: str, count: int = 1) -> None:
+    metrics.record_email_notification(email_type, status, count)
+
+
+async def _update_dlq_metrics(session: AsyncSession) -> None:
+    pending_count = await session.scalar(
+        select(func.count()).where(EmailFailure.status == "pending")
+    )
+    dead_count = await session.scalar(select(func.count()).where(EmailFailure.status == "dead"))
+    metrics.set_email_dlq_depth("pending", int(pending_count or 0))
+    metrics.set_email_dlq_depth("dead", int(dead_count or 0))
 
 
 def _normalize_email(email: str) -> str:
@@ -239,19 +254,24 @@ async def _try_send_email(
     context: dict | None = None,
     headers: dict[str, str] | None = None,
 ) -> bool:
+    email_type = (context or {}).get("email_type", "unknown")
     if adapter is None:
         logger.warning("email_adapter_missing", extra={"extra": context or {}})
+        _record_email_metric(email_type, "skipped")
         return False
     try:
         delivered = await adapter.send_email(
             recipient=recipient, subject=subject, body=body, headers=headers
         )
+        status = "delivered" if delivered else "skipped"
+        _record_email_metric(email_type, status)
         return bool(delivered)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "email_send_failed",
             extra={"extra": {**(context or {}), "reason": type(exc).__name__}},
         )
+        _record_email_metric(email_type, "failed")
         return False
 
 
@@ -300,6 +320,8 @@ async def _record_failure(
         "next_retry_at": None if status == "dead" else _next_retry_at(attempt),
         "org_id": org_id,
     }
+    if status == "dead":
+        _record_email_metric(email_type, "dead")
     if existing:
         await session.execute(
             update(EmailFailure)
@@ -368,13 +390,16 @@ async def _send_with_record(
     invoice_id: str | None = None,
 ) -> bool:
     if settings.email_mode == "off":
+        _record_email_metric(email_type, "skipped")
         return False
     if not lead.email:
+        _record_email_metric(email_type, "skipped")
         return False
     subject, body = render(booking, lead)
     org_id = getattr(booking, "org_id", settings.default_org_id)
     scope = EMAIL_SCOPES.get(email_type)
     if scope and await _is_unsubscribed(session, lead.email, scope, org_id):
+        _record_email_metric(email_type, "skipped")
         return False
     unsubscribe_url = _unsubscribe_link(lead.email, scope, org_id) if scope else None
     headers = {"List-Unsubscribe": f"<{unsubscribe_url}>"} if unsubscribe_url else None
@@ -401,6 +426,7 @@ async def _send_with_record(
         dedupe_key=dedupe_key,
     )
     if event_id is None:
+        _record_email_metric(email_type, "skipped")
         return False
 
     await session.commit()
@@ -551,8 +577,10 @@ async def send_invoice_sent_email(
     public_link_pdf: str,
 ) -> bool:
     if settings.email_mode == "off":
+        _record_email_metric(EMAIL_TYPE_INVOICE_SENT, "skipped")
         return False
     if not lead.email:
+        _record_email_metric(EMAIL_TYPE_INVOICE_SENT, "skipped")
         return False
     subject, body = _render_invoice_sent(invoice, lead, public_link, public_link_pdf)
     org_id = getattr(invoice, "org_id", settings.default_org_id)
@@ -567,6 +595,7 @@ async def send_invoice_sent_email(
         org_id=org_id,
     )
     if event_id is None:
+        _record_email_metric(EMAIL_TYPE_INVOICE_SENT, "skipped")
         return False
     await session.commit()
     delivered = await _try_send_email(
@@ -604,8 +633,10 @@ async def send_invoice_overdue_email(
     public_link: str,
 ) -> bool:
     if settings.email_mode == "off":
+        _record_email_metric(EMAIL_TYPE_INVOICE_OVERDUE, "skipped")
         return False
     if not lead.email:
+        _record_email_metric(EMAIL_TYPE_INVOICE_OVERDUE, "skipped")
         return False
     subject, body = _render_invoice_overdue(invoice, lead, public_link)
     org_id = getattr(invoice, "org_id", settings.default_org_id)
@@ -620,6 +651,7 @@ async def send_invoice_overdue_email(
         org_id=org_id,
     )
     if event_id is None:
+        _record_email_metric(EMAIL_TYPE_INVOICE_OVERDUE, "skipped")
         return False
     await session.commit()
     delivered = await _try_send_email(
@@ -735,6 +767,7 @@ async def retry_email_failures(session: AsyncSession, adapter: EmailAdapter | No
                 .where(EmailFailure.failure_id == failure.failure_id)
                 .values(status="dead", last_error="unsubscribed", next_retry_at=None)
             )
+            _record_email_metric(failure.email_type, "dead")
             dead += 1
             continue
         delivered = await _try_send_email(
@@ -772,7 +805,9 @@ async def retry_email_failures(session: AsyncSession, adapter: EmailAdapter | No
             )
         )
         if status == "dead":
+            _record_email_metric(failure.email_type, "dead")
             dead += 1
 
     await session.commit()
+    await _update_dlq_metrics(session)
     return {"sent": sent, "dead": dead, "checked": len(failures)}

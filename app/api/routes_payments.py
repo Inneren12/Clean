@@ -588,11 +588,13 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
         event = stripe_client.verify_webhook(payload=payload, signature=sig_header)
     except Exception as exc:  # noqa: BLE001
         metrics.record_webhook("error")
+        metrics.record_webhook_error("invalid_signature")
         logger.warning("stripe_webhook_invalid", extra={"extra": {"reason": type(exc).__name__}})
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Stripe webhook") from exc
 
     event_id = _safe_get(event, "id")
     if not event_id:
+        metrics.record_webhook_error("missing_event_id")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing event id")
     payload_hash = hashlib.sha256(payload or b"").hexdigest()
 
@@ -606,6 +608,7 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
                 "stripe_webhook_invalid_org",
                 extra={"extra": {"event_id": event_id, "reason": exc.reason}},
             )
+            metrics.record_webhook_error("org_resolution_failed")
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Stripe org") from exc
 
         existing = await session.scalar(select(StripeEvent).where(StripeEvent.event_id == str(event_id)).with_for_update())
@@ -627,6 +630,7 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
                     "stripe_webhook_replayed_mismatch",
                     extra={"extra": {"event_id": event_id}},
                 )
+                metrics.record_webhook_error("payload_mismatch")
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Event payload mismatch")
 
             if existing.status in {"succeeded", "ignored"}:
@@ -672,6 +676,7 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
                 extra={"extra": {"event_id": event_id, "reason": type(exc).__name__}},
             )
             metrics.record_webhook("error")
+            metrics.record_webhook_error("processing_error")
 
     if processing_error is not None:
         raise HTTPException(

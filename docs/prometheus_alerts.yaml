@@ -1,0 +1,47 @@
+groups:
+  - name: clean-api
+    rules:
+      - alert: Api5xxRateElevated
+        expr: rate(http_5xx_total[5m]) > 0.5
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "5xx rate is elevated"
+          description: "{{ $value }} 5xx responses per second over the last 5m. Check logs for the offending path label."
+
+      - alert: WebhookErrorsSpike
+        expr: rate(webhook_errors_total{type!="duplicate"}[5m]) > 0.1
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Webhook errors are spiking"
+          description: "Stripe webhook errors by type are above threshold. Inspect webhook_errors_total grouped by type."
+
+      - alert: JobsRunnerHeartbeatStale
+        expr: time() - job_last_heartbeat_timestamp{job="jobs-runner"} > 600
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Jobs runner heartbeat stale"
+          description: "No jobs-runner heartbeat within 10m. Restart the scheduler or investigate crashes."
+
+      - alert: EmailDeadLettersGrowing
+        expr: rate(email_dlq_messages{status="dead"}[15m]) > 0
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Email DLQ growing"
+          description: "Dead-lettered emails increased in the last 15m. Check credentials and retry jobs."
+
+      - alert: EmailFailuresElevated
+        expr: rate(email_notifications_total{status="failed"}[10m]) > 0.2
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Email failures are elevated"
+          description: "Email send failures exceeded threshold. Check provider status and DLQ metrics."
