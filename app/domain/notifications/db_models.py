@@ -7,7 +7,7 @@ import sqlalchemy as sa
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.domain.saas.db_models import UUID_TYPE
+from app.infra.db import UUID_TYPE
 from app.infra.db import Base
 from app.settings import settings
 
