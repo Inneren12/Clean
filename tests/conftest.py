@@ -148,6 +148,24 @@ def enable_test_mode():
 
 
 @pytest.fixture(autouse=True)
+def restore_app_state():
+    """Restore app.state after each test to prevent state pollution."""
+    original_metrics = getattr(app.state, "metrics", None)
+    original_app_settings = getattr(app.state, "app_settings", None)
+    yield
+    # Restore original state
+    if original_metrics is not None:
+        app.state.metrics = original_metrics
+    elif hasattr(app.state, "metrics"):
+        delattr(app.state, "metrics")
+
+    if original_app_settings is not None:
+        app.state.app_settings = original_app_settings
+    elif hasattr(app.state, "app_settings"):
+        delattr(app.state, "app_settings")
+
+
+@pytest.fixture(autouse=True)
 def override_org_resolver(monkeypatch):
     if not getattr(app.state, "test_org_header_middleware_added", False):
 
