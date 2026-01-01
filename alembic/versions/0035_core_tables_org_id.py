@@ -123,12 +123,16 @@ def _ensure_default_org(conn: sa.engine.Connection) -> None:
     )
 
 
-def _add_org_id_column(table: str, is_postgres: bool) -> None:
-    server_default = (
-        sa.text(f"'{DEFAULT_ORG_ID}'::uuid")
-        if is_postgres
-        else sa.text(f"'{DEFAULT_ORG_ID}'")
-    )
+def _column_exists(conn: sa.engine.Connection, table: str, column: str) -> bool:
+    inspector = sa.inspect(conn)
+    return any(col["name"] == column for col in inspector.get_columns(table))
+
+
+def _add_org_id_column(conn: sa.engine.Connection, table: str) -> None:
+    if _column_exists(conn, table, "org_id"):
+        return
+
+    server_default = sa.text(f"'{DEFAULT_ORG_ID}'")
     op.add_column(
         table,
         sa.Column(
@@ -141,40 +145,63 @@ def _add_org_id_column(table: str, is_postgres: bool) -> None:
 
 
 def _backfill_org_id(conn: sa.engine.Connection, table: str) -> None:
+    if not _column_exists(conn, table, "org_id"):
+        return
     conn.execute(
         sa.text(f"UPDATE {table} SET org_id = :org_id WHERE org_id IS NULL"),
         {"org_id": str(DEFAULT_ORG_ID)},
     )
 
 
-def _add_org_fk(table: str, is_postgres: bool) -> None:
+def _fk_exists(conn: sa.engine.Connection, table: str, fk_name: str) -> bool:
+    inspector = sa.inspect(conn)
+    return any(fk.get("name") == fk_name for fk in inspector.get_foreign_keys(table))
+
+
+def _add_org_fk(conn: sa.engine.Connection, table: str, is_postgres: bool) -> None:
     if not is_postgres:
         return
+
+    fk_name = f"fk_{table}_org_id_organizations"
+    if _fk_exists(conn, table, fk_name):
+        return
+
     op.create_foreign_key(
-        f"fk_{table}_org_id_organizations",
+        fk_name,
         table,
         "organizations",
         ["org_id"],
         ["org_id"],
-        ondelete="CASCADE",
     )
 
 
-def _finalize_org_column(table: str, is_postgres: bool) -> None:
-    if not is_postgres:
+def _finalize_org_column(conn: sa.engine.Connection, table: str) -> None:
+    if not _column_exists(conn, table, "org_id"):
         return
-    op.alter_column(table, "org_id", server_default=None, nullable=False)
+
+    with op.batch_alter_table(table) as batch_op:
+        batch_op.alter_column("org_id", server_default=None)
+        batch_op.alter_column("org_id", nullable=False)
 
 
-def _create_indexes() -> None:
+def _index_exists(conn: sa.engine.Connection, table: str, name: str) -> bool:
+    inspector = sa.inspect(conn)
+    return any(index.get("name") == name for index in inspector.get_indexes(table))
+
+
+def _create_indexes(conn: sa.engine.Connection) -> None:
     for table, indexes in INDEXES.items():
         for name, columns in indexes:
+            if _index_exists(conn, table, name):
+                continue
             op.create_index(name, table, columns)
 
 
-def _drop_indexes() -> None:
+def _drop_indexes(conn: sa.engine.Connection) -> None:
     for table, indexes in INDEXES.items():
         for name, _ in indexes:
+            if not _index_exists(conn, table, name):
+                continue
             op.drop_index(name, table_name=table)
 
 
@@ -184,31 +211,37 @@ def upgrade() -> None:
     is_postgres = getattr(conn.engine.dialect, "name", "") == "postgresql"
 
     for table in TABLES:
-        _add_org_id_column(table, is_postgres)
+        _add_org_id_column(conn, table)
 
     for table in TABLES:
         _backfill_org_id(conn, table)
 
     for table in TABLES:
-        _add_org_fk(table, is_postgres)
+        _add_org_fk(conn, table, is_postgres)
 
     for table in TABLES:
-        _finalize_org_column(table, is_postgres)
+        _finalize_org_column(conn, table)
 
-    _create_indexes()
+    _create_indexes(conn)
 
 
 def downgrade() -> None:
     conn = op.get_bind()
     is_postgres = getattr(conn.engine.dialect, "name", "") == "postgresql"
 
-    _drop_indexes()
+    _drop_indexes(conn)
 
     for table in reversed(TABLES):
-        if is_postgres:
+        fk_name = f"fk_{table}_org_id_organizations"
+        if is_postgres and _fk_exists(conn, table, fk_name):
             op.drop_constraint(
-                f"fk_{table}_org_id_organizations",
+                fk_name,
                 table_name=table,
                 type_="foreignkey",
             )
-        op.drop_column(table, "org_id")
+
+        if not _column_exists(conn, table, "org_id"):
+            continue
+
+        with op.batch_alter_table(table) as batch_op:
+            batch_op.drop_column("org_id")
