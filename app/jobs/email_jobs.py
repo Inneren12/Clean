@@ -23,6 +23,10 @@ async def run_booking_reminders(session: AsyncSession, adapter: EmailAdapter | N
     return await email_service.scan_and_send_reminders(session, adapter)
 
 
+async def run_email_dlq(session: AsyncSession, adapter: EmailAdapter | None) -> dict[str, int]:
+    return await email_service.retry_email_failures(session, adapter)
+
+
 def _public_base_url(explicit: str | None = None) -> str | None:
     base = explicit or settings.public_base_url or settings.client_portal_base_url
     if not base:

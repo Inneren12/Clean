@@ -12,6 +12,7 @@ from app.domain.clients.db_models import ClientUser
 from app.domain.documents import service as document_service
 from app.domain.invoices import schemas as invoice_schemas, service as invoice_service, statuses as invoice_statuses
 from app.domain.nps import service as nps_service
+from app.domain.notifications import email_service
 from app.infra.db import get_db_session
 from app.infra import stripe as stripe_infra
 from app.settings import settings
@@ -243,6 +244,26 @@ async def submit_nps(
         message = "Thanks for your feedback. Our support team will reach out to resolve this."  # noqa: E501
     else:
         message = "Thanks for your feedback! If you loved the service, feel free to share a Google review."
+    return HTMLResponse(_render_message("Thanks!", message))
+
+
+@router.get("/unsubscribe", response_class=HTMLResponse)
+async def unsubscribe(token: str, session: AsyncSession = Depends(get_db_session)) -> HTMLResponse:
+    try:
+        data = email_service.verify_unsubscribe_token(token)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token")
+
+    await email_service.register_unsubscribe(
+        session, recipient=data["email"], scope=data["scope"], org_id=data.get("org_id")
+    )
+    return HTMLResponse(
+        _render_message(
+            "You've been unsubscribed",
+            "You will no longer receive these emails.",
+            status_text="Preference updated",
+        )
+    )
 @router.get(
     "/i/{token}.pdf",
     response_class=Response,

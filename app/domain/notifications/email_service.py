@@ -1,16 +1,22 @@
+import base64
+import hashlib
+import hmac
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, select
+from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.bookings.db_models import Booking, EmailEvent
 from app.domain.invoices import service as invoice_service
 from app.domain.invoices.db_models import Invoice
 from app.domain.leads.db_models import Lead
+from app.domain.notifications.db_models import EmailFailure, Unsubscribe
 from app.infra.email import EmailAdapter
+from app.settings import settings
 
 LOCAL_TZ = ZoneInfo("America/Edmonton")
 logger = logging.getLogger(__name__)
@@ -23,6 +29,76 @@ EMAIL_TYPE_NPS_SURVEY = "nps_survey"
 EMAIL_TYPE_INVOICE_SENT = "invoice_sent"
 EMAIL_TYPE_INVOICE_OVERDUE = "invoice_overdue"
 REMINDER_STATUSES = {"CONFIRMED", "PENDING"}
+SCOPE_MARKETING = "marketing"
+SCOPE_NPS = "nps"
+EMAIL_SCOPES = {
+    EMAIL_TYPE_BOOKING_COMPLETED: SCOPE_MARKETING,
+    EMAIL_TYPE_NPS_SURVEY: SCOPE_NPS,
+}
+
+
+def _normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def _dedupe_key(
+    email_type: str,
+    recipient: str,
+    *,
+    booking_id: str | None = None,
+    invoice_id: str | None = None,
+    created_at: datetime | None = None,
+) -> str:
+    normalized_recipient = _normalize_email(recipient)
+    if invoice_id:
+        return f"invoice:{invoice_id}:{email_type}:{normalized_recipient}"
+    if booking_id:
+        return f"booking:{booking_id}:{email_type}:{normalized_recipient}"
+    day = (created_at or datetime.now(tz=timezone.utc)).date().isoformat()
+    return f"generic:{email_type}:{normalized_recipient}:{day}"
+
+
+def _public_base_url() -> str | None:
+    base = settings.public_base_url or settings.client_portal_base_url
+    if not base:
+        return None
+    return base.rstrip("/")
+
+
+def _unsubscribe_secret() -> str:
+    return settings.email_unsubscribe_secret or settings.auth_secret_key
+
+
+def issue_unsubscribe_token(email: str, scope: str, org_id: str) -> str:
+    expires_at = datetime.now(tz=timezone.utc) + timedelta(minutes=settings.email_unsubscribe_ttl_minutes)
+    payload = {
+        "email": _normalize_email(email),
+        "scope": scope,
+        "org_id": str(org_id),
+        "exp": int(expires_at.timestamp()),
+    }
+    raw = json.dumps(payload, separators=",:")
+    signature = hmac.new(_unsubscribe_secret().encode(), raw.encode(), hashlib.sha256).digest()
+    token_bytes = raw.encode() + b"." + signature
+    return base64.urlsafe_b64encode(token_bytes).decode()
+
+
+def verify_unsubscribe_token(token: str) -> dict:
+    try:
+        decoded = base64.urlsafe_b64decode(token.encode())
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("token_decode_failed") from exc
+    try:
+        raw, sig = decoded.rsplit(b".", 1)
+    except ValueError as exc:  # noqa: BLE001
+        raise ValueError("token_missing_sig") from exc
+    expected_sig = hmac.new(_unsubscribe_secret().encode(), raw, hashlib.sha256).digest()
+    if not hmac.compare_digest(sig, expected_sig):
+        raise ValueError("token_signature_mismatch")
+    data = json.loads(raw.decode())
+    if data.get("exp") and int(data["exp"]) < int(datetime.now(tz=timezone.utc).timestamp()):
+        raise ValueError("token_expired")
+    return data
 
 
 def _format_start_time(booking: Booking) -> str:
@@ -30,6 +106,36 @@ def _format_start_time(booking: Booking) -> str:
     if starts_at.tzinfo is None:
         starts_at = starts_at.replace(tzinfo=timezone.utc)
     return starts_at.astimezone(LOCAL_TZ).strftime("%Y-%m-%d %H:%M %Z")
+
+
+async def _is_unsubscribed(session: AsyncSession, recipient: str, scope: str, org_id) -> bool:
+    stmt = select(Unsubscribe.id).where(
+        Unsubscribe.recipient == _normalize_email(recipient),
+        Unsubscribe.scope == scope,
+        Unsubscribe.org_id == org_id,
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none() is not None
+
+
+async def _record_unsubscribe(session: AsyncSession, recipient: str, scope: str, org_id) -> None:
+    base_stmt = insert(Unsubscribe).values(
+        recipient=_normalize_email(recipient), scope=scope, org_id=org_id
+    )
+    dialect = session.get_bind().dialect.name if session.get_bind() else ""
+    if hasattr(base_stmt, "on_conflict_do_nothing"):
+        stmt = base_stmt.on_conflict_do_nothing(constraint="uq_unsubscribe_recipient_scope")
+        await session.execute(stmt)
+        return
+    if dialect == "sqlite":
+        await session.execute(base_stmt.prefix_with("OR IGNORE"))
+        return
+    await session.execute(base_stmt)
+
+
+async def register_unsubscribe(session: AsyncSession, recipient: str, scope: str, org_id) -> None:
+    await _record_unsubscribe(session, recipient, scope, org_id)
+    await session.commit()
 
 
 def _render_booking_pending(booking: Booking, lead: Lead) -> tuple[str, str]:
@@ -67,12 +173,18 @@ def _render_booking_reminder(booking: Booking, lead: Lead) -> tuple[str, str]:
 
 def _render_booking_completed(booking: Booking, lead: Lead) -> tuple[str, str]:
     subject = "Thanks for choosing us — quick review?"
-    body = (
-        f"Hi {lead.name},\n\n"
-        "Thanks for letting us clean your place. If you have a moment, we'd love a quick review.\n\n"
-        "Review link: https://example.com/review-placeholder\n\n"
-        "If anything was missed, reply so we can make it right."
-    )
+    review_link = None
+    base = _public_base_url()
+    if base:
+        review_link = f"{base}/reviews" if base else None
+    body_parts = [
+        f"Hi {lead.name},\n\n",
+        "Thanks for letting us clean your place. If you have a moment, we'd love a quick review.\n\n",
+    ]
+    if review_link:
+        body_parts.append(f"Review link: {review_link}\n\n")
+    body_parts.append("If anything was missed, reply so we can make it right.")
+    body = "".join(body_parts)
     return subject, body
 
 
@@ -88,6 +200,20 @@ def _render_nps_survey(lead: Lead, survey_link: str) -> tuple[str, str]:
     return subject, body
 
 
+def _unsubscribe_link(recipient: str, scope: str, org_id) -> str | None:
+    base = _public_base_url()
+    if not base:
+        return None
+    token = issue_unsubscribe_token(recipient, scope, org_id)
+    return f"{base}/unsubscribe?token={token}"
+
+
+def _with_unsubscribe(body: str, unsubscribe_url: str | None) -> str:
+    if not unsubscribe_url:
+        return body
+    return body + "\n\nTo stop these messages, unsubscribe: " + unsubscribe_url
+
+
 async def _try_send_email(
     adapter: EmailAdapter | None,
     recipient: str,
@@ -95,12 +221,15 @@ async def _try_send_email(
     body: str,
     *,
     context: dict | None = None,
+    headers: dict[str, str] | None = None,
 ) -> bool:
     if adapter is None:
         logger.warning("email_adapter_missing", extra={"extra": context or {}})
         return False
     try:
-        delivered = await adapter.send_email(recipient=recipient, subject=subject, body=body)
+        delivered = await adapter.send_email(
+            recipient=recipient, subject=subject, body=body, headers=headers
+        )
         return bool(delivered)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
@@ -110,23 +239,106 @@ async def _try_send_email(
         return False
 
 
-async def _already_sent(
+def _next_retry_at(attempt: int) -> datetime:
+    delay = settings.email_retry_backoff_seconds * max(1, 2 ** (attempt - 1))
+    return datetime.now(tz=timezone.utc) + timedelta(seconds=delay)
+
+
+async def _record_failure(
     session: AsyncSession,
-    email_type: str,
     *,
-    booking_id: str | None = None,
-    invoice_id: str | None = None,
-) -> bool:
-    if booking_id is None and invoice_id is None:
-        raise ValueError("email_event_scope_missing")
-    conditions = [EmailEvent.email_type == email_type]
-    if booking_id is not None:
-        conditions.append(EmailEvent.booking_id == booking_id)
-    if invoice_id is not None:
-        conditions.append(EmailEvent.invoice_id == invoice_id)
-    stmt = select(EmailEvent.event_id).where(and_(*conditions))
-    result = await session.execute(stmt)
-    return result.scalar_one_or_none() is not None
+    event_id: str | None,
+    dedupe_key: str,
+    email_type: str,
+    recipient: str,
+    subject: str,
+    body: str,
+    booking_id: str | None,
+    invoice_id: str | None,
+    org_id,
+    error: str,
+) -> None:
+    existing_stmt = select(EmailFailure).where(
+        EmailFailure.org_id == org_id,
+        EmailFailure.dedupe_key == dedupe_key,
+        EmailFailure.status == "pending",
+    )
+    existing = (await session.execute(existing_stmt)).scalar_one_or_none()
+    attempt = (existing.attempt_count if existing else 0) + 1
+    status = "pending"
+    if attempt >= settings.email_max_retries:
+        status = "dead"
+    values = {
+        "email_event_id": event_id,
+        "dedupe_key": dedupe_key,
+        "email_type": email_type,
+        "recipient": _normalize_email(recipient),
+        "subject": subject,
+        "body": body,
+        "booking_id": booking_id,
+        "invoice_id": invoice_id,
+        "attempt_count": attempt,
+        "max_retries": settings.email_max_retries,
+        "status": status,
+        "last_error": error,
+        "next_retry_at": None if status == "dead" else _next_retry_at(attempt),
+        "org_id": org_id,
+    }
+    if existing:
+        await session.execute(
+            update(EmailFailure)
+            .where(EmailFailure.failure_id == existing.failure_id)
+            .values(**values)
+        )
+    else:
+        await session.execute(insert(EmailFailure).values(**values))
+
+
+async def _reserve_email_event(
+    session: AsyncSession,
+    *,
+    email_type: str,
+    recipient: str,
+    subject: str,
+    body: str,
+    booking_id: str | None,
+    invoice_id: str | None,
+    org_id,
+    ) -> tuple[str | None, str]:
+    dedupe_key = _dedupe_key(email_type, recipient, booking_id=booking_id, invoice_id=invoice_id)
+    base_stmt = insert(EmailEvent).values(
+        booking_id=booking_id,
+        invoice_id=invoice_id,
+        email_type=email_type,
+        recipient=recipient,
+        subject=subject,
+        body=body,
+        org_id=org_id,
+        dedupe_key=dedupe_key,
+    )
+    dialect = session.get_bind().dialect.name if session.get_bind() else ""
+    if hasattr(base_stmt, "on_conflict_do_nothing"):
+        stmt = base_stmt.on_conflict_do_nothing(index_elements=["org_id", "dedupe_key"])
+        stmt = stmt.returning(EmailEvent.event_id)
+        event_id = (await session.execute(stmt)).scalar_one_or_none()
+        return event_id, dedupe_key
+    if dialect == "sqlite":
+        result = await session.execute(base_stmt.prefix_with("OR IGNORE"))
+        if result.rowcount == 0:
+            return None, dedupe_key
+        fetch = await session.execute(
+            select(EmailEvent.event_id).where(
+                EmailEvent.dedupe_key == dedupe_key, EmailEvent.org_id == org_id
+            )
+        )
+        return fetch.scalar_one_or_none(), dedupe_key
+    result = await session.execute(base_stmt)
+    if result.rowcount == 0:
+        return None, dedupe_key
+    fetch = await session.execute(
+        select(EmailEvent.event_id).where(EmailEvent.dedupe_key == dedupe_key, EmailEvent.org_id == org_id)
+    )
+    return fetch.scalar_one_or_none(), dedupe_key
 
 
 async def _send_with_record(
@@ -142,33 +354,56 @@ async def _send_with_record(
 ) -> bool:
     if not lead.email:
         return False
-    if dedupe and await _already_sent(
-        session, email_type, booking_id=booking.booking_id, invoice_id=invoice_id
-    ):
+    subject, body = render(booking, lead)
+    org_id = getattr(booking, "org_id", settings.default_org_id)
+    scope = EMAIL_SCOPES.get(email_type)
+    if scope and await _is_unsubscribed(session, lead.email, scope, org_id):
+        return False
+    unsubscribe_url = _unsubscribe_link(lead.email, scope, org_id) if scope else None
+    headers = {"List-Unsubscribe": f"<{unsubscribe_url}>"} if unsubscribe_url else None
+    if scope:
+        body = _with_unsubscribe(body, unsubscribe_url)
+
+    event_id, dedupe_key = await _reserve_email_event(
+        session,
+        email_type=email_type,
+        recipient=lead.email,
+        subject=subject,
+        body=body,
+        booking_id=booking.booking_id,
+        invoice_id=invoice_id,
+        org_id=org_id,
+    )
+    if event_id is None:
         return False
 
-    subject, body = render(booking, lead)
     delivered = await _try_send_email(
         adapter,
         lead.email,
         subject,
         body,
         context={"booking_id": booking.booking_id, "email_type": email_type},
+        headers=headers,
     )
-    if not delivered:
-        return False
+    if delivered:
+        await session.commit()
+        return True
 
-    event = EmailEvent(
-        booking_id=booking.booking_id,
-        invoice_id=invoice_id,
+    await _record_failure(
+        session,
+        event_id=event_id,
+        dedupe_key=dedupe_key,
         email_type=email_type,
         recipient=lead.email,
         subject=subject,
         body=body,
+        booking_id=booking.booking_id,
+        invoice_id=invoice_id,
+        org_id=org_id,
+        error="send_failed",
     )
-    session.add(event)
     await session.commit()
-    return True
+    return False
 
 
 async def send_booking_pending_email(
@@ -287,16 +522,23 @@ async def send_invoice_sent_email(
     *,
     public_link: str,
     public_link_pdf: str,
-    dedupe: bool = True,
 ) -> bool:
     if not lead.email:
         return False
-    if dedupe and await _already_sent(
-        session, EMAIL_TYPE_INVOICE_SENT, invoice_id=invoice.invoice_id
-    ):
-        return False
-
     subject, body = _render_invoice_sent(invoice, lead, public_link, public_link_pdf)
+    org_id = getattr(invoice, "org_id", settings.default_org_id)
+    event_id, dedupe_key = await _reserve_email_event(
+        session,
+        email_type=EMAIL_TYPE_INVOICE_SENT,
+        recipient=lead.email,
+        subject=subject,
+        body=body,
+        booking_id=invoice.order_id,
+        invoice_id=invoice.invoice_id,
+        org_id=org_id,
+    )
+    if event_id is None:
+        return False
     delivered = await _try_send_email(
         adapter,
         lead.email,
@@ -304,20 +546,24 @@ async def send_invoice_sent_email(
         body,
         context={"invoice_id": invoice.invoice_id, "email_type": EMAIL_TYPE_INVOICE_SENT},
     )
-    if not delivered:
-        return False
-
-    event = EmailEvent(
-        booking_id=invoice.order_id,
-        invoice_id=invoice.invoice_id,
+    if delivered:
+        await session.commit()
+        return True
+    await _record_failure(
+        session,
+        event_id=event_id,
+        dedupe_key=dedupe_key,
         email_type=EMAIL_TYPE_INVOICE_SENT,
         recipient=lead.email,
         subject=subject,
         body=body,
+        booking_id=invoice.order_id,
+        invoice_id=invoice.invoice_id,
+        org_id=org_id,
+        error="send_failed",
     )
-    session.add(event)
     await session.commit()
-    return True
+    return False
 
 
 async def send_invoice_overdue_email(
@@ -327,16 +573,23 @@ async def send_invoice_overdue_email(
     lead: Lead,
     *,
     public_link: str,
-    dedupe: bool = True,
 ) -> bool:
     if not lead.email:
         return False
-    if dedupe and await _already_sent(
-        session, EMAIL_TYPE_INVOICE_OVERDUE, invoice_id=invoice.invoice_id
-    ):
-        return False
-
     subject, body = _render_invoice_overdue(invoice, lead, public_link)
+    org_id = getattr(invoice, "org_id", settings.default_org_id)
+    event_id, dedupe_key = await _reserve_email_event(
+        session,
+        email_type=EMAIL_TYPE_INVOICE_OVERDUE,
+        recipient=lead.email,
+        subject=subject,
+        body=body,
+        booking_id=invoice.order_id,
+        invoice_id=invoice.invoice_id,
+        org_id=org_id,
+    )
+    if event_id is None:
+        return False
     delivered = await _try_send_email(
         adapter,
         lead.email,
@@ -344,20 +597,24 @@ async def send_invoice_overdue_email(
         body,
         context={"invoice_id": invoice.invoice_id, "email_type": EMAIL_TYPE_INVOICE_OVERDUE},
     )
-    if not delivered:
-        return False
-
-    event = EmailEvent(
-        booking_id=invoice.order_id,
-        invoice_id=invoice.invoice_id,
+    if delivered:
+        await session.commit()
+        return True
+    await _record_failure(
+        session,
+        event_id=event_id,
+        dedupe_key=dedupe_key,
         email_type=EMAIL_TYPE_INVOICE_OVERDUE,
         recipient=lead.email,
         subject=subject,
         body=body,
+        booking_id=invoice.order_id,
+        invoice_id=invoice.invoice_id,
+        org_id=org_id,
+        error="send_failed",
     )
-    session.add(event)
     await session.commit()
-    return True
+    return False
 
 
 async def scan_and_send_reminders(session: AsyncSession, adapter: EmailAdapter | None) -> dict[str, int]:
@@ -415,7 +672,71 @@ async def resend_last_email(
         recipient=event.recipient,
         subject=event.subject,
         body=event.body,
+        dedupe_key=_dedupe_key(event.email_type, event.recipient, booking_id=booking_id),
     )
     session.add(replay)
     await session.commit()
     return {"booking_id": booking_id, "email_type": event.email_type, "recipient": event.recipient}
+
+
+async def retry_email_failures(session: AsyncSession, adapter: EmailAdapter | None) -> dict[str, int]:
+    now = datetime.now(tz=timezone.utc)
+    stmt = (
+        select(EmailFailure)
+        .where(EmailFailure.status == "pending", EmailFailure.next_retry_at <= now)
+        .order_by(EmailFailure.next_retry_at)
+        .limit(100)
+    )
+    result = await session.execute(stmt)
+    failures = result.scalars().all()
+    sent = 0
+    dead = 0
+    for failure in failures:
+        scope = EMAIL_SCOPES.get(failure.email_type)
+        if scope and await _is_unsubscribed(session, failure.recipient, scope, failure.org_id):
+            await session.execute(
+                update(EmailFailure)
+                .where(EmailFailure.failure_id == failure.failure_id)
+                .values(status="dead", last_error="unsubscribed", next_retry_at=None)
+            )
+            dead += 1
+            continue
+        delivered = await _try_send_email(
+            adapter,
+            failure.recipient,
+            failure.subject,
+            failure.body,
+            context={"email_type": failure.email_type, "failure_id": failure.failure_id},
+        )
+        if delivered:
+            await session.execute(
+                update(EmailFailure)
+                .where(EmailFailure.failure_id == failure.failure_id)
+                .values(
+                    status="sent",
+                    last_error=None,
+                    next_retry_at=None,
+                    attempt_count=failure.attempt_count + 1,
+                )
+            )
+            sent += 1
+            continue
+
+        attempt = failure.attempt_count + 1
+        status = "dead" if attempt >= failure.max_retries else "pending"
+        next_retry = None if status == "dead" else _next_retry_at(attempt)
+        await session.execute(
+            update(EmailFailure)
+            .where(EmailFailure.failure_id == failure.failure_id)
+            .values(
+                attempt_count=attempt,
+                status=status,
+                next_retry_at=next_retry,
+                last_error="send_failed",
+            )
+        )
+        if status == "dead":
+            dead += 1
+
+    await session.commit()
+    return {"sent": sent, "dead": dead, "checked": len(failures)}

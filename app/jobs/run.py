@@ -45,6 +45,8 @@ def _job_runner(name: str, base_url: str | None = None) -> Callable:
         return lambda session: email_jobs.run_invoice_notifications(session, _ADAPTER, base_url=base_url)
     if name == "nps-send":
         return lambda session: email_jobs.run_nps_sends(session, _ADAPTER, base_url=base_url)
+    if name == "email-dlq":
+        return lambda session: email_jobs.run_email_dlq(session, _ADAPTER)
     raise ValueError(f"unknown_job:{name}")
 
 
@@ -61,7 +63,7 @@ async def main(argv: list[str] | None = None) -> None:
     configure_metrics(settings.metrics_enabled)
     session_factory = get_session_factory()
 
-    job_names = args.jobs or ["booking-reminders", "invoice-reminders", "nps-send"]
+    job_names = args.jobs or ["booking-reminders", "invoice-reminders", "nps-send", "email-dlq"]
     runners = [_job_runner(name, base_url=args.base_url) for name in job_names]
 
     while True:
