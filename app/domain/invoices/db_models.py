@@ -15,7 +15,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.domain.saas.db_models import UUID_TYPE
 from app.infra.db import Base
@@ -53,6 +53,8 @@ class Invoice(Base):
     )
     invoice_number: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
     order_id: Mapped[str | None] = mapped_column(ForeignKey("bookings.booking_id"), index=True)
+    # Backward compatibility alias: booking_id → order_id
+    booking_id = synonym("order_id")
     customer_id: Mapped[str | None] = mapped_column(ForeignKey("leads.lead_id"), index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     issue_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -204,3 +206,37 @@ class InvoicePublicToken(Base):
     last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     invoice: Mapped[Invoice] = relationship("Invoice", back_populates="public_token")
+
+    def __init__(self, **kwargs):
+        """
+        Custom __init__ to support passing plaintext `token` parameter.
+
+        If `token` is provided, it will be hashed and stored in `token_hash`.
+        The plaintext token is stored temporarily as an instance variable
+        for immediate access after creation.
+        """
+        # Import here to avoid circular dependencies
+        from app.domain.invoices.service import hash_public_token
+
+        # Extract plaintext token if provided
+        if "token" in kwargs:
+            plaintext_token = kwargs.pop("token")
+            self._plaintext_token = plaintext_token
+            # Compute and store hash
+            kwargs["token_hash"] = hash_public_token(plaintext_token)
+        else:
+            self._plaintext_token = None
+
+        # Call parent __init__
+        super().__init__(**kwargs)
+
+    @property
+    def token(self) -> str | None:
+        """
+        Returns the plaintext token if available (only right after creation).
+        Returns None if the token was not provided during initialization.
+
+        Note: The plaintext token is never persisted to the database.
+        Only the hash is stored for security.
+        """
+        return getattr(self, "_plaintext_token", None)

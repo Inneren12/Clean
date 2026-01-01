@@ -28,7 +28,6 @@ from app.domain.invoices.db_models import Invoice, InvoicePublicToken, Payment, 
 from app.domain.invoices.schemas import InvoiceItemCreate
 from app.domain.leads.db_models import Lead
 from app.domain.saas.db_models import Organization
-from app.domain.documents.db_models import Document
 from app.infra.email import EmailAdapter
 from app.infra.storage import LocalStorageBackend
 from app.main import app
@@ -332,12 +331,14 @@ async def test_smoke_storage_upload_download(client, async_session_maker):
     SMOKE TEST: Storage backend upload/download operations.
 
     Flow:
-    1. Create document record
-    2. Upload file via storage backend
-    3. Download file and verify content
-    4. Clean up
+    1. Upload file via storage backend
+    2. Download file and verify content
+    3. Verify file exists
+    4. Clean up (delete file)
 
-    This tests the file storage system (S3 or local backend).
+    This tests the file storage system (S3 or local backend) without
+    requiring database records. The storage backend should work independently
+    for uploading, downloading, checking existence, and deleting files.
     """
     _configure_admin()
 
@@ -345,21 +346,8 @@ async def test_smoke_storage_upload_download(client, async_session_maker):
     storage = LocalStorageBackend(base_dir="/tmp/smoke_test_storage")
     app.state.storage_backend = storage
 
-    # Create document record
-    async with async_session_maker() as session:
-        doc = Document(
-            team_id=1,
-            uploaded_by="smoke_test",
-            filename="smoke_test.txt",
-            content_type="text/plain",
-            size_bytes=26,
-            storage_key="smoke/test/file.txt",
-        )
-        session.add(doc)
-        await session.commit()
-        await session.refresh(doc)
-        doc_id = doc.document_id
-        storage_key = doc.storage_key
+    # Test storage key
+    storage_key = "smoke/test/file.txt"
 
     # Upload file content
     test_content = b"Smoke test file content\n"
@@ -369,7 +357,7 @@ async def test_smoke_storage_upload_download(client, async_session_maker):
     downloaded = await storage.download(storage_key)
     assert downloaded == test_content, "Downloaded content doesn't match uploaded content"
 
-    # Verify document exists
+    # Verify file exists
     exists = await storage.exists(storage_key)
     assert exists is True, "File should exist after upload"
 

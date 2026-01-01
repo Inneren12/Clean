@@ -54,3 +54,57 @@ def test_routes_leads_imports_without_error():
     from app.api.routes_leads import router
 
     assert router is not None
+
+
+def test_invoice_accepts_booking_id_parameter():
+    """
+    Invoice model should accept booking_id as a synonym for order_id.
+
+    This is a backward compatibility requirement - even though the canonical
+    field is order_id, booking_id should work via synonym.
+    """
+    from datetime import date
+    from app.domain.invoices.db_models import Invoice
+    from app.domain.invoices import statuses
+
+    # Test that booking_id parameter is accepted
+    invoice = Invoice(
+        invoice_number="TEST-001",
+        booking_id="test-booking-123",  # Using booking_id instead of order_id
+        status=statuses.INVOICE_STATUS_DRAFT,
+        issue_date=date.today(),
+        currency="CAD",
+        subtotal_cents=1000,
+        tax_cents=50,
+        total_cents=1050,
+    )
+
+    # Verify the synonym mapped correctly
+    assert invoice.order_id == "test-booking-123"
+    assert invoice.booking_id == "test-booking-123"
+
+
+def test_invoice_public_token_accepts_token_parameter():
+    """
+    InvoicePublicToken should accept plaintext token and store hash.
+
+    This tests backward compatibility for creating tokens with plaintext
+    while maintaining security by storing only the hash.
+    """
+    import uuid
+    from app.domain.invoices.db_models import InvoicePublicToken
+
+    plaintext_token = uuid.uuid4().hex
+
+    # Test that token parameter is accepted
+    public_token = InvoicePublicToken(
+        invoice_id="test-invoice-123",
+        token=plaintext_token,  # Plaintext token provided
+    )
+
+    # Verify token is accessible right after creation
+    assert public_token.token == plaintext_token
+
+    # Verify token_hash is computed and stored
+    assert public_token.token_hash is not None
+    assert len(public_token.token_hash) == 64  # SHA256 hex = 64 chars
