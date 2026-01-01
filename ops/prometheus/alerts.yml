@@ -1,0 +1,85 @@
+# Prometheus alerting rules for the Clean API.
+# Replace job/service labels to match your scrape configuration before deploying.
+groups:
+  - name: clean-service-availability
+    rules:
+      - alert: ServiceNotReady
+        expr: max_over_time(probe_success{job="clean-readyz"}[2m]) == 0
+        for: 5m
+        labels:
+          severity: page
+          service: clean
+        annotations:
+          summary: "Clean API readiness probe failing"
+          description: |
+            The readiness probe on /readyz has returned non-200 responses for 5+ minutes.
+            Verify the API process is healthy and dependencies (DB, queues) are reachable.
+            Adjust the `job` label selector to your readiness probe job name.
+
+      - alert: HighErrorRate
+        expr: |
+          (sum(rate(http_5xx_total[5m])) / clamp_min(sum(rate(http_request_latency_seconds_count[5m])), 1)) > 0.02
+          and sum(rate(http_request_latency_seconds_count[5m])) > 0.2
+        for: 10m
+        labels:
+          severity: page
+          service: clean
+        annotations:
+          summary: "Clean API 5xx rate above 2%"
+          description: |
+            More than 2% of requests are returning 5xx responses over the last 10 minutes
+            with at least 0.2 req/s of traffic. Check recent deployments, upstream dependencies,
+            and application logs for the offending paths.
+
+  - name: clean-jobs
+    rules:
+      - alert: JobsRunnerStale
+        expr: time() - job_last_heartbeat_timestamp{job="jobs-runner"} > 300
+        for: 2m
+        labels:
+          severity: page
+          service: clean
+        annotations:
+          summary: "Jobs runner heartbeat missing"
+          description: |
+            The jobs runner heartbeat is older than 5 minutes. Inspect the jobs-runner process
+            or container, restart if needed, and validate job success timestamps.
+
+      - alert: EmailJobFailures
+        expr: increase(email_jobs_total{status="error"}[10m]) > 0
+        for: 5m
+        labels:
+          severity: ticket
+          service: clean
+        annotations:
+          summary: "Email job errors detected"
+          description: |
+            Email jobs reported errors in the last 10 minutes. Check job logs for failures
+            (credentials, template rendering, network) and clear any DLQ backlog once fixed.
+
+  - name: clean-integrations
+    rules:
+      - alert: StripeWebhookErrors
+        expr: increase(webhook_errors_total{type=~"invalid_signature|processing_error|payload_mismatch"}[10m]) > 3
+        for: 10m
+        labels:
+          severity: ticket
+          service: clean
+        annotations:
+          summary: "Stripe webhook errors are spiking"
+          description: |
+            Stripe webhook processing is failing repeatedly (signature, payload, or processing errors).
+            Confirm Stripe signing secret, review recent deploys, and replay events after mitigation.
+
+      - alert: DBPoolExhaustion
+        expr: increase(db_pool_timeout_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: page
+          service: clean
+        annotations:
+          summary: "Database pool timeouts observed"
+          description: |
+            Database pool timeouts exceeded 5 in 5 minutes. Investigate long-running queries,
+            connection leaks, or insufficient pool sizing. Consider increasing pool size only after
+            verifying workload characteristics.
