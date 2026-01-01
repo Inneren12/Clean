@@ -1,11 +1,13 @@
 import asyncio
 import logging
+import uuid
 
 import anyio
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api import entitlements
 from app.dependencies import get_db_session
 from app.domain.analytics.service import (
     EventType,
@@ -82,6 +84,7 @@ async def create_lead(
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
 ) -> LeadResponse:
+    org_id = getattr(http_request.state, "org_id", None) or entitlements.resolve_org_id(http_request)
     turnstile_transport = getattr(http_request.app.state, "turnstile_transport", None)
     remote_ip = http_request.client.host if http_request.client else None
     captcha_ok = await verify_turnstile(request.captcha_token, remote_ip, transport=turnstile_transport)
@@ -101,7 +104,9 @@ async def create_lead(
         referrer: Lead | None = None
         if request.referral_code:
             result = await session.execute(
-                select(Lead).where(Lead.referral_code == request.referral_code)
+                select(Lead).where(
+                    Lead.referral_code == request.referral_code, Lead.org_id == org_id
+                )
             )
             referrer = result.scalar_one_or_none()
             if referrer is None:
@@ -131,6 +136,7 @@ async def create_lead(
             utm_content=utm_content,
             referrer=request.referrer,
             referred_by_code=request.referral_code if referrer else None,
+            org_id=uuid.UUID(str(org_id)),
         )
         session.add(lead)
         await ensure_unique_referral_code(session, lead)
