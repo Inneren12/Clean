@@ -343,11 +343,13 @@ async def client_photo_signed_url(
 @router.get("/client/invoices/{invoice_id}")
 async def invoice_detail(
     invoice_id: str,
+    request: Request,
     identity: client_schemas.ClientIdentity = Depends(require_identity),
     session: AsyncSession = Depends(get_db_session),
 ) -> client_schemas.ClientInvoiceResponse:
+    org_id = entitlements.resolve_org_id(request)
     invoice = await session.get(Invoice, invoice_id)
-    if not invoice:
+    if not invoice or invoice.org_id != org_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
 
     if invoice.order_id:

@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api import entitlements
 from app.domain.bookings import service as booking_service
 from app.domain.bookings.db_models import Booking
 from app.domain.invoices import schemas as invoice_schemas, service as invoice_service, statuses as invoice_statuses
@@ -416,8 +417,9 @@ async def create_invoice_payment_checkout(
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
 ) -> invoice_schemas.InvoicePaymentInitResponse:
+    org_id = entitlements.resolve_org_id(http_request)
     invoice = await session.get(Invoice, invoice_id, options=[selectinload(Invoice.payments)])
-    if invoice is None:
+    if invoice is None or invoice.org_id != org_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
     if invoice.status == invoice_statuses.INVOICE_STATUS_VOID:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invoice is void")
