@@ -1,9 +1,6 @@
 import asyncio
 import base64
 from datetime import datetime, timedelta, timezone
-import asyncio
-import base64
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import uuid
 
@@ -45,7 +42,8 @@ def smoke_org(async_session_maker):
         async with async_session_maker() as session:
             session.add(Organization(org_id=org_id, name="Smoke Org"))
             await session.commit()
-    asyncio.get_event_loop().run_until_complete(_create_org())
+
+    asyncio.run(_create_org())
     return org_id
 
 
@@ -98,7 +96,7 @@ def test_booking_invoice_payment_email_and_storage(client, async_session_maker, 
             await session.refresh(booking)
             return booking.booking_id
 
-    booking_id = asyncio.get_event_loop().run_until_complete(_seed_booking())
+    booking_id = asyncio.run(_seed_booking())
 
     # Create invoice from booking and trigger invoice email send
     email_adapter = RecordingEmailAdapter()
@@ -119,7 +117,7 @@ def test_booking_invoice_payment_email_and_storage(client, async_session_maker, 
             await session.commit()
             return token
 
-    public_token = asyncio.get_event_loop().run_until_complete(_create_invoice())
+    public_token = asyncio.run(_create_invoice())
 
     send_resp = client.post(f"/v1/admin/invoices/{public_token}/send", headers=headers)
     assert send_resp.status_code == 404, "send should not accept token"
@@ -153,7 +151,7 @@ def test_booking_invoice_payment_email_and_storage(client, async_session_maker, 
             )
             return invoice.status if invoice else "", int(payments or 0)
 
-    status_value, payment_count = asyncio.get_event_loop().run_until_complete(_invoice_status())
+    status_value, payment_count = asyncio.run(_invoice_status())
     assert status_value == invoice_statuses.INVOICE_STATUS_PAID
     assert payment_count == 1
 

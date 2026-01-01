@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.domain.bookings import db_models as booking_db_models
 from app.domain.bookings.service import WORK_END_HOUR, WORK_START_HOUR
+from app.domain.saas.service import ensure_default_org_and_team
 from app.domain.saas import db_models as saas_db_models
 from app.infra.db import Base
 from app.settings import settings
@@ -24,15 +25,11 @@ async def _ensure_connection(engine) -> None:
 def test_engine():
     engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     try:
-        asyncio.get_event_loop()
-    except RuntimeError:
-        asyncio.set_event_loop(asyncio.new_event_loop())
-    try:
-        asyncio.get_event_loop().run_until_complete(_ensure_connection(engine))
+        asyncio.run(_ensure_connection(engine))
     except Exception:
         pytest.skip("Postgres is required for smoke tests")
     yield engine
-    asyncio.get_event_loop().run_until_complete(engine.dispose())
+    asyncio.run(engine.dispose())
 
 
 @pytest.fixture(scope="session")
@@ -48,11 +45,10 @@ def clean_database(test_engine):
             if table_names:
                 joined = ", ".join(f'"{name}"' for name in table_names)
                 await conn.execute(sa.text(f"TRUNCATE TABLE {joined} RESTART IDENTITY CASCADE"))
-            await conn.execute(sa.insert(booking_db_models.Team).values(team_id=1, name="Default Team"))
-            await conn.execute(
-                sa.insert(saas_db_models.Organization).values(org_id=DEFAULT_ORG_ID, name="Default Org"),
-            )
-            await conn.execute(
+        seed_session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+        async with seed_session_factory() as session:
+            await ensure_default_org_and_team(session)
+            await session.execute(
                 sa.insert(booking_db_models.TeamWorkingHours),
                 [
                     {
@@ -64,7 +60,8 @@ def clean_database(test_engine):
                     for day in range(7)
                 ],
             )
-    asyncio.get_event_loop().run_until_complete(_reset())
+            await session.commit()
+    asyncio.run(_reset())
     yield
 
 
