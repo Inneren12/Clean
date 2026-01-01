@@ -31,6 +31,10 @@ class Settings(BaseSettings):
         "postgresql+psycopg://postgres:postgres@postgres:5432/cleaning",
         env="DATABASE_URL",
     )
+    database_pool_size: int = Field(5, env="DATABASE_POOL_SIZE")
+    database_max_overflow: int = Field(5, env="DATABASE_MAX_OVERFLOW")
+    database_pool_timeout_seconds: float = Field(30.0, env="DATABASE_POOL_TIMEOUT_SECONDS")
+    database_statement_timeout_ms: int = Field(5000, env="DATABASE_STATEMENT_TIMEOUT_MS")
     email_mode: Literal["off", "sendgrid", "smtp"] = Field("off", env="EMAIL_MODE")
     email_from: str | None = Field(None, env="EMAIL_FROM")
     email_from_name: str | None = Field(None, env="EMAIL_FROM_NAME")
@@ -102,6 +106,8 @@ class Settings(BaseSettings):
         "http://localhost:3000/billing",
         env="STRIPE_BILLING_PORTAL_RETURN_URL",
     )
+    stripe_circuit_failure_threshold: int = Field(5, env="STRIPE_CIRCUIT_FAILURE_THRESHOLD")
+    stripe_circuit_recovery_seconds: float = Field(30.0, env="STRIPE_CIRCUIT_RECOVERY_SECONDS")
     client_portal_secret: str = Field("dev-client-portal-secret", env="CLIENT_PORTAL_SECRET")
     worker_portal_secret: str | None = Field(None, env="WORKER_PORTAL_SECRET")
     client_portal_token_ttl_minutes: int = Field(30, env="CLIENT_PORTAL_TOKEN_TTL_MINUTES")
@@ -137,6 +143,10 @@ class Settings(BaseSettings):
     job_heartbeat_ttl_seconds: int = Field(300, env="JOB_HEARTBEAT_TTL_SECONDS")
     email_max_retries: int = Field(3, env="EMAIL_MAX_RETRIES")
     email_retry_backoff_seconds: float = Field(60.0, env="EMAIL_RETRY_BACKOFF_SECONDS")
+    email_timeout_seconds: float = Field(10.0, env="EMAIL_TIMEOUT_SECONDS")
+    smtp_timeout_seconds: float = Field(10.0, env="SMTP_TIMEOUT_SECONDS")
+    email_circuit_failure_threshold: int = Field(5, env="EMAIL_CIRCUIT_FAILURE_THRESHOLD")
+    email_circuit_recovery_seconds: float = Field(30.0, env="EMAIL_CIRCUIT_RECOVERY_SECONDS")
     email_unsubscribe_secret: str | None = Field(None, env="EMAIL_UNSUBSCRIBE_SECRET")
     email_unsubscribe_ttl_minutes: int = Field(7 * 24 * 60, env="EMAIL_UNSUBSCRIBE_TTL_MINUTES")
     default_org_id: uuid.UUID = Field(

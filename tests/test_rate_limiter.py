@@ -5,6 +5,8 @@ import anyio
 import pytest
 from redis.exceptions import ResponseError
 
+from redis.exceptions import RedisError
+
 from app.infra.security import InMemoryRateLimiter, RedisRateLimiter, create_rate_limiter
 
 
@@ -157,6 +159,25 @@ async def test_redis_rate_limiter_uses_lua_script():
 
 
 @pytest.mark.anyio
+async def test_redis_rate_limiter_fails_closed_on_redis_errors():
+    class BrokenRedis(FakeRedis):
+        async def evalsha(self, sha: str, numkeys: int, *args):  # noqa: ARG002
+            raise RedisError("boom")
+
+        async def eval(self, script: str, numkeys: int, *args):  # noqa: ARG002
+            raise RedisError("boom")
+
+    limiter = RedisRateLimiter(
+        "redis://localhost:6379/0",
+        requests_per_minute=2,
+        cleanup_minutes=1,
+        redis_client=BrokenRedis(),
+    )
+
+    assert not await limiter.allow("client-5")
+
+
+@pytest.mark.anyio
 async def test_rate_limiter_defaults_to_inmemory(monkeypatch):
     class AppSettings:
         redis_url = None
@@ -166,4 +187,24 @@ async def test_rate_limiter_defaults_to_inmemory(monkeypatch):
     limiter = create_rate_limiter(AppSettings())
 
     assert isinstance(limiter, InMemoryRateLimiter)
-    assert await limiter.allow("client-5")
+    assert await limiter.allow("client-6")
+
+
+@pytest.mark.anyio
+async def test_inmemory_rate_limiter_is_protected_by_lock():
+    limiter = InMemoryRateLimiter(requests_per_minute=1, cleanup_minutes=1)
+
+    start = anyio.Event()
+    results: list[bool] = []
+
+    async def attempt():
+        await start.wait()
+        results.append(await limiter.allow("client-7"))
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(attempt)
+        tg.start_soon(attempt)
+        await anyio.sleep(0)
+        start.set()
+
+    assert sorted(results) == [False, True]

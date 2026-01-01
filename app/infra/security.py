@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 from collections import defaultdict, deque
@@ -28,20 +29,22 @@ class InMemoryRateLimiter:
         self._requests: Dict[str, Deque[float]] = defaultdict(deque)
         self._last_seen: Dict[str, float] = {}
         self._last_prune: float = 0.0
+        self._lock = asyncio.Lock()
 
     async def allow(self, key: str) -> bool:
-        now = time.time()
-        self._maybe_prune(now)
-        window_start = now - 60
-        timestamps = self._requests[key]
-        while timestamps and timestamps[0] < window_start:
-            timestamps.popleft()
-        if len(timestamps) >= self.requests_per_minute:
+        async with self._lock:
+            now = time.time()
+            self._maybe_prune(now)
+            window_start = now - 60
+            timestamps = self._requests[key]
+            while timestamps and timestamps[0] < window_start:
+                timestamps.popleft()
+            if len(timestamps) >= self.requests_per_minute:
+                self._last_seen[key] = now
+                return False
+            timestamps.append(now)
             self._last_seen[key] = now
-            return False
-        timestamps.append(now)
-        self._last_seen[key] = now
-        return True
+            return True
 
     async def reset(self) -> None:
         self._requests.clear()
@@ -109,8 +112,8 @@ class RedisRateLimiter:
             allowed = await self._eval_script(set_key, seq_key)
             return bool(allowed)
         except RedisError:
-            logger.warning("redis rate limiter unavailable; allowing request")
-            return True
+            logger.warning("redis rate limiter unavailable; rejecting request")
+            return False
 
     async def reset(self) -> None:
         try:

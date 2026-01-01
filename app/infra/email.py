@@ -8,6 +8,7 @@ import anyio
 import httpx
 
 from app.settings import settings
+from app.shared.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,11 @@ class NoopEmailAdapter:
 class EmailAdapter:
     def __init__(self, http_client: httpx.AsyncClient | None = None) -> None:
         self.http_client = http_client
+        self._breaker = CircuitBreaker(
+            name="email",
+            failure_threshold=settings.email_circuit_failure_threshold,
+            recovery_time=settings.email_circuit_recovery_seconds,
+        )
 
     async def send_email(
         self, recipient: str, subject: str, body: str, *, headers: dict[str, str] | None = None
@@ -40,7 +46,13 @@ class EmailAdapter:
             return False
         if not recipient:
             return False
-        await self._send_email(to_email=recipient, subject=subject, body=body, headers=headers)
+        try:
+            await self._breaker.call(
+                self._send_email, to_email=recipient, subject=subject, body=body, headers=headers
+            )
+        except CircuitBreakerOpenError:
+            logger.warning("email_circuit_open", extra={"extra": {"recipient": recipient}})
+            raise
         return True
 
     async def send_request_received(self, lead: Any) -> None:
@@ -116,11 +128,10 @@ class EmailAdapter:
         client = self.http_client or httpx.AsyncClient()
         close_client = self.http_client is None
         try:
-            response = await client.post(
-                "https://api.sendgrid.com/v3/mail/send",
+            response = await _post_with_retry(
+                client,
                 headers={"Authorization": f"Bearer {api_key}"},
                 json=payload,
-                timeout=10,
             )
         finally:
             if close_client:
@@ -154,13 +165,13 @@ class EmailAdapter:
 
         def _send_blocking() -> None:
             if settings.smtp_use_tls:
-                with smtplib.SMTP(host, port) as smtp:
+                with smtplib.SMTP(host, port, timeout=settings.smtp_timeout_seconds) as smtp:
                     smtp.starttls()
                     if username and password:
                         smtp.login(username, password)
                     smtp.send_message(message)
             else:
-                with smtplib.SMTP_SSL(host, port) as smtp:
+                with smtplib.SMTP_SSL(host, port, timeout=settings.smtp_timeout_seconds) as smtp:
                     if username and password:
                         smtp.login(username, password)
                     smtp.send_message(message)
@@ -172,3 +183,29 @@ def resolve_email_adapter(app_settings) -> EmailAdapter | NoopEmailAdapter:
     if app_settings.email_mode == "off" or getattr(app_settings, "testing", False):
         return NoopEmailAdapter()
     return EmailAdapter()
+
+
+async def _post_with_retry(
+    client: httpx.AsyncClient,
+    *,
+    headers: dict[str, str],
+    json: dict[str, Any],
+) -> httpx.Response:
+    delay = settings.email_retry_backoff_seconds
+    attempts = settings.email_max_retries
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return await client.post(
+                "https://api.sendgrid.com/v3/mail/send",
+                headers=headers,
+                json=json,
+                timeout=settings.email_timeout_seconds,
+            )
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt == attempts:
+                raise
+            await anyio.sleep(delay)
+            delay *= 2
+    raise last_exc  # pragma: no cover
