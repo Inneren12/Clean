@@ -1,6 +1,7 @@
 import html
 import logging
 import time
+import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from math import ceil
@@ -122,10 +123,12 @@ async def _audit(
     await session.flush()
 
 
-async def _load_team_bookings(session: AsyncSession, team_id: int) -> list[Booking]:
+async def _load_team_bookings(
+    session: AsyncSession, team_id: int, org_id: uuid.UUID
+) -> list[Booking]:
     stmt = (
         select(Booking)
-        .where(Booking.team_id == team_id)
+        .where(Booking.team_id == team_id, Booking.org_id == org_id)
         .options(
             selectinload(Booking.lead),
             selectinload(Booking.order_addons).selectinload(OrderAddon.definition),
@@ -158,7 +161,11 @@ async def _load_worker_booking(
 ) -> Booking:
     stmt = (
         select(Booking)
-        .where(Booking.booking_id == job_id, Booking.team_id == identity.team_id)
+        .where(
+            Booking.booking_id == job_id,
+            Booking.team_id == identity.team_id,
+            Booking.org_id == identity.org_id,
+        )
         .options(
             selectinload(Booking.lead),
             selectinload(Booking.order_addons).selectinload(OrderAddon.definition),
@@ -726,7 +733,7 @@ async def worker_dashboard(
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
     lang = resolve_lang(request)
-    bookings = await _load_team_bookings(session, identity.team_id)
+    bookings = await _load_team_bookings(session, identity.team_id, identity.org_id)
     counts: dict[str, int] = defaultdict(int)
     for booking in bookings:
         counts[booking.status] += 1
@@ -753,7 +760,7 @@ async def worker_jobs(
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
     lang = resolve_lang(request)
-    bookings = await _load_team_bookings(session, identity.team_id)
+    bookings = await _load_team_bookings(session, identity.team_id, identity.org_id)
     invoices = await _latest_invoices(session, [b.booking_id for b in bookings])
     cards = (
         "".join(_render_job_card(booking, invoices.get(booking.booking_id), lang) for booking in bookings)

@@ -16,7 +16,7 @@ from app.domain.analytics.service import (
     estimated_revenue_from_lead,
     log_event,
 )
-from app.domain.bookings.db_models import Booking, TeamBlackout, TeamWorkingHours
+from app.domain.bookings.db_models import Booking, Team, TeamBlackout, TeamWorkingHours
 from app.dependencies import get_db_session
 from app.domain.bookings import schemas as booking_schemas
 from app.domain.bookings import service as booking_service
@@ -55,10 +55,17 @@ async def get_slots(
     response_model=list[booking_schemas.WorkingHoursResponse],
 )
 async def list_working_hours(
-    session: AsyncSession = Depends(get_db_session), role: str = Depends(require_admin)
+    http_request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    role: str = Depends(require_admin),
 ) -> list[booking_schemas.WorkingHoursResponse]:
     del role
-    result = await session.execute(select(TeamWorkingHours))
+    org_id = entitlements.resolve_org_id(http_request)
+    result = await session.execute(
+        select(TeamWorkingHours)
+        .join(Team, Team.team_id == TeamWorkingHours.team_id)
+        .where(Team.org_id == org_id)
+    )
     records = result.scalars().all()
     return [
         booking_schemas.WorkingHoursResponse(
@@ -78,14 +85,27 @@ async def list_working_hours(
 )
 async def upsert_working_hours(
     payload: booking_schemas.WorkingHoursUpdateRequest,
+    http_request: Request,
     session: AsyncSession = Depends(get_db_session),
     role: str = Depends(require_admin),
 ) -> booking_schemas.WorkingHoursResponse:
     del role
+    org_id = entitlements.resolve_org_id(http_request)
+    team = (
+        await session.execute(
+            select(Team).where(Team.team_id == payload.team_id, Team.org_id == org_id)
+        )
+    ).scalar_one_or_none()
+    if team is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
     existing_result = await session.execute(
-        select(TeamWorkingHours).where(
+        select(TeamWorkingHours)
+        .join(Team, Team.team_id == TeamWorkingHours.team_id)
+        .where(
             TeamWorkingHours.team_id == payload.team_id,
             TeamWorkingHours.day_of_week == payload.day_of_week,
+            Team.org_id == org_id,
         )
     )
     record = existing_result.scalar_one_or_none()
@@ -116,10 +136,17 @@ async def upsert_working_hours(
     "/v1/admin/blackouts", response_model=list[booking_schemas.BlackoutResponse]
 )
 async def list_blackouts(
-    session: AsyncSession = Depends(get_db_session), role: str = Depends(require_admin)
+    http_request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    role: str = Depends(require_admin),
 ) -> list[booking_schemas.BlackoutResponse]:
     del role
-    result = await session.execute(select(TeamBlackout))
+    org_id = entitlements.resolve_org_id(http_request)
+    result = await session.execute(
+        select(TeamBlackout)
+        .join(Team, Team.team_id == TeamBlackout.team_id)
+        .where(Team.org_id == org_id)
+    )
     records = result.scalars().all()
     return [
         booking_schemas.BlackoutResponse(
@@ -138,10 +165,20 @@ async def list_blackouts(
 )
 async def create_blackout(
     payload: booking_schemas.BlackoutCreateRequest,
+    http_request: Request,
     session: AsyncSession = Depends(get_db_session),
     role: str = Depends(require_admin),
 ) -> booking_schemas.BlackoutResponse:
     del role
+    org_id = entitlements.resolve_org_id(http_request)
+    team = (
+        await session.execute(
+            select(Team).where(Team.team_id == payload.team_id, Team.org_id == org_id)
+        )
+    ).scalar_one_or_none()
+    if team is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
     blackout = TeamBlackout(
         team_id=payload.team_id,
         starts_at=payload.starts_at,
@@ -163,14 +200,24 @@ async def create_blackout(
 @router.delete("/v1/admin/blackouts/{blackout_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_blackout(
     blackout_id: int,
+    http_request: Request,
     session: AsyncSession = Depends(get_db_session),
     role: str = Depends(require_admin),
 ) -> None:
     del role
-    blackout = await session.get(TeamBlackout, blackout_id)
+    org_id = entitlements.resolve_org_id(http_request)
+    blackout = (
+        await session.execute(
+            select(TeamBlackout)
+            .join(Team, Team.team_id == TeamBlackout.team_id)
+            .where(TeamBlackout.id == blackout_id, Team.org_id == org_id)
+        )
+    ).scalar_one_or_none()
     if blackout:
-        session.delete(blackout)
+        await session.delete(blackout)
         await session.commit()
+    else:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Blackout not found")
     return None
 
 

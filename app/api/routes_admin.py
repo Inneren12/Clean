@@ -2813,9 +2813,14 @@ def _render_worker_form(worker: Worker | None, teams: list[Team], lang: str | No
 
 
 async def _list_workers(
-    session: AsyncSession, *, q: str | None, active_only: bool, team_id: int | None
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    q: str | None,
+    active_only: bool,
+    team_id: int | None,
 ) -> list[Worker]:
-    filters = []
+    filters = [Worker.org_id == org_id]
     if active_only:
         filters.append(Worker.is_active.is_(True))
     if team_id:
@@ -2844,8 +2849,15 @@ async def admin_workers_list(
     _identity: AdminIdentity = Depends(require_dispatch),
 ) -> HTMLResponse:
     lang = resolve_lang(request)
-    workers = await _list_workers(session, q=q, active_only=active_only, team_id=team_id)
-    teams = (await session.execute(select(Team).order_by(Team.name))).scalars().all()
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    workers = await _list_workers(
+        session, org_id=org_id, q=q, active_only=active_only, team_id=team_id
+    )
+    teams = (
+        await session.execute(
+            select(Team).where(Team.org_id == org_id).order_by(Team.name)
+        )
+    ).scalars().all()
     team_filter_options = "".join(
         f'<option value="{team.team_id}" {"selected" if team_id == team.team_id else ""}>{html.escape(team.name)}</option>'
         for team in teams
@@ -2910,7 +2922,12 @@ async def admin_workers_new_form(
     _identity: AdminIdentity = Depends(require_dispatch),
 ) -> HTMLResponse:
     lang = resolve_lang(request)
-    teams = (await session.execute(select(Team).order_by(Team.name))).scalars().all()
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    teams = (
+        await session.execute(
+            select(Team).where(Team.org_id == org_id).order_by(Team.name)
+        )
+    ).scalars().all()
     csrf_token = get_csrf_token(request)
     response = HTMLResponse(
         _wrap_page(
@@ -2933,6 +2950,7 @@ async def admin_workers_create(
 ) -> Response:
     await entitlements.require_worker_entitlement(request, session=session)
     await require_csrf(request)
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
     form = await request.form()
     name = (form.get("name") or "").strip()
     phone = (form.get("phone") or "").strip()
@@ -2949,7 +2967,11 @@ async def admin_workers_create(
     if not name or not phone or not team_id_raw:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing required fields")
     team_id = int(team_id_raw)
-    team = await session.get(Team, team_id)
+    team = (
+        await session.execute(
+            select(Team).where(Team.team_id == team_id, Team.org_id == org_id)
+        )
+    ).scalar_one_or_none()
     if team is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
     hourly_rate_cents = int(hourly_rate_raw) if hourly_rate_raw else None
@@ -2959,6 +2981,7 @@ async def admin_workers_create(
         email=email,
         role=role,
         team_id=team_id,
+        org_id=org_id,
         hourly_rate_cents=hourly_rate_cents,
         is_active=is_active,
     )
@@ -3001,10 +3024,19 @@ async def admin_workers_edit_form(
     _identity: AdminIdentity = Depends(require_dispatch),
 ) -> HTMLResponse:
     lang = resolve_lang(request)
-    worker = await session.get(Worker, worker_id)
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    worker = (
+        await session.execute(
+            select(Worker).where(Worker.worker_id == worker_id, Worker.org_id == org_id)
+        )
+    ).scalar_one_or_none()
     if worker is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
-    teams = (await session.execute(select(Team).order_by(Team.name))).scalars().all()
+    teams = (
+        await session.execute(
+            select(Team).where(Team.org_id == org_id).order_by(Team.name)
+        )
+    ).scalars().all()
     csrf_token = get_csrf_token(request)
     response = HTMLResponse(
         _wrap_page(
@@ -3027,7 +3059,12 @@ async def admin_workers_update(
     identity: AdminIdentity = Depends(require_dispatch),
 ) -> Response:
     await require_csrf(request)
-    worker = await session.get(Worker, worker_id)
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    worker = (
+        await session.execute(
+            select(Worker).where(Worker.worker_id == worker_id, Worker.org_id == org_id)
+        )
+    ).scalar_one_or_none()
     if worker is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
 
@@ -3048,7 +3085,11 @@ async def admin_workers_update(
     worker.role = (form.get("role") or "").strip() or None
     team_id_raw = form.get("team_id")
     if team_id_raw:
-        team = await session.get(Team, int(team_id_raw))
+        team = (
+            await session.execute(
+                select(Team).where(Team.team_id == int(team_id_raw), Team.org_id == org_id)
+            )
+        ).scalar_one_or_none()
         if team is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
         worker.team_id = team.team_id
@@ -3119,7 +3160,12 @@ async def admin_dispatch_board(
     )
     bookings = (await session.execute(stmt)).scalars().all()
     team_ids = {booking.team_id for booking in bookings}
-    workers_stmt = select(Worker).where(Worker.team_id.in_(team_ids or {0})).options(selectinload(Worker.team)).order_by(Worker.name)
+    workers_stmt = (
+        select(Worker)
+        .where(Worker.team_id.in_(team_ids or {0}), Worker.org_id == org_id)
+        .options(selectinload(Worker.team))
+        .order_by(Worker.name)
+    )
     workers = (await session.execute(workers_stmt)).scalars().all()
     workers_by_team: dict[int, list[Worker]] = {}
     for worker in workers:
@@ -3228,7 +3274,11 @@ async def admin_assign_worker(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid worker ID") from exc
 
     if new_worker_id is not None:
-        worker = await session.get(Worker, new_worker_id)
+        worker = (
+            await session.execute(
+                select(Worker).where(Worker.worker_id == new_worker_id, Worker.org_id == org_id)
+            )
+        ).scalar_one_or_none()
         if worker is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
         if worker.team_id != booking.team_id:
