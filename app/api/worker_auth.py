@@ -5,6 +5,7 @@ import logging
 import secrets
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.exception_handlers import http_exception_handler
@@ -79,9 +80,10 @@ def _worker_secret() -> str:
 
 def _session_token(username: str, role: str, team_id: int, org_id: uuid.UUID) -> str:
     secret = _worker_secret()
-    msg = f"{username}:{role}:{team_id}:{org_id}".encode()
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.session_ttl_minutes_worker)
+    msg = f"{username}:{role}:{team_id}:{org_id}:{int(expires_at.timestamp())}".encode()
     signature = hmac.new(secret.encode(), msg=msg, digestmod=hashlib.sha256).hexdigest()
-    return base64.b64encode(f"{username}:{role}:{team_id}:{org_id}:{signature}".encode()).decode()
+    return base64.b64encode(f"v1:{username}:{role}:{team_id}:{org_id}:{int(expires_at.timestamp())}:{signature}".encode()).decode()
 
 
 def _parse_session_token(token: str | None) -> WorkerIdentity:
@@ -89,6 +91,22 @@ def _parse_session_token(token: str | None) -> WorkerIdentity:
         raise _build_auth_exception()
     try:
         decoded = base64.b64decode(token).decode()
+        if decoded.startswith("v1:"):
+            _, username, role, team_id_raw, org_id_raw, expires_raw, signature = decoded.split(":", 6)
+            expected_payload = f"{username}:{role}:{int(team_id_raw)}:{uuid.UUID(org_id_raw)}:{int(expires_raw)}"
+            expected_sig = hmac.new(
+                _worker_secret().encode(), msg=expected_payload.encode(), digestmod=hashlib.sha256
+            ).hexdigest()
+            if not secrets.compare_digest(signature, expected_sig):
+                raise ValueError("Invalid token signature")
+            if datetime.now(timezone.utc).timestamp() > int(expires_raw):
+                raise ValueError("Session expired")
+            return WorkerIdentity(
+                username=username,
+                role=role,
+                team_id=int(team_id_raw),
+                org_id=uuid.UUID(org_id_raw),
+            )
         username, role, team_id_raw, org_id_raw, signature = decoded.split(":", 4)
         expected = _session_token(username, role, int(team_id_raw), uuid.UUID(org_id_raw))
         if not secrets.compare_digest(token, expected):

@@ -5,6 +5,8 @@ from app.domain.saas.db_models import (
     Organization,
     OrganizationBilling,
     OrganizationUsageEvent,
+    SaaSSession,
+    TokenEvent,
     User,
 )
 
@@ -15,5 +17,7 @@ __all__ = [
     "Organization",
     "OrganizationBilling",
     "OrganizationUsageEvent",
+    "SaaSSession",
+    "TokenEvent",
     "User",
 ]

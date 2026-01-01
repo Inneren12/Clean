@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -7,10 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.admin_auth import AdminPermission
 from app.api.org_context import require_org_context
-from app.api.saas_auth import require_permissions
+from app.api.saas_auth import require_permissions, require_saas_user
 from app.domain.saas import service as saas_service
 from app.domain.saas.db_models import Membership, MembershipRole
 from app.infra.db import get_db_session
+from app.settings import settings
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
@@ -23,9 +25,11 @@ class LoginRequest(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
+    refresh_token: str | None = None
     token_type: str = "bearer"
     org_id: uuid.UUID
     role: MembershipRole
+    expires_at: datetime | None = None
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -34,8 +38,55 @@ async def login(payload: LoginRequest, session: AsyncSession = Depends(get_db_se
         user, membership = await saas_service.authenticate_user(session, payload.email, payload.password, payload.org_id)
     except ValueError as exc:  # noqa: BLE001
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
-    token = saas_service.build_access_token(user, membership)
-    return TokenResponse(access_token=token, org_id=membership.org_id, role=membership.role)
+    session_record, refresh_token = await saas_service.create_session(
+        session,
+        user,
+        membership,
+        ttl_minutes=settings.auth_session_ttl_minutes,
+        refresh_ttl_minutes=settings.auth_refresh_token_ttl_minutes,
+    )
+    token = saas_service.build_session_access_token(user, membership, session_record.session_id)
+    await session.commit()
+    return TokenResponse(
+        access_token=token,
+        refresh_token=refresh_token,
+        org_id=membership.org_id,
+        role=membership.role,
+        expires_at=session_record.expires_at,
+    )
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_tokens(payload: RefreshRequest, session: AsyncSession = Depends(get_db_session)) -> TokenResponse:
+    try:
+        access_token, refresh_token, token_session, membership = await saas_service.refresh_tokens(
+            session, payload.refresh_token
+        )
+    except ValueError as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    await session.commit()
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        org_id=membership.org_id,
+        role=membership.role,
+        expires_at=token_session.expires_at,
+    )
+
+
+@router.post("/logout")
+async def logout(
+    identity=Depends(require_saas_user), session: AsyncSession = Depends(get_db_session)
+) -> dict[str, str]:
+    session_id = getattr(identity, "session_id", None)
+    if session_id:
+        await saas_service.revoke_session(session, session_id, reason="logout")
+        await session.commit()
+    return {"status": "ok"}
 
 
 class OrgContextResponse(BaseModel):

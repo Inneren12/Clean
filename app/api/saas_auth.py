@@ -9,6 +9,7 @@ from fastapi.security import HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.admin_auth import AdminIdentity, AdminPermission, AdminRole, ROLE_PERMISSIONS
+from app.domain.saas import service as saas_service
 from app.domain.saas.db_models import Membership, MembershipRole, User
 from app.infra.auth import decode_access_token
 
@@ -23,6 +24,7 @@ class SaaSIdentity:
     org_id: uuid.UUID
     role: MembershipRole
     email: str
+    session_id: uuid.UUID | None = None
 
 
 ROLE_TO_ADMIN_ROLE: dict[MembershipRole, AdminRole] = {
@@ -63,6 +65,8 @@ async def _load_identity(request: Request, token: str | None, *, strict: bool = 
         org_id = uuid.UUID(str(payload.get("org_id")))
         role_raw = payload.get("role")
         role = MembershipRole(role_raw)
+        session_id_raw = payload.get("sid")
+        session_id = uuid.UUID(str(session_id_raw)) if session_id_raw else None
     except Exception:  # noqa: BLE001
         logger.info("saas_token_payload_invalid")
         if strict:
@@ -71,9 +75,15 @@ async def _load_identity(request: Request, token: str | None, *, strict: bool = 
 
     session_factory = getattr(request.app.state, "db_session_factory", None)
     if not session_factory:
-        return SaaSIdentity(user_id=user_id, org_id=org_id, role=role, email="")
+        return SaaSIdentity(user_id=user_id, org_id=org_id, role=role, email="", session_id=session_id)
 
     async with session_factory() as session:
+        if session_id:
+            session_record = await saas_service.validate_session_record(session, session_id)
+            if not session_record:
+                if strict:
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
+                return None
         result = await session.execute(
             sa.select(User.email, User.is_active, Membership.role, Membership.is_active)
             .join(Membership, Membership.user_id == User.user_id)
@@ -92,7 +102,7 @@ async def _load_identity(request: Request, token: str | None, *, strict: bool = 
             if strict:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
             return None
-        return SaaSIdentity(user_id=user_id, org_id=org_id, role=role, email=email)
+        return SaaSIdentity(user_id=user_id, org_id=org_id, role=role, email=email, session_id=session_id)
 
 
 class TenantSessionMiddleware(BaseHTTPMiddleware):
