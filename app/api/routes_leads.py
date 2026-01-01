@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import entitlements
-from app.dependencies import get_db_session
+from app.dependencies import get_db_session, get_pricing_config
 from app.domain.analytics.service import (
     EventType,
     estimated_duration_from_lead,
@@ -19,6 +19,8 @@ from app.domain.leads.db_models import Lead
 from app.domain.leads.service import ensure_unique_referral_code
 from app.domain.leads.schemas import LeadCreateRequest, LeadResponse
 from app.domain.leads.statuses import LEAD_STATUS_NEW
+from app.domain.pricing.estimator import estimate
+from app.domain.pricing.models import PricingConfig
 from app.infra.captcha import verify_turnstile
 from app.infra.export import export_lead_async
 from app.infra.email import EmailAdapter
@@ -83,6 +85,7 @@ async def create_lead(
     background_tasks: BackgroundTasks,
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
+    pricing_config: PricingConfig = Depends(get_pricing_config),
 ) -> LeadResponse:
     org_id = getattr(http_request.state, "org_id", None) or entitlements.resolve_org_id(http_request)
     turnstile_transport = getattr(http_request.app.state, "turnstile_transport", None)
@@ -91,7 +94,36 @@ async def create_lead(
     if not captcha_ok:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Captcha verification failed")
 
-    estimate_payload = request.estimate_snapshot.model_dump(mode="json")
+    # Check if estimate_snapshot is incomplete and needs server-side computation
+    snapshot = request.estimate_snapshot
+    needs_compute = (
+        snapshot.pricing_config_id is None
+        or snapshot.rate is None
+        or snapshot.team_size is None
+        or snapshot.time_on_site_hours is None
+    )
+
+    if needs_compute:
+        # Recompute complete estimate from structured inputs
+        try:
+            full_estimate = estimate(request.structured_inputs, pricing_config)
+            estimate_payload = full_estimate.model_dump(mode="json")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "estimate_compute_failed_fallback_to_partial",
+                extra={
+                    "extra": {
+                        "reason": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                },
+            )
+            # Fallback to whatever was provided
+            estimate_payload = snapshot.model_dump(mode="json", exclude_none=True)
+    else:
+        # Use the provided complete estimate
+        estimate_payload = snapshot.model_dump(mode="json")
+
     structured_inputs = request.structured_inputs.model_dump(mode="json")
     utm = request.utm
     utm_source = request.utm_source or (utm.utm_source if utm else None)
@@ -112,6 +144,18 @@ async def create_lead(
             if referrer is None:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid referral code")
 
+        # Extract pricing config version and hash (check top-level for backward compat)
+        pricing_version = (
+            request.pricing_config_version
+            or snapshot.pricing_config_version
+            or estimate_payload.get("pricing_config_version")
+        )
+        config_hash_value = (
+            request.config_hash
+            or snapshot.config_hash
+            or estimate_payload.get("config_hash")
+        )
+
         lead = Lead(
             name=request.name,
             phone=request.phone,
@@ -126,8 +170,8 @@ async def create_lead(
             notes=request.notes,
             structured_inputs=structured_inputs,
             estimate_snapshot=estimate_payload,
-            pricing_config_version=request.estimate_snapshot.pricing_config_version,
-            config_hash=request.estimate_snapshot.config_hash,
+            pricing_config_version=pricing_version,
+            config_hash=config_hash_value,
             status=LEAD_STATUS_NEW,
             utm_source=utm_source,
             utm_medium=utm_medium,

@@ -3,7 +3,8 @@ import os
 import sys
 import time
 import uuid
-from typing import Callable, Iterable
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Callable, Iterable
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -223,11 +224,21 @@ def create_app(app_settings) -> FastAPI:
     configure_logging()
     metrics_client = configure_metrics(app_settings.metrics_enabled)
     _validate_prod_config(app_settings)
-    app = FastAPI(title="Cleaning Economy Bot", version="1.0.0")
+
+    # Create rate limiter outside the lifespan so we can reference it
+    rate_limiter = create_rate_limiter(app_settings)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # Startup: initialization is already done above
+        yield
+        # Shutdown: cleanup resources
+        await rate_limiter.close()
+
+    app = FastAPI(title="Cleaning Economy Bot", version="1.0.0", lifespan=lifespan)
 
     app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
-    rate_limiter = create_rate_limiter(app_settings)
     app.state.rate_limiter = rate_limiter
     app.state.metrics = metrics_client
     app.state.app_settings = app_settings
@@ -236,10 +247,6 @@ def create_app(app_settings) -> FastAPI:
     app.state.export_resolver = None
     app.state.email_adapter = resolve_email_adapter(app_settings)
     app.state.stripe_client = None
-
-    @app.on_event("shutdown")
-    async def shutdown_limiter() -> None:
-        await rate_limiter.close()
 
     app.add_middleware(RateLimitMiddleware, limiter=rate_limiter, app_settings=app_settings)
     app.add_middleware(MetricsMiddleware, metrics_client=metrics_client)

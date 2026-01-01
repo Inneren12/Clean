@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
@@ -54,6 +54,43 @@ class LeadStructuredInputs(EstimateRequest):
         return AddOns() if value is None else value
 
 
+class EstimateSnapshotInput(BaseModel):
+    """
+    Flexible input model for estimate snapshot in lead creation.
+
+    Accepts both complete estimates (from /v1/estimate endpoint) and
+    partial/legacy payloads. Server will compute missing fields if needed.
+    """
+    model_config = ConfigDict(extra="ignore")  # Ignore extra fields for backward compat
+
+    # Core price fields (usually provided)
+    price_cents: Optional[int] = None
+    subtotal_cents: Optional[int] = None
+    tax_cents: Optional[int] = None
+
+    # Pricing config identification (for backward compat)
+    pricing_config_id: Optional[str] = None
+    pricing_config_version: Optional[str] = None
+    config_hash: Optional[str] = None
+
+    # Computed fields (optional - will be filled server-side if missing)
+    rate: Optional[float] = None
+    team_size: Optional[int] = None
+    time_on_site_hours: Optional[float] = None
+    billed_cleaner_hours: Optional[float] = None
+    labor_cost: Optional[float] = None
+    discount_amount: Optional[float] = None
+    add_ons_cost: Optional[float] = None
+    total_before_tax: Optional[float] = None
+    confidence: Optional[float] = None
+
+    # Optional fields
+    assumptions: Optional[List[str]] = None
+    missing_info: Optional[List[str]] = None
+    breakdown: Optional[Dict[str, Any]] = None
+    line_items: Optional[List[Dict[str, Any]]] = None
+
+
 class LeadCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -69,7 +106,12 @@ class LeadCreateRequest(BaseModel):
     allergies: Optional[str] = None
     notes: Optional[str] = None
     structured_inputs: LeadStructuredInputs
-    estimate_snapshot: EstimateResponse
+    estimate_snapshot: EstimateSnapshotInput
+
+    # Backward compatibility: accept these at top level
+    pricing_config_version: Optional[str] = None
+    config_hash: Optional[str] = None
+
     utm_source: Optional[str] = None
     utm_medium: Optional[str] = None
     utm_campaign: Optional[str] = None

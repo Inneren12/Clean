@@ -52,8 +52,24 @@ class StorageBackend(ABC):
 
 
 class LocalStorageBackend(StorageBackend):
-    def __init__(self, root: Path, signing_secret: str | None = None) -> None:
-        self.root = root
+    def __init__(
+        self,
+        root: Path | str | None = None,
+        signing_secret: str | None = None,
+        base_dir: Path | str | None = None,  # Backward compat alias for root
+    ) -> None:
+        # Support both root and base_dir parameters (base_dir is alias for root)
+        if root is not None and base_dir is not None:
+            raise ValueError("Cannot specify both 'root' and 'base_dir' parameters")
+
+        if base_dir is not None:
+            # Use base_dir if provided (backward compat)
+            self.root = Path(base_dir) if isinstance(base_dir, str) else base_dir
+        elif root is not None:
+            self.root = Path(root) if isinstance(root, str) else root
+        else:
+            raise ValueError("Either 'root' or 'base_dir' parameter must be provided")
+
         self.signing_secret = signing_secret or "local-storage-secret"
 
     def _resolve(self, key: str) -> Path:
