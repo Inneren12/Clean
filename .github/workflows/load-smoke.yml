@@ -1,0 +1,32 @@
+name: Load smoke
+
+env:
+  LOAD_TARGET_HOST: ${{ secrets.LOAD_TARGET_HOST }}
+  LOAD_ADMIN_BASIC: ${{ secrets.LOAD_ADMIN_BASIC }}
+  LOAD_DISPATCH_BASIC: ${{ secrets.LOAD_DISPATCH_BASIC }}
+  LOAD_BEARER_TOKEN: ${{ secrets.LOAD_BEARER_TOKEN }}
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+      - codex/**
+
+jobs:
+  k6-smoke:
+    if: ${{ env.LOAD_TARGET_HOST != '' }}
+    runs-on: ubuntu-latest
+    env:
+      LOAD_VUS: 2
+      LOAD_DURATION: 15s
+      LOAD_SLEEP: 1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run k6 smoke
+        run: |
+          docker run --rm -i \
+            -v "$PWD:/work" -w /work \
+            -e LOAD_TARGET_HOST -e LOAD_ADMIN_BASIC -e LOAD_DISPATCH_BASIC \
+            -e LOAD_BEARER_TOKEN -e LOAD_VUS -e LOAD_DURATION -e LOAD_SLEEP \
+            grafana/k6 run scripts/load/saas_k6.js
