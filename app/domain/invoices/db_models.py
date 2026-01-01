@@ -167,13 +167,21 @@ class StripeEvent(Base):
     event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     payload_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    org_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("organizations.org_id", ondelete="CASCADE"),
+        nullable=True,
+    )
     processed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
     )
 
-    __table_args__ = (Index("ix_stripe_events_payload_hash", "payload_hash"),)
+    __table_args__ = (
+        Index("ix_stripe_events_payload_hash", "payload_hash"),
+        Index("ix_stripe_events_org_id", "org_id"),
+    )
 
 
 class InvoicePublicToken(Base):

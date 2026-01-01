@@ -68,6 +68,16 @@ async def set_plan(
     return billing
 
 
+async def get_billing_by_customer(
+    session: AsyncSession, stripe_customer_id: str
+) -> OrganizationBilling | None:
+    stmt = sa.select(OrganizationBilling).where(
+        OrganizationBilling.stripe_customer_id == stripe_customer_id
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 async def update_from_subscription_payload(session: AsyncSession, payload: Any) -> OrganizationBilling | None:
     data_object = getattr(payload, "data", None)
     if data_object is None and isinstance(payload, dict):

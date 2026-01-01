@@ -1,12 +1,15 @@
 import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
+import uuid
 
+import sqlalchemy as sa
 from sqlalchemy import func, select
 
 from app.domain.bookings.db_models import Booking
 from app.domain.invoices import statuses as invoice_statuses
 from app.domain.invoices.db_models import Payment, StripeEvent
+from app.domain.saas.db_models import Organization, OrganizationBilling
 from app.main import app
 from app.settings import settings
 
@@ -63,17 +66,22 @@ def test_deposit_checkout_and_webhook(client, async_session_maker, monkeypatch):
     assert webhook.status_code == 200
     assert webhook.json()["processed"] is True
 
-    async def _fetch() -> tuple[str | None, int, int]:
+    async def _fetch() -> tuple[str | None, int, uuid.UUID | None, uuid.UUID | None]:
         async with async_session_maker() as session:
             booking = await session.get(Booking, booking_id)
             payments = await session.scalar(select(func.count()).select_from(Payment).where(Payment.booking_id == booking_id))
             events = await session.get(StripeEvent, "evt_dep")
-            return booking.deposit_status if booking else None, int(payments or 0), 0 if events is None else 1
+            return (
+                booking.deposit_status if booking else None,
+                int(payments or 0),
+                booking.org_id if booking else None,
+                None if events is None else events.org_id,
+            )
 
-    deposit_status, payment_count, event_count = asyncio.run(_fetch())
+    deposit_status, payment_count, booking_org, event_org = asyncio.run(_fetch())
     assert deposit_status == "paid"
     assert payment_count == 1
-    assert event_count == 1
+    assert booking_org == event_org
 
     duplicate = client.post("/v1/payments/stripe/webhook", content=b"{}", headers={"Stripe-Signature": "t=test"})
     assert duplicate.status_code == 200
@@ -177,6 +185,59 @@ def test_invoice_checkout_stores_pending_payment(client, async_session_maker, mo
     amount, status = asyncio.run(_fetch_payment())
     assert amount == 3200
     assert status == invoice_statuses.PAYMENT_STATUS_PENDING
+
+
+def test_webhook_subscription_invalid_org_rejected(client, async_session_maker):
+    settings.stripe_secret_key = "sk_test"
+    settings.stripe_webhook_secret = "whsec_test"
+    org_a = uuid.uuid4()
+    org_b = uuid.uuid4()
+
+    async def _seed_orgs() -> None:
+        async with async_session_maker() as session:
+            session.add(Organization(org_id=org_a, name="Org A"))
+            session.add(Organization(org_id=org_b, name="Org B"))
+            session.add(
+                OrganizationBilling(
+                    org_id=org_b,
+                    plan_id="free",
+                    status="active",
+                    stripe_customer_id="cus_valid",
+                )
+            )
+            await session.commit()
+
+    asyncio.run(_seed_orgs())
+
+    event = {
+        "id": "evt_sub_invalid_org",
+        "type": "customer.subscription.updated",
+        "created": int(datetime.now(tz=timezone.utc).timestamp()),
+        "data": {
+            "object": {
+                "id": "sub_invalid",
+                "status": "active",
+                "current_period_end": int(datetime.now(tz=timezone.utc).timestamp()),
+                "customer": "cus_valid",
+                "metadata": {"org_id": str(org_a), "plan_id": "pro"},
+            }
+        },
+    }
+
+    app.state.stripe_client = SimpleNamespace(verify_webhook=lambda payload, signature: event)
+
+    response = client.post("/v1/payments/stripe/webhook", content=b"{}", headers={"Stripe-Signature": "t=test"})
+    assert response.status_code == 400
+
+    async def _fetch_billing() -> tuple[int, int]:
+        async with async_session_maker() as session:
+            billing_count = await session.scalar(select(func.count()).select_from(OrganizationBilling))
+            event_exists = await session.get(StripeEvent, "evt_sub_invalid_org")
+            return int(billing_count or 0), 1 if event_exists else 0
+
+    billing_count, stored_events = asyncio.run(_fetch_billing())
+    assert billing_count == 1
+    assert stored_events == 0
 
 
 async def _seed_invoice(async_session_maker, total_cents: int, status: str):
