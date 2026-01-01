@@ -597,15 +597,29 @@ def downgrade_deposit_requirement(decision: DepositDecision, *, reason: str) -> 
     )
 
 
-async def ensure_default_team(session: AsyncSession, lock: bool = False) -> Team:
-    stmt = select(Team).where(Team.name == DEFAULT_TEAM_NAME).order_by(Team.team_id).limit(1)
+async def ensure_default_team(
+    session: AsyncSession, org_id: uuid.UUID | None = None, lock: bool = False
+) -> Team:
+    target_org = org_id or settings.default_org_id
+    stmt = (
+        select(Team)
+        .where(Team.org_id == target_org)
+        .order_by(Team.team_id)
+        .limit(1)
+    )
     if lock:
         stmt = stmt.with_for_update()
     result = await session.execute(stmt)
     team = result.scalar_one_or_none()
     if team:
         return team
-    team = Team(name=DEFAULT_TEAM_NAME)
+
+    candidate_name = DEFAULT_TEAM_NAME
+    name_conflict = await session.scalar(select(Team.team_id).where(Team.name == candidate_name))
+    if name_conflict:
+        candidate_name = f"{DEFAULT_TEAM_NAME} ({target_org})"
+
+    team = Team(name=candidate_name, org_id=target_org)
     session.add(team)
 
     nested_transaction = await session.begin_nested() if session.in_transaction() else None
@@ -839,7 +853,10 @@ async def create_booking(
     normalized = _normalize_datetime(starts_at)
     resolved_lead = lead
     if resolved_lead is None and lead_id:
-        resolved_lead = await session.get(Lead, lead_id)
+        lead_stmt = select(Lead).where(Lead.lead_id == lead_id)
+        if org_id:
+            lead_stmt = lead_stmt.where(Lead.org_id == org_id)
+        resolved_lead = await session.scalar(lead_stmt)
 
     estimated_total = (resolved_lead.estimate_snapshot or {}).get("total_before_tax") if resolved_lead else None
     normalized_service_type = _resolve_service_type(service_type, resolved_lead)
@@ -899,6 +916,8 @@ async def create_booking(
     async def _resolve_team(lock: bool) -> Team:
         if team_id:
             stmt = select(Team).where(Team.team_id == team_id)
+            if org_id:
+                stmt = stmt.where(Team.org_id == org_id)
             if lock:
                 stmt = stmt.with_for_update()
             team_result = await session.execute(stmt)
@@ -906,7 +925,7 @@ async def create_booking(
             if found is None:
                 raise ValueError("Team not found")
             return found
-        return await ensure_default_team(session, lock=lock)
+        return await ensure_default_team(session, org_id=org_id, lock=lock)
 
     async def _create(team: Team) -> Booking:
         if not await is_slot_available(normalized, duration_minutes, session, team_id=team.team_id):

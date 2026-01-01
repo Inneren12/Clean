@@ -23,15 +23,6 @@ def _admin_credentials():
     yield
 
 
-@pytest.fixture(autouse=True)
-def _org_scope(monkeypatch):
-    def _resolve_org_id(request):
-        header_value = request.headers.get("X-Test-Org")
-        return uuid.UUID(header_value) if header_value else settings.default_org_id
-
-    monkeypatch.setattr("app.api.entitlements.resolve_org_id", _resolve_org_id)
-
-
 async def _seed_org_workers(async_session_maker):
     org_a = uuid.uuid4()
     org_b = uuid.uuid4()
@@ -131,7 +122,7 @@ async def test_worker_list_and_detail_are_org_scoped(client, async_session_maker
         f"/v1/admin/ui/workers/{seeded['worker_b_id']}",
         headers=headers_a,
         data={"name": "Wrong Org", "team_id": seeded["team_b_id"]},
-        allow_redirects=False,
+        follow_redirects=False,
     )
     assert update_other_org.status_code == 404
 
@@ -149,7 +140,7 @@ async def test_worker_create_rejects_other_org_team(client, async_session_maker)
             "phone": "+1 555-9999",
             "team_id": seeded["team_b_id"],
         },
-        allow_redirects=False,
+        follow_redirects=False,
     )
     assert create_resp.status_code == 404
 

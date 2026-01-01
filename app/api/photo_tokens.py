@@ -2,7 +2,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Tuple
-from urllib.parse import urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import jwt
 from fastapi import HTTPException, status
@@ -14,9 +14,9 @@ from app.settings import settings
 
 def _append_query(url: str, **params: str) -> str:
     parsed = urlparse(url)
-    existing_query = dict(qc.split("=", 1) for qc in filter(None, parsed.query.split("&")))
+    existing_query = dict(parse_qsl(parsed.query, keep_blank_values=True))
     merged = {**existing_query, **params}
-    new_query = urlencode(merged)
+    new_query = urlencode(merged, doseq=True)
     return urlunparse(parsed._replace(query=new_query))
 
 
@@ -26,6 +26,7 @@ def build_photo_download_token(*, org_id: uuid.UUID, order_id: str, photo_id: st
         "org_id": str(org_id),
         "order_id": order_id,
         "photo_id": photo_id,
+        "typ": "photo_download",
         "jti": secrets.token_hex(8),
         "iat": now,
         "exp": now + timedelta(seconds=settings.order_photo_signed_url_ttl_seconds),
@@ -42,9 +43,17 @@ def verify_photo_download_token(token: str) -> Tuple[uuid.UUID, str, str]:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token") from exc
 
     try:
-        org_id = uuid.UUID(str(payload.get("org_id")))
-        order_id = str(payload.get("order_id"))
-        photo_id = str(payload.get("photo_id"))
+        typ = payload["typ"]
+        if typ != "photo_download":
+            raise KeyError("Invalid token type")
+
+        org_id = uuid.UUID(payload["org_id"])
+        order_id = payload["order_id"]
+        photo_id = payload["photo_id"]
+        if not isinstance(order_id, str) or not isinstance(photo_id, str):
+            raise TypeError("Invalid token payload")
+        order_id = order_id.strip()
+        photo_id = photo_id.strip()
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token") from exc
 

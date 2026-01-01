@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -24,43 +23,35 @@ def admin_credentials():
     yield
 
 
-def test_org_scoped_bookings(monkeypatch, client, async_session_maker):
+@pytest.mark.anyio
+async def test_org_scoped_bookings(client, async_session_maker):
     org_a = uuid.uuid4()
     org_b = uuid.uuid4()
 
-    def _resolve_org_id(request):
-        header_value = request.headers.get("X-Test-Org")
-        return uuid.UUID(header_value) if header_value else settings.default_org_id
-
-    monkeypatch.setattr("app.api.entitlements.resolve_org_id", _resolve_org_id)
-
-    async def _seed() -> tuple[str, str]:
-        async with async_session_maker() as session:
-            session.add_all(
-                [
-                    Organization(org_id=org_a, name="Org A"),
-                    Organization(org_id=org_b, name="Org B"),
-                ]
-            )
-            booking_a = Booking(
-                org_id=org_a,
-                team_id=1,
-                starts_at=datetime.now(tz=timezone.utc) + timedelta(days=1),
-                duration_minutes=60,
-                status="PENDING",
-            )
-            booking_b = Booking(
-                org_id=org_b,
-                team_id=1,
-                starts_at=datetime.now(tz=timezone.utc) + timedelta(days=2),
-                duration_minutes=60,
-                status="PENDING",
-            )
-            session.add_all([booking_a, booking_b])
-            await session.commit()
-            return booking_a.booking_id, booking_b.booking_id
-
-    booking_a_id, booking_b_id = asyncio.run(_seed())
+    async with async_session_maker() as session:
+        session.add_all(
+            [
+                Organization(org_id=org_a, name="Org A"),
+                Organization(org_id=org_b, name="Org B"),
+            ]
+        )
+        booking_a = Booking(
+            org_id=org_a,
+            team_id=1,
+            starts_at=datetime.now(tz=timezone.utc) + timedelta(days=1),
+            duration_minutes=60,
+            status="PENDING",
+        )
+        booking_b = Booking(
+            org_id=org_b,
+            team_id=1,
+            starts_at=datetime.now(tz=timezone.utc) + timedelta(days=2),
+            duration_minutes=60,
+            status="PENDING",
+        )
+        session.add_all([booking_a, booking_b])
+        await session.commit()
+        booking_a_id, booking_b_id = booking_a.booking_id, booking_b.booking_id
 
     headers = {
         **_auth_headers("admin", "secret"),

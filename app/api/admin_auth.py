@@ -229,6 +229,17 @@ class AdminAccessMiddleware(BaseHTTPMiddleware):
         if saas_identity:
             return await call_next(request)
 
+        saas_identity_error: HTTPException | None = getattr(request.state, "saas_identity_error", None)
+        authorization: str = request.headers.get("Authorization", "")
+        has_bearer = authorization.lower().startswith("bearer ")
+
+        if saas_identity_error:
+            return await http_exception_handler(request, saas_identity_error)
+
+        if has_bearer:
+            unauthorized = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+            return await http_exception_handler(request, unauthorized)
+
         if not settings.legacy_basic_auth_enabled:
             return await http_exception_handler(request, _build_auth_exception())
 

@@ -84,9 +84,13 @@ async def _load_identity(request: Request, token: str | None, *, strict: bool = 
         )
         row = result.first()
         if not row:
+            if strict:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
             return None
         email, user_active, membership_role, is_active = row
         if not user_active or not is_active or membership_role != role:
+            if strict:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
             return None
         return SaaSIdentity(user_id=user_id, org_id=org_id, role=role, email=email)
 

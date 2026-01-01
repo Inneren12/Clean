@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import uuid
 
@@ -52,27 +51,19 @@ def _create_lead(client, *, name: str, org_id: uuid.UUID) -> str:
     return response.json()["lead_id"]
 
 
-def test_leads_are_org_scoped(monkeypatch, client, async_session_maker):
+@pytest.mark.anyio
+async def test_leads_are_org_scoped(client, async_session_maker):
     org_a = uuid.uuid4()
     org_b = uuid.uuid4()
 
-    def _resolve_org_id(request):
-        header_value = request.headers.get("X-Test-Org")
-        return uuid.UUID(header_value) if header_value else settings.default_org_id
-
-    monkeypatch.setattr("app.api.entitlements.resolve_org_id", _resolve_org_id)
-
-    async def _seed_orgs() -> None:
-        async with async_session_maker() as session:
-            session.add_all(
-                [
-                    Organization(org_id=org_a, name="Org A"),
-                    Organization(org_id=org_b, name="Org B"),
-                ]
-            )
-            await session.commit()
-
-    asyncio.run(_seed_orgs())
+    async with async_session_maker() as session:
+        session.add_all(
+            [
+                Organization(org_id=org_a, name="Org A"),
+                Organization(org_id=org_b, name="Org B"),
+            ]
+        )
+        await session.commit()
 
     lead_a = _create_lead(client, name="Org A Lead", org_id=org_a)
     lead_b = _create_lead(client, name="Org B Lead", org_id=org_b)
