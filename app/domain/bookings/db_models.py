@@ -23,7 +23,7 @@ from sqlalchemy.types import JSON
 
 from app.infra.db import Base
 from app.domain.clients.db_models import ClientUser
-from app.domain.saas.db_models import UUID_TYPE
+from app.infra.db import UUID_TYPE
 from app.settings import settings
 
 if TYPE_CHECKING:  # pragma: no cover

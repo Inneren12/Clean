@@ -6,7 +6,7 @@ from datetime import date, datetime
 from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.domain.saas.db_models import UUID_TYPE
+from app.infra.db import UUID_TYPE
 from app.infra.db import Base
 from app.settings import settings
 
