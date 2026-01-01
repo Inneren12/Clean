@@ -185,6 +185,7 @@ class EmailEvent(Base):
     recipient: Mapped[str] = mapped_column(String(255), nullable=False)
     subject: Mapped[str] = mapped_column(String(255), nullable=False)
     body: Mapped[str] = mapped_column(String(2000), nullable=False)
+    dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -199,6 +200,7 @@ class EmailEvent(Base):
         Index("ix_email_events_org_created_at", "org_id", "created_at"),
         Index("ix_email_events_booking_type", "booking_id", "email_type"),
         Index("ix_email_events_invoice_type", "invoice_id", "email_type"),
+        UniqueConstraint("org_id", "dedupe_key", name="uq_email_events_org_dedupe"),
     )
 
 

@@ -127,6 +127,10 @@ class Settings(BaseSettings):
     metrics_token: str | None = Field(None, env="METRICS_TOKEN")
     job_heartbeat_required: bool = Field(False, env="JOB_HEARTBEAT_REQUIRED")
     job_heartbeat_ttl_seconds: int = Field(300, env="JOB_HEARTBEAT_TTL_SECONDS")
+    email_max_retries: int = Field(3, env="EMAIL_MAX_RETRIES")
+    email_retry_backoff_seconds: float = Field(60.0, env="EMAIL_RETRY_BACKOFF_SECONDS")
+    email_unsubscribe_secret: str | None = Field(None, env="EMAIL_UNSUBSCRIBE_SECRET")
+    email_unsubscribe_ttl_minutes: int = Field(7 * 24 * 60, env="EMAIL_UNSUBSCRIBE_TTL_MINUTES")
     default_org_id: uuid.UUID = Field(
         uuid.UUID("00000000-0000-0000-0000-000000000001"), env="DEFAULT_ORG_ID"
     )

@@ -312,7 +312,7 @@ async def order_detail(
         duration_minutes=booking.duration_minutes,
         deposit_required=booking.deposit_required,
         deposit_status=booking.deposit_status,
-        pay_link=f"https://pay.example.com/orders/{booking.booking_id}",
+        pay_link=f"{(settings.client_portal_base_url or settings.public_base_url or '').rstrip('/')}/orders/{booking.booking_id}",
         photos_available=bool(booking.consent_photos),
         photos_count=photos_count or 0,
     )

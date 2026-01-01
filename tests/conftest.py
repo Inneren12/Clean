@@ -7,13 +7,18 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+try:
+    asyncio.get_running_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
 import anyio
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.pool import StaticPool
 from datetime import time
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
 import uuid
 
 from app.domain.analytics import db_models as analytics_db_models  # noqa: F401
@@ -45,9 +50,12 @@ DEFAULT_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 @pytest.fixture(scope="session")
 def test_engine():
+    db_path = Path("test.db")
+    if db_path.exists():
+        db_path.unlink()
     engine = create_async_engine(
-        "sqlite+aiosqlite:///:memory:",
-        connect_args={"check_same_thread": False},
+        "sqlite+aiosqlite:///./test.db",
+        connect_args={"check_same_thread": False, "timeout": 30},
         poolclass=StaticPool,
     )
 
@@ -93,6 +101,7 @@ def restore_admin_settings():
     original_metrics_token = getattr(settings, "metrics_token", None)
     original_job_heartbeat = getattr(settings, "job_heartbeat_required", False)
     original_job_heartbeat_ttl = getattr(settings, "job_heartbeat_ttl_seconds", 300)
+    original_email_mode = getattr(settings, "email_mode", "off")
     original_legacy_basic_auth_enabled = getattr(settings, "legacy_basic_auth_enabled", True)
     original_auth_secret_key = getattr(settings, "auth_secret_key", "")
     yield
@@ -108,6 +117,7 @@ def restore_admin_settings():
     settings.job_heartbeat_ttl_seconds = original_job_heartbeat_ttl
     settings.legacy_basic_auth_enabled = original_legacy_basic_auth_enabled
     settings.auth_secret_key = original_auth_secret_key
+    settings.email_mode = original_email_mode
 
 
 @pytest.fixture(autouse=True)
@@ -115,6 +125,7 @@ def enable_test_mode():
     settings.testing = True
     settings.deposits_enabled = False
     settings.app_env = "dev"
+    settings.email_mode = "sendgrid"
     from app.infra.email import resolve_email_adapter
 
     app.state.email_adapter = resolve_email_adapter(settings)
@@ -231,3 +242,4 @@ def client_no_raise(async_session_maker):
         yield test_client
     app.dependency_overrides.clear()
     app.state.db_session_factory = original_factory
+import asyncio

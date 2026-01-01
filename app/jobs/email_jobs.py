@@ -1,4 +1,9 @@
 import logging
+import logging
+from datetime import datetime, timezone
+
+from sqlalchemy import and_, exists, select
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import and_, exists, select
@@ -21,6 +26,10 @@ logger = logging.getLogger(__name__)
 
 async def run_booking_reminders(session: AsyncSession, adapter: EmailAdapter | None) -> dict[str, int]:
     return await email_service.scan_and_send_reminders(session, adapter)
+
+
+async def run_email_dlq(session: AsyncSession, adapter: EmailAdapter | None) -> dict[str, int]:
+    return await email_service.retry_email_failures(session, adapter)
 
 
 def _public_base_url(explicit: str | None = None) -> str | None:

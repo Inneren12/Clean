@@ -20,7 +20,9 @@ class StubAdapter(EmailAdapter):
         super().__init__()
         self.sent: list[tuple[str, str, str]] = []
 
-    async def send_email(self, recipient: str, subject: str, body: str) -> bool:  # type: ignore[override]
+    async def send_email(
+        self, recipient: str, subject: str, body: str, *, headers: dict[str, str] | None = None
+    ) -> bool:  # type: ignore[override]
         self.sent.append((recipient, subject, body))
         return True
 
