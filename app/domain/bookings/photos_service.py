@@ -3,6 +3,7 @@ import logging
 import re
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -10,10 +11,10 @@ from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.bookings.db_models import Booking, OrderPhoto
+from app.domain.bookings.db_models import Booking, OrderPhoto, OrderPhotoTombstone
 from app.domain.saas import billing_service
 from app.domain.bookings.schemas import PhotoPhase
-from app.infra.storage.backends import LocalStorageBackend, StorageBackend
+from app.infra.storage.backends import StorageBackend
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -216,21 +217,16 @@ async def delete_photo(
 ) -> OrderPhoto:
     photo = await get_photo(session, order_id, photo_id, org_id)
     key = _storage_key(org_id, order_id, photo.filename)
-
-    try:
-        await storage.delete(key=key)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception(
-            "order_photo_storage_delete_failed",
-            extra={"extra": {"order_id": order_id, "photo_id": photo_id}},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete photo from storage",
-        ) from exc
+    tombstone = OrderPhotoTombstone(
+        org_id=org_id,
+        order_id=order_id,
+        photo_id=photo_id,
+        storage_key=key,
+    )
 
     try:
         await session.execute(delete(OrderPhoto).where(OrderPhoto.photo_id == photo_id))
+        session.add(tombstone)
         if record_usage:
             await billing_service.record_usage_event(
                 session,
@@ -239,7 +235,10 @@ async def delete_photo(
                 quantity=-photo.size_bytes,
                 resource_id=photo.photo_id,
             )
+        await session.commit()
+        await session.refresh(tombstone)
     except Exception as exc:  # noqa: BLE001
+        await session.rollback()
         logger.exception(
             "order_photo_delete_failed",
             extra={"extra": {"order_id": order_id, "photo_id": photo_id}},
@@ -249,6 +248,23 @@ async def delete_photo(
             detail="Failed to delete photo record",
         ) from exc
 
+    try:
+        await storage.delete(key=key)
+    except Exception as exc:  # noqa: BLE001
+        await _record_tombstone_failure(session, tombstone, exc)
+        logger.warning(
+            "order_photo_storage_delete_deferred",
+            extra={
+                "extra": {
+                    "order_id": order_id,
+                    "photo_id": photo_id,
+                    "tombstone_id": tombstone.tombstone_id,
+                }
+            },
+        )
+        return photo
+
+    await _mark_tombstone_processed(session, tombstone)
     return photo
 
 
@@ -260,11 +276,21 @@ def storage_key_for_photo(photo: OrderPhoto, org_id: uuid.UUID) -> str:
     return _storage_key(org_id, photo.order_id, photo.filename)
 
 
-def validate_local_signature(storage: StorageBackend, key: str, expires_raw: str, signature: str) -> bool:
-    if not isinstance(storage, LocalStorageBackend):
-        return False
-    try:
-        expires_at = int(expires_raw)
-    except ValueError:
-        return False
-    return storage.validate_signature(key=key, expires_at=expires_at, signature=signature)
+async def _record_tombstone_failure(
+    session: AsyncSession, tombstone: OrderPhotoTombstone, exc: Exception
+) -> None:
+    tombstone.attempts += 1
+    tombstone.last_error = str(exc)[:255]
+    tombstone.last_attempt_at = datetime.now(timezone.utc)
+    await session.commit()
+
+
+async def _mark_tombstone_processed(
+    session: AsyncSession, tombstone: OrderPhotoTombstone
+) -> None:
+    tombstone.last_attempt_at = datetime.now(timezone.utc)
+    tombstone.processed_at = datetime.now(timezone.utc)
+    tombstone.last_error = None
+    await session.commit()
+
+

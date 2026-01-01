@@ -121,6 +121,14 @@ class Settings(BaseSettings):
     s3_access_key: str | None = Field(None, env="S3_ACCESS_KEY")
     s3_secret_key: str | None = Field(None, env="S3_SECRET_KEY")
     s3_region: str | None = Field(None, env="S3_REGION")
+    s3_connect_timeout_seconds: float = Field(3.0, env="S3_CONNECT_TIMEOUT_SECONDS")
+    s3_read_timeout_seconds: float = Field(10.0, env="S3_READ_TIMEOUT_SECONDS")
+    s3_max_attempts: int = Field(4, env="S3_MAX_ATTEMPTS")
+    storage_delete_retry_interval_seconds: int = Field(
+        30, env="STORAGE_DELETE_RETRY_INTERVAL_SECONDS"
+    )
+    storage_delete_max_attempts: int = Field(5, env="STORAGE_DELETE_MAX_ATTEMPTS")
+    storage_delete_batch_size: int = Field(50, env="STORAGE_DELETE_BATCH_SIZE")
     testing: bool = Field(False, env="TESTING")
     deposits_enabled: bool = Field(True, env="DEPOSITS_ENABLED")
     metrics_enabled: bool = Field(True, env="METRICS_ENABLED")
