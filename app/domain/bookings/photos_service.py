@@ -26,15 +26,24 @@ def _max_bytes() -> int:
     return settings.order_photo_max_bytes
 
 
-async def fetch_order(session: AsyncSession, order_id: str) -> Booking:
-    order = await session.get(Booking, order_id)
+async def fetch_order(
+    session: AsyncSession, order_id: str, org_id: uuid.UUID | None = None
+) -> Booking:
+    stmt = select(Booking).where(
+        Booking.booking_id == order_id,
+        Booking.org_id == (org_id or settings.default_org_id),
+    )
+    result = await session.execute(stmt)
+    order = result.scalar_one_or_none()
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
     return order
 
 
-async def update_consent(session: AsyncSession, order_id: str, consent: bool) -> Booking:
-    order = await fetch_order(session, order_id)
+async def update_consent(
+    session: AsyncSession, order_id: str, consent: bool, org_id: uuid.UUID | None = None
+) -> Booking:
+    order = await fetch_order(session, order_id, org_id)
     order.consent_photos = consent
     await session.commit()
     await session.refresh(order)
@@ -164,14 +173,19 @@ async def save_photo(
             )
 
 
-async def list_photos(session: AsyncSession, order_id: str) -> list[OrderPhoto]:
-    await fetch_order(session, order_id)
+async def list_photos(
+    session: AsyncSession, order_id: str, org_id: uuid.UUID | None = None
+) -> list[OrderPhoto]:
+    await fetch_order(session, order_id, org_id)
     stmt = select(OrderPhoto).where(OrderPhoto.order_id == order_id).order_by(OrderPhoto.created_at)
     result = await session.execute(stmt)
     return list(result.scalars().all())
 
 
-async def get_photo(session: AsyncSession, order_id: str, photo_id: str) -> OrderPhoto:
+async def get_photo(
+    session: AsyncSession, order_id: str, photo_id: str, org_id: uuid.UUID | None = None
+) -> OrderPhoto:
+    await fetch_order(session, order_id, org_id)
     stmt = select(OrderPhoto).where(OrderPhoto.order_id == order_id, OrderPhoto.photo_id == photo_id)
     result = await session.execute(stmt)
     photo = result.scalar_one_or_none()
@@ -189,7 +203,7 @@ async def delete_photo(
     org_id: uuid.UUID,
     record_usage: bool = False,
 ) -> OrderPhoto:
-    photo = await get_photo(session, order_id, photo_id)
+    photo = await get_photo(session, order_id, photo_id, org_id)
     key = _storage_key(org_id, order_id, photo.filename)
 
     try:

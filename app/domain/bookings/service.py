@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from enum import Enum
 import logging
+import uuid
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import Select, and_, delete, func, or_, select
@@ -833,6 +834,7 @@ async def create_booking(
     lead: Lead | None = None,
     service_type: str | CleaningType | None = None,
     team_id: int | None = None,
+    org_id: uuid.UUID | None = None,
 ) -> Booking:
     normalized = _normalize_datetime(starts_at)
     resolved_lead = lead
@@ -911,6 +913,7 @@ async def create_booking(
             raise ValueError("Requested slot is no longer available")
 
         booking = Booking(
+            org_id=org_id or settings.default_org_id,
             team_id=team.team_id,
             lead_id=lead_id,
             client_id=client_id,
@@ -1221,12 +1224,21 @@ async def cleanup_stale_bookings(session: AsyncSession, older_than: timedelta) -
 
 
 async def mark_booking_completed(
-    session: AsyncSession, booking_id: str, actual_duration_minutes: int
+    session: AsyncSession,
+    booking_id: str,
+    actual_duration_minutes: int,
+    *,
+    org_id: uuid.UUID | None = None,
 ) -> Booking | None:
     if actual_duration_minutes <= 0:
         raise ValueError("actual_duration_minutes must be positive")
 
-    booking = await session.get(Booking, booking_id)
+    stmt = select(Booking).where(
+        Booking.booking_id == booking_id,
+        Booking.org_id == (org_id or settings.default_org_id),
+    )
+    result = await session.execute(stmt)
+    booking = result.scalar_one_or_none()
     if booking is None:
         return None
 
