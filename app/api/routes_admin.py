@@ -1,11 +1,12 @@
-import html
-import json
 import csv
 import io
+import html
+import json
 import logging
 import math
 from datetime import date, datetime, time, timezone, timedelta
 from decimal import Decimal, ROUND_HALF_UP
+import uuid
 from typing import Iterable, List, Optional
 from urllib.parse import urlencode
 
@@ -1679,9 +1680,26 @@ def _invoice_list_item(invoice: Invoice) -> invoice_schemas.InvoiceListItem:
     return invoice_schemas.InvoiceListItem(**data)
 
 
+async def _get_org_invoice(
+    session: AsyncSession,
+    invoice_id: str,
+    org_id: uuid.UUID,
+    *,
+    options: tuple = (),
+) -> Invoice | None:
+    stmt = (
+        select(Invoice)
+        .options(*options)
+        .where(Invoice.invoice_id == invoice_id, Invoice.org_id == org_id)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 async def _query_invoice_list(
     *,
     session: AsyncSession,
+    org_id: uuid.UUID,
     status_filter: str | None,
     customer_id: str | None,
     order_id: str | None,
@@ -1703,7 +1721,7 @@ async def _query_invoice_list(
     if q:
         filters.append(func.lower(Invoice.invoice_number).like(f"%{q.lower()}%"))
 
-    base_query = select(Invoice).where(*filters)
+    base_query = select(Invoice).where(Invoice.org_id == org_id, *filters)
     count_stmt = select(func.count()).select_from(base_query.subquery())
     total = int((await session.scalar(count_stmt)) or 0)
 
@@ -1730,11 +1748,14 @@ async def list_invoices(
     order_id: str | None = None,
     q: str | None = None,
     page: int = Query(default=1, ge=1),
+    http_request: Request = None,
     session: AsyncSession = Depends(get_db_session),
     _admin: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.InvoiceListResponse:
+    org_id = entitlements.resolve_org_id(http_request)
     return await _query_invoice_list(
         session=session,
+        org_id=org_id,
         status_filter=status_filter,
         customer_id=customer_id,
         order_id=order_id,
@@ -1754,8 +1775,10 @@ async def admin_invoice_list_ui(
     session: AsyncSession = Depends(get_db_session),
     _admin: AdminIdentity = Depends(require_finance),
 ) -> HTMLResponse:
+    org_id = entitlements.resolve_org_id(request)
     invoice_list = await _query_invoice_list(
         session=session,
+        org_id=org_id,
         status_filter=status_filter,
         customer_id=customer_id,
         order_id=order_id,
@@ -1898,12 +1921,15 @@ async def admin_invoice_list_ui(
 @router.get("/v1/admin/invoices/{invoice_id}", response_model=invoice_schemas.InvoiceResponse)
 async def get_invoice(
     invoice_id: str,
+    http_request: Request,
     session: AsyncSession = Depends(get_db_session),
     _admin: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.InvoiceResponse:
-    invoice = await session.get(
-        Invoice,
+    org_id = entitlements.resolve_org_id(http_request)
+    invoice = await _get_org_invoice(
+        session,
         invoice_id,
+        org_id,
         options=(selectinload(Invoice.items), selectinload(Invoice.payments)),
     )
     if invoice is None:
@@ -1919,9 +1945,11 @@ async def admin_invoice_detail_ui(
     session: AsyncSession = Depends(get_db_session),
     _admin: AdminIdentity = Depends(require_finance),
 ) -> HTMLResponse:
-    invoice_model = await session.get(
-        Invoice,
+    org_id = entitlements.resolve_org_id(request)
+    invoice_model = await _get_org_invoice(
+        session,
         invoice_id,
+        org_id,
         options=(selectinload(Invoice.items), selectinload(Invoice.payments)),
     )
     if invoice_model is None:
@@ -2481,9 +2509,11 @@ async def send_invoice(
     _csrf: None = Depends(require_csrf),
     _admin: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.InvoiceSendResponse:
-    invoice = await session.get(
-        Invoice,
+    org_id = entitlements.resolve_org_id(http_request)
+    invoice = await _get_org_invoice(
+        session,
         invoice_id,
+        org_id,
         options=(selectinload(Invoice.items), selectinload(Invoice.payments)),
     )
     if invoice is None:
@@ -2555,15 +2585,19 @@ async def send_invoice(
 )
 async def create_invoice_from_order(
     order_id: str,
+    http_request: Request,
     request: invoice_schemas.InvoiceCreateRequest,
     session: AsyncSession = Depends(get_db_session),
     _csrf: None = Depends(require_csrf),
     admin: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.InvoiceResponse:
+    org_id = entitlements.resolve_org_id(http_request)
     order = await session.get(
         Booking, order_id, options=(selectinload(Booking.lead),)
     )
     if order is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+    if order.org_id != org_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
 
     addon_items = await addon_service.addon_invoice_items_for_order(session, order_id)
@@ -2616,11 +2650,13 @@ async def create_invoice_from_order(
 async def mark_invoice_paid(
     invoice_id: str,
     request: invoice_schemas.ManualPaymentRequest,
+    http_request: Request,
     session: AsyncSession = Depends(get_db_session),
     _csrf: None = Depends(require_csrf),
     _admin: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.ManualPaymentResult:
-    return await _record_manual_invoice_payment(invoice_id, request, session)
+    org_id = entitlements.resolve_org_id(http_request)
+    return await _record_manual_invoice_payment(invoice_id, request, session, org_id)
 
 
 @router.post(
@@ -2631,21 +2667,25 @@ async def mark_invoice_paid(
 async def record_manual_invoice_payment(
     invoice_id: str,
     request: invoice_schemas.ManualPaymentRequest,
+    http_request: Request,
     session: AsyncSession = Depends(get_db_session),
     _csrf: None = Depends(require_csrf),
     _admin: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.ManualPaymentResult:
-    return await _record_manual_invoice_payment(invoice_id, request, session)
+    org_id = entitlements.resolve_org_id(http_request)
+    return await _record_manual_invoice_payment(invoice_id, request, session, org_id)
 
 
 async def _record_manual_invoice_payment(
     invoice_id: str,
     request: invoice_schemas.ManualPaymentRequest,
     session: AsyncSession,
+    org_id: uuid.UUID,
 ) -> invoice_schemas.ManualPaymentResult:
-    invoice = await session.get(
-        Invoice,
+    invoice = await _get_org_invoice(
+        session,
         invoice_id,
+        org_id,
         options=(selectinload(Invoice.items), selectinload(Invoice.payments)),
     )
     if invoice is None:
