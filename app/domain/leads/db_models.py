@@ -12,7 +12,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
 from app.domain.leads.statuses import default_lead_status
-from app.domain.saas.db_models import UUID_TYPE
+from app.infra.db import UUID_TYPE
 from app.infra.db import Base
 from app.settings import settings
 

@@ -7,7 +7,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, LargeBinar
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
-from app.domain.saas.db_models import UUID_TYPE
+from app.infra.db import UUID_TYPE
 from app.infra.db import Base
 from app.settings import settings
 

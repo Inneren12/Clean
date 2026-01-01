@@ -7,10 +7,7 @@ from enum import Enum
 import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.infra.db import Base
-
-
-UUID_TYPE = sa.Uuid(as_uuid=True)
+from app.infra.db import Base, UUID_TYPE
 
 
 class MembershipRole(str, Enum):
