@@ -35,6 +35,12 @@ class Team(Base):
     __tablename__ = "teams"
 
     team_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("organizations.org_id", ondelete="CASCADE"),
+        nullable=False,
+        default=lambda: settings.default_org_id,
+    )
     name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -49,6 +55,8 @@ class Team(Base):
     )
 
     bookings: Mapped[list["Booking"]] = relationship("Booking", back_populates="team")
+
+    __table_args__ = (Index("ix_teams_org_id", "org_id"),)
 
 
 class Booking(Base):
@@ -142,6 +150,10 @@ class Booking(Base):
     )
 
     __table_args__ = (
+        Index("ix_bookings_org_id", "org_id"),
+        Index("ix_bookings_org_status", "org_id", "status"),
+        Index("ix_bookings_org_created_at", "org_id", "created_at"),
+        Index("ix_bookings_org_starts_at", "org_id", "starts_at"),
         Index("ix_bookings_starts_status", "starts_at", "status"),
         Index("ix_bookings_status", "status"),
         Index("ix_bookings_checkout_session", "stripe_checkout_session_id"),
@@ -163,6 +175,12 @@ class EmailEvent(Base):
     invoice_id: Mapped[str | None] = mapped_column(
         ForeignKey("invoices.invoice_id"), nullable=True, index=True
     )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("organizations.org_id", ondelete="CASCADE"),
+        nullable=False,
+        default=lambda: settings.default_org_id,
+    )
     email_type: Mapped[str] = mapped_column(String(64), nullable=False)
     recipient: Mapped[str] = mapped_column(String(255), nullable=False)
     subject: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -177,6 +195,8 @@ class EmailEvent(Base):
     invoice: Mapped[Optional["Invoice"]] = relationship("Invoice", backref="email_events")
 
     __table_args__ = (
+        Index("ix_email_events_org_id", "org_id"),
+        Index("ix_email_events_org_created_at", "org_id", "created_at"),
         Index("ix_email_events_booking_type", "booking_id", "email_type"),
         Index("ix_email_events_invoice_type", "invoice_id", "email_type"),
     )
@@ -201,8 +221,19 @@ class OrderPhoto(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("organizations.org_id", ondelete="CASCADE"),
+        nullable=False,
+        default=lambda: settings.default_org_id,
+    )
 
     order: Mapped[Booking] = relationship("Booking", back_populates="photos")
+
+    __table_args__ = (
+        Index("ix_order_photos_org_id", "org_id"),
+        Index("ix_order_photos_org_order", "org_id", "order_id"),
+    )
 
 
 class TeamWorkingHours(Base):
