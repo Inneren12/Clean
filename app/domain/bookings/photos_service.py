@@ -122,6 +122,7 @@ async def save_photo(
 
         photo = OrderPhoto(
             order_id=order.booking_id,
+            org_id=org_id,
             phase=phase.value,
             filename=filename,
             original_filename=upload.filename,

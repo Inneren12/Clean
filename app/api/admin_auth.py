@@ -175,6 +175,7 @@ async def get_admin_identity(
 ) -> AdminIdentity:
     cached: AdminIdentity | None = getattr(request.state, "admin_identity", None)
     if cached:
+        request.state.current_org_id = getattr(request.state, "current_org_id", None) or cached.org_id
         return cached
     identity = _authenticate_credentials(credentials)
     request.state.admin_identity = identity

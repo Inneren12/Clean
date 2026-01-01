@@ -1,4 +1,5 @@
 import logging
+import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -27,6 +28,22 @@ from app.settings import settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _order_org_id(identity: AdminIdentity, request: Request) -> uuid.UUID:
+    saas_identity = getattr(request.state, "saas_identity", None)
+    candidates = [
+        getattr(identity, "org_id", None),
+        getattr(request.state, "current_org_id", None),
+        getattr(saas_identity, "org_id", None),
+    ]
+    for value in candidates:
+        if value:
+            try:
+                return uuid.UUID(str(value))
+            except Exception:  # noqa: BLE001
+                continue
+    return entitlements.resolve_org_id(request)
 
 
 def _order_addon_response(model) -> addon_schemas.OrderAddonResponse:
@@ -143,9 +160,9 @@ async def update_photo_consent(
     payload: booking_schemas.ConsentPhotosUpdateRequest,
     request: Request,
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity = Depends(require_dispatch),
+    identity: AdminIdentity = Depends(require_dispatch),
 ) -> booking_schemas.ConsentPhotosResponse:
-    org_id = entitlements.resolve_org_id(request)
+    org_id = _order_org_id(identity, request)
     order = await photos_service.update_consent(
         session, order_id, payload.consent_photos, org_id=org_id
     )
@@ -168,7 +185,7 @@ async def upload_order_photo(
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ) -> booking_schemas.OrderPhotoResponse:
-    org_id = entitlements.resolve_org_id(request)
+    org_id = _order_org_id(identity, request)
     order = await photos_service.fetch_order(session, order_id, org_id)
     parsed_phase = booking_schemas.PhotoPhase.from_any_case(phase)
 
@@ -230,11 +247,11 @@ async def list_order_photos(
     order_id: str,
     request: Request,
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity = Depends(require_dispatch),
+    identity: AdminIdentity = Depends(require_dispatch),
 ) -> booking_schemas.OrderPhotoListResponse:
     # Admin/dispatcher can list photos regardless of consent_photos status
     # This allows viewing admin_override uploads even when consent is false
-    org_id = entitlements.resolve_org_id(request)
+    org_id = _order_org_id(identity, request)
     await photos_service.fetch_order(session, order_id, org_id)
     photos = await photos_service.list_photos(session, order_id, org_id)
     return booking_schemas.OrderPhotoListResponse(
@@ -268,7 +285,7 @@ async def signed_order_photo_url(
     identity: AdminIdentity = Depends(require_dispatch),
 ) -> booking_schemas.SignedUrlResponse:
     _ = identity
-    org_id = entitlements.resolve_org_id(request)
+    org_id = _order_org_id(identity, request)
     photo = await photos_service.get_photo(session, order_id, photo_id, org_id)
     storage = resolve_storage_backend(request.app.state)
     return await build_signed_photo_response(photo, request, storage, org_id)
@@ -333,7 +350,7 @@ async def download_order_photo(
     identity: AdminIdentity = Depends(require_dispatch),
 ) -> Response:
     _ = identity
-    org_id = entitlements.resolve_org_id(request)
+    org_id = getattr(identity, "org_id", None) or entitlements.resolve_org_id(request)
     photo = await photos_service.get_photo(session, order_id, photo_id, org_id)
     storage = resolve_storage_backend(request.app.state)
     key = photos_service.storage_key_for_photo(photo, org_id)
@@ -392,7 +409,7 @@ async def delete_order_photo(
     _admin: AdminIdentity = Depends(require_admin),
 ) -> None:
     storage = resolve_storage_backend(request.app.state)
-    org_id = entitlements.resolve_org_id(request)
+    org_id = _order_org_id(_admin, request)
     photo = await photos_service.delete_photo(
         session,
         order_id,
@@ -414,7 +431,7 @@ async def admin_order_gallery(
     session: AsyncSession = Depends(get_db_session),
     _admin: AdminIdentity = Depends(require_admin),
 ) -> HTMLResponse:
-    org_id = entitlements.resolve_org_id(request)
+    org_id = _order_org_id(_admin, request)
     photos = await photos_service.list_photos(session, order_id, org_id)
     storage = resolve_storage_backend(request.app.state)
     items: list[str] = []
