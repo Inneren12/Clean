@@ -144,6 +144,23 @@ class LocalStorageBackend(StorageBackend):
     def path_for(self, key: str) -> Path:
         return self._resolve(key)
 
+    # Convenience methods for simpler API (matching common usage patterns)
+    async def upload(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> StoredObject:
+        """Upload bytes to storage (convenience wrapper for put)."""
+        async def _data_stream():
+            yield data
+
+        return await self.put(key=key, body=_data_stream(), content_type=content_type)
+
+    async def download(self, key: str) -> bytes:
+        """Download bytes from storage (alias for read)."""
+        return await self.read(key=key)
+
+    async def exists(self, key: str) -> bool:
+        """Check if a key exists in storage."""
+        path = self._resolve(key)
+        return await asyncio.to_thread(path.exists)
+
 
 class S3StorageBackend(StorageBackend):
     def __init__(

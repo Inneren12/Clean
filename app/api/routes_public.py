@@ -11,6 +11,7 @@ from app.domain.bookings.db_models import Booking
 from app.domain.clients.db_models import ClientUser
 from app.domain.documents import service as document_service
 from app.domain.invoices import schemas as invoice_schemas, service as invoice_service, statuses as invoice_statuses
+from app.domain.invoices.db_models import Invoice
 from app.domain.nps import service as nps_service
 from app.domain.notifications import email_service
 from app.infra.db import get_db_session
@@ -264,6 +265,45 @@ async def unsubscribe(token: str, session: AsyncSession = Depends(get_db_session
             status_text="Preference updated",
         )
     )
+
+
+@router.get("/v1/invoices/public/{token}")
+async def get_public_invoice(
+    token: str,
+    session: AsyncSession = Depends(get_db_session),
+) -> dict:
+    """
+    Public invoice access endpoint (JSON API).
+
+    Allows anyone with the public token to view invoice details.
+    Does not require authentication or org context.
+    """
+    invoice = await invoice_service.get_invoice_by_public_token(session, token)
+    if invoice is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+    # Return invoice data as JSON
+    return {
+        "invoice_id": invoice.invoice_id,
+        "invoice_number": invoice.invoice_number,
+        "status": invoice.status,
+        "issue_date": invoice.issue_date.isoformat(),
+        "due_date": invoice.due_date.isoformat() if invoice.due_date else None,
+        "currency": invoice.currency,
+        "subtotal_cents": invoice.subtotal_cents,
+        "tax_cents": invoice.tax_cents,
+        "total_cents": invoice.total_cents,
+        "notes": invoice.notes,
+        "items": [
+            {
+                "description": item.description,
+                "qty": item.qty,
+                "unit_price_cents": item.unit_price_cents,
+                "line_total_cents": item.line_total_cents,
+            }
+            for item in invoice.items
+        ] if invoice.items else [],
+    }
 @router.get(
     "/i/{token}.pdf",
     response_class=Response,

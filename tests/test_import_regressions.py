@@ -108,3 +108,25 @@ def test_invoice_public_token_accepts_token_parameter():
     # Verify token_hash is computed and stored
     assert public_token.token_hash is not None
     assert len(public_token.token_hash) == 64  # SHA256 hex = 64 chars
+
+
+def test_local_storage_backend_has_upload_download_exists():
+    """
+    LocalStorageBackend should have upload/download/exists convenience methods.
+
+    These methods provide a simpler API matching common usage patterns,
+    wrapping the abstract put/read methods.
+    """
+    from app.infra.storage.backends import LocalStorageBackend
+
+    # Verify the convenience methods exist
+    storage = LocalStorageBackend(base_dir="/tmp/test_storage")
+
+    assert hasattr(storage, "upload"), "LocalStorageBackend should have upload method"
+    assert hasattr(storage, "download"), "LocalStorageBackend should have download method"
+    assert hasattr(storage, "exists"), "LocalStorageBackend should have exists method"
+
+    # Verify they're callable
+    assert callable(storage.upload)
+    assert callable(storage.download)
+    assert callable(storage.exists)
