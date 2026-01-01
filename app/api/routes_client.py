@@ -400,6 +400,7 @@ async def repeat_order(
     )
 
     org_id = entitlements.resolve_org_id(request)
+    await entitlements.require_booking_entitlement(request, session=session)
     new_booking = await booking_service.create_booking(
         starts_at=new_start,
         duration_minutes=original.duration_minutes,
@@ -489,8 +490,10 @@ async def client_create_booking(
         if not lead or not lead.email or lead.email.lower() != identity.email.lower():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
 
+    org_id = entitlements.resolve_org_id(request)
+    await entitlements.require_booking_entitlement(request, session=session)
+
     try:
-        org_id = entitlements.resolve_org_id(request)
         booking = await booking_service.create_booking(
             starts_at=normalized_start,
             duration_minutes=payload.duration_minutes,
