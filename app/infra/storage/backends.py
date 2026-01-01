@@ -5,11 +5,14 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional
 from urllib.parse import parse_qsl, urlparse
 
 import boto3
 from botocore.client import Config
+
+from app.settings import settings
+from app.shared.circuit_breaker import CircuitBreaker
 
 
 @dataclass
@@ -175,23 +178,39 @@ class S3StorageBackend(StorageBackend):
         read_timeout: float = 10.0,
         max_attempts: int = 4,
         max_payload_bytes: int | None = None,
+        enable_circuit_breaker: bool = True,
+        circuit_failure_threshold: int | None = None,
+        circuit_recovery_seconds: float | None = None,
+        circuit_window_seconds: float | None = None,
+        client: Any | None = None,
     ) -> None:
-        session = boto3.session.Session()
-        self.client = session.client(
-            "s3",
-            endpoint_url=endpoint,
-            region_name=region,
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key,
-            config=Config(
-                signature_version="s3v4",
-                connect_timeout=connect_timeout,
-                read_timeout=read_timeout,
-                retries={"mode": "standard", "max_attempts": max(1, max_attempts)},
-            ),
-        )
+        if client:
+            self.client = client
+        else:
+            session = boto3.session.Session()
+            self.client = session.client(
+                "s3",
+                endpoint_url=endpoint,
+                region_name=region,
+                aws_access_key_id=access_key,
+                aws_secret_access_key=secret_key,
+                config=Config(
+                    signature_version="s3v4",
+                    connect_timeout=connect_timeout,
+                    read_timeout=read_timeout,
+                    retries={"mode": "standard", "max_attempts": max(1, max_attempts)},
+                ),
+            )
         self.bucket = bucket
         self.max_payload_bytes = max_payload_bytes
+        self._breaker: CircuitBreaker | None = None
+        if enable_circuit_breaker:
+            self._breaker = CircuitBreaker(
+                name="s3",
+                failure_threshold=circuit_failure_threshold or settings.s3_circuit_failure_threshold,
+                recovery_time=circuit_recovery_seconds or settings.s3_circuit_recovery_seconds,
+                window_seconds=circuit_window_seconds or settings.s3_circuit_window_seconds,
+            )
 
     async def put(
         self, *, key: str, body: AsyncIterator[bytes], content_type: str
@@ -205,8 +224,7 @@ class S3StorageBackend(StorageBackend):
 
         def _upload() -> None:
             self.client.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=content_type)
-
-        await asyncio.to_thread(_upload)
+        await self._run_with_circuit(lambda: asyncio.to_thread(_upload))
         return StoredObject(key=key, size=len(data), content_type=content_type)
 
     async def read(self, *, key: str) -> bytes:
@@ -214,13 +232,12 @@ class S3StorageBackend(StorageBackend):
             response = self.client.get_object(Bucket=self.bucket, Key=key)
             return response["Body"].read()
 
-        return await asyncio.to_thread(_download)
+        return await self._run_with_circuit(lambda: asyncio.to_thread(_download))
 
     async def delete(self, *, key: str) -> None:
         def _delete() -> None:
             self.client.delete_object(Bucket=self.bucket, Key=key)
-
-        await asyncio.to_thread(_delete)
+        await self._run_with_circuit(lambda: asyncio.to_thread(_delete))
 
     async def list(self, *, prefix: str = "") -> list[str]:
         keys: list[str] = []
@@ -230,8 +247,7 @@ class S3StorageBackend(StorageBackend):
             for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
                 for item in page.get("Contents", []):
                     keys.append(item["Key"])
-
-        await asyncio.to_thread(_list)
+        await self._run_with_circuit(lambda: asyncio.to_thread(_list))
         return keys
 
     async def generate_signed_get_url(
@@ -244,7 +260,15 @@ class S3StorageBackend(StorageBackend):
                 ExpiresIn=expires_in,
             )
 
-        return await asyncio.to_thread(_sign)
+        return await self._run_with_circuit(lambda: asyncio.to_thread(_sign))
+
+    async def _run_with_circuit(self, fn):
+        if self._breaker is None:
+            result = fn()
+            if asyncio.iscoroutine(result):
+                return await result
+            return result
+        return await self._breaker.call(fn)
 
 
 class InMemoryStorageBackend(StorageBackend):

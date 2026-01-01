@@ -96,6 +96,8 @@ class RedisRateLimiter:
         requests_per_minute: int,
         cleanup_minutes: int = 10,
         redis_client: redis.Redis | None = None,
+        fail_open_seconds: int = 300,
+        health_probe_seconds: float = 5.0,
     ) -> None:
         self.requests_per_minute = requests_per_minute
         self.cleanup_seconds = max(int(cleanup_minutes * 60), 60)
@@ -104,7 +106,17 @@ class RedisRateLimiter:
         self.window_ms = 60_000
         self.ttl_seconds = max(int(self.window_ms / 1000) + 2, self.cleanup_seconds)
 
+        self.fail_open_seconds = max(1, fail_open_seconds)
+        self.health_probe_seconds = max(0.5, health_probe_seconds)
+        self._fallback = InMemoryRateLimiter(requests_per_minute, cleanup_minutes=cleanup_minutes)
+        self._fail_open_until: float = 0.0
+        self._last_probe: float = 0.0
+        self._fail_open_lock = asyncio.Lock()
+
     async def allow(self, key: str) -> bool:
+        now = time.monotonic()
+        if self._fail_open_until > now:
+            return await self._allow_with_fail_open(key, now)
         try:
             set_key = self._key(key)
             seq_key = self._seq_key(key)
@@ -112,8 +124,9 @@ class RedisRateLimiter:
             allowed = await self._eval_script(set_key, seq_key)
             return bool(allowed)
         except RedisError:
-            logger.warning("redis rate limiter unavailable; rejecting request")
-            return False
+            await self._enter_fail_open(now)
+            logger.warning("redis rate limiter unavailable; using in-memory fallback")
+            return await self._allow_with_fail_open(key, now)
 
     async def reset(self) -> None:
         try:
@@ -132,6 +145,29 @@ class RedisRateLimiter:
             await self.redis.aclose()
         except RedisError:
             logger.warning("redis rate limiter close failed")
+
+    async def _enter_fail_open(self, now: float) -> None:
+        async with self._fail_open_lock:
+            if now < self._fail_open_until:
+                return
+            self._fail_open_until = now + self.fail_open_seconds
+            self._last_probe = now
+            await self._fallback.reset()
+
+    async def _allow_with_fail_open(self, key: str, now: float) -> bool:
+        if now - self._last_probe >= self.health_probe_seconds:
+            self._last_probe = now
+            try:
+                await self.redis.ping()
+            except RedisError:
+                logger.debug("redis rate limiter still unavailable; continuing fallback")
+            else:
+                async with self._fail_open_lock:
+                    self._fail_open_until = 0.0
+                    await self._fallback.reset()
+                logger.info("redis rate limiter recovered; resuming primary")
+                return await self.allow(key)
+        return await self._fallback.allow(key)
 
     def _key(self, key: str) -> str:
         return f"rate-limit:{key}"
@@ -178,6 +214,8 @@ def create_rate_limiter(app_settings) -> RateLimiter:
             app_settings.redis_url,
             app_settings.rate_limit_per_minute,
             cleanup_minutes=app_settings.rate_limit_cleanup_minutes,
+            fail_open_seconds=getattr(app_settings, "rate_limit_fail_open_seconds", 300),
+            health_probe_seconds=getattr(app_settings, "rate_limit_redis_probe_seconds", 5.0),
         )
     return InMemoryRateLimiter(
         app_settings.rate_limit_per_minute,

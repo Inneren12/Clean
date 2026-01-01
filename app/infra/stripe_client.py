@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.infra.stripe_resilience import stripe_circuit
 from app.settings import settings
 
 
@@ -20,7 +21,7 @@ class StripeClient:
         self.secret_key = secret_key
         self.webhook_secret = webhook_secret
 
-    def create_checkout_session(
+    async def create_checkout_session(
         self,
         *,
         amount_cents: int,
@@ -57,9 +58,9 @@ class StripeClient:
             payload["payment_intent_data"] = {"metadata": payment_intent_metadata}
         if customer_email:
             payload["customer_email"] = customer_email
-        return self.stripe.checkout.Session.create(**payload)
+        return await stripe_circuit.call(lambda: self.stripe.checkout.Session.create(**payload))
 
-    def create_subscription_checkout_session(
+    async def create_subscription_checkout_session(
         self,
         *,
         price_cents: int,
@@ -97,9 +98,9 @@ class StripeClient:
         }
         if customer:
             payload["customer"] = customer
-        return self.stripe.checkout.Session.create(**payload)
+        return await stripe_circuit.call(lambda: self.stripe.checkout.Session.create(**payload))
 
-    def create_billing_portal_session(
+    async def create_billing_portal_session(
         self,
         *,
         customer_id: str,
@@ -109,18 +110,22 @@ class StripeClient:
             raise ValueError("Stripe secret key not configured")
 
         self.stripe.api_key = self.secret_key
-        return self.stripe.billing_portal.Session.create(
-            customer=customer_id,
-            return_url=return_url,
+        return await stripe_circuit.call(
+            lambda: self.stripe.billing_portal.Session.create(
+                customer=customer_id,
+                return_url=return_url,
+            )
         )
 
-    def verify_webhook(self, payload: bytes, signature: str | None) -> Any:
+    async def verify_webhook(self, payload: bytes, signature: str | None) -> Any:
         if not self.webhook_secret:
             raise ValueError("Stripe webhook secret not configured")
         if not signature:
             raise ValueError("Missing Stripe signature header")
-        return self.stripe.Webhook.construct_event(
-            payload=payload, sig_header=signature, secret=self.webhook_secret
+        return await stripe_circuit.call(
+            lambda: self.stripe.Webhook.construct_event(
+                payload=payload, sig_header=signature, secret=self.webhook_secret
+            )
         )
 
 

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.infra.stripe_resilience import stripe_circuit
+from app.shared.circuit_breaker import CircuitBreakerOpenError
+
 
 def resolve_client(app_state: Any):
     client = getattr(app_state, "stripe_client", None)
@@ -13,7 +16,7 @@ def resolve_client(app_state: Any):
     return client
 
 
-def create_checkout_session(
+async def create_checkout_session(
     stripe_client: Any,
     secret_key: str,
     amount_cents: int,
@@ -47,10 +50,20 @@ def create_checkout_session(
         payload["payment_intent_data"] = {"metadata": payment_intent_metadata}
     if customer_email:
         payload["customer_email"] = customer_email
-    return stripe_client.checkout.Session.create(**payload)
+
+    try:
+        return await stripe_circuit.call(lambda: stripe_client.checkout.Session.create(**payload))
+    except CircuitBreakerOpenError:
+        raise
 
 
-def parse_webhook_event(stripe_client: Any, payload: bytes, signature: str | None, webhook_secret: str):
+async def parse_webhook_event(
+    stripe_client: Any, payload: bytes, signature: str | None, webhook_secret: str
+):
     if not signature:
         raise ValueError("Missing Stripe signature header")
-    return stripe_client.Webhook.construct_event(payload=payload, sig_header=signature, secret=webhook_secret)
+    return await stripe_circuit.call(
+        lambda: stripe_client.Webhook.construct_event(
+            payload=payload, sig_header=signature, secret=webhook_secret
+        )
+    )

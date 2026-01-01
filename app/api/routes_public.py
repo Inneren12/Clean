@@ -397,7 +397,7 @@ async def create_invoice_payment(
 
     lead = await invoice_service.fetch_customer(session, invoice)
     stripe_client = stripe_infra.resolve_client(http_request.app.state)
-    checkout_session = stripe_infra.create_checkout_session(
+    checkout_session = await stripe_infra.create_checkout_session(
         stripe_client=stripe_client,
         secret_key=settings.stripe_secret_key,
         amount_cents=outstanding,
