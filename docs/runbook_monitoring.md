@@ -2,6 +2,11 @@
 
 This service exposes Prometheus metrics at `/metrics` (token-protected in production) and health details at `/readyz`.
 
+## Accessing /metrics
+- Production requires a bearer token: `curl -H "Authorization: Bearer $METRICS_TOKEN" https://api.example.com/metrics`.
+- Token can also be supplied via query string for Prometheus scrapes: `https://api.example.com/metrics?token=$METRICS_TOKEN`.
+- Development mode usually disables auth; in production a missing or wrong token returns `401` and a missing token in settings returns `500`.
+
 ## Key signals
 - **HTTP 5xx and latency**: `http_5xx_total` and `http_request_latency_seconds` (labels: `method`, `path`, `status_class`). High error rates or long latencies indicate API regressions or dependency issues.
 - **Webhooks**: `webhook_errors_total{type}` and `webhook_events_total{result}` track Stripe webhook processing. Alerts trigger on sustained `invalid_signature`, `payload_mismatch`, or `processing_error` spikes.
