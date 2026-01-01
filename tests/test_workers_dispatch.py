@@ -86,7 +86,7 @@ async def test_admin_can_create_and_update_workers(client, async_session_maker):
             "hourly_rate_cents": "2500",
             "is_active": "on",
         },
-        allow_redirects=False,
+        follow_redirects=False,
     )
     assert create_resp.status_code == 303
 
@@ -105,7 +105,7 @@ async def test_admin_can_create_and_update_workers(client, async_session_maker):
                 "team_id": worker.team_id,
                 "hourly_rate_cents": "3000",
             },
-            allow_redirects=False,
+            follow_redirects=False,
         )
         assert update_resp.status_code == 303
         await session.refresh(worker)
@@ -149,7 +149,7 @@ async def test_dispatch_assigns_worker_and_writes_audit(client, async_session_ma
         "/v1/admin/ui/dispatch/assign",
         headers=headers,
         data={"booking_id": booking_id, "worker_id": worker.worker_id},
-        allow_redirects=False,
+        follow_redirects=False,
     )
     assert assign_resp.status_code == 303
 
@@ -165,7 +165,7 @@ async def test_dispatch_assigns_worker_and_writes_audit(client, async_session_ma
         "/v1/admin/ui/dispatch/assign",
         headers=headers,
         data={"booking_id": booking_id, "worker_id": other_team.worker_id},
-        allow_redirects=False,
+        follow_redirects=False,
     )
     assert cross_resp.status_code == 400
 
@@ -195,7 +195,7 @@ async def test_dispatch_can_unassign_worker_with_blank_value(client, async_sessi
         "/v1/admin/ui/dispatch/assign",
         headers=headers,
         data={"booking_id": booking_id, "worker_id": worker.worker_id},
-        allow_redirects=False,
+        follow_redirects=False,
     )
     assert assign_resp.status_code == 303
 
@@ -204,7 +204,7 @@ async def test_dispatch_can_unassign_worker_with_blank_value(client, async_sessi
         "/v1/admin/ui/dispatch/assign",
         headers=headers,
         data={"booking_id": booking_id, "worker_id": ""},
-        allow_redirects=False,
+        follow_redirects=False,
     )
     assert unassign_resp.status_code == 303
 

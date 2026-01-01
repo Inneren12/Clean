@@ -140,12 +140,14 @@ async def _load_team_bookings(
     return result.scalars().all()
 
 
-async def _latest_invoices(session: AsyncSession, order_ids: list[str]) -> dict[str, Invoice]:
+async def _latest_invoices(
+    session: AsyncSession, order_ids: list[str], org_id: uuid.UUID
+) -> dict[str, Invoice]:
     if not order_ids:
         return {}
     stmt = (
         select(Invoice)
-        .where(Invoice.order_id.in_(order_ids))
+        .where(Invoice.order_id.in_(order_ids), Invoice.org_id == org_id)
         .order_by(Invoice.order_id, Invoice.created_at.desc())
     )
     result = await session.execute(stmt)
@@ -631,7 +633,7 @@ async def _render_job_page(
     log_view: bool = True,
 ) -> HTMLResponse:
     addon_catalog = await addon_service.list_definitions(session, include_inactive=False)
-    invoice_map = await _latest_invoices(session, [booking.booking_id])
+    invoice_map = await _latest_invoices(session, [booking.booking_id], identity.org_id)
     invoice = invoice_map.get(booking.booking_id)
     summary_raw = await time_service.fetch_time_tracking_summary(session, booking.booking_id)
     if summary_raw is None:
@@ -761,7 +763,7 @@ async def worker_jobs(
 ) -> HTMLResponse:
     lang = resolve_lang(request)
     bookings = await _load_team_bookings(session, identity.team_id, identity.org_id)
-    invoices = await _latest_invoices(session, [b.booking_id for b in bookings])
+    invoices = await _latest_invoices(session, [b.booking_id for b in bookings], identity.org_id)
     cards = (
         "".join(_render_job_card(booking, invoices.get(booking.booking_id), lang) for booking in bookings)
         or f"<p class=\"muted\">{html.escape(tr(lang, 'worker.no_jobs'))}</p>"
@@ -831,7 +833,7 @@ async def worker_update_addons(
             session, booking, identity, request, lang, message=str(exc), error=True, log_view=False
         )
 
-    invoice_map = await _latest_invoices(session, [booking.booking_id])
+    invoice_map = await _latest_invoices(session, [booking.booking_id], identity.org_id)
     invoice = invoice_map.get(booking.booking_id)
     invoice_message = "Add-ons saved for invoice creation."
     if invoice and invoice.status == invoice_statuses.INVOICE_STATUS_DRAFT:

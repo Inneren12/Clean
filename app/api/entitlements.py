@@ -6,6 +6,8 @@ from typing import Callable, Tuple
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api import saas_auth
+from app.api.saas_auth import _get_saas_token
 from app.domain.saas import billing_service
 from app.domain.saas.plans import Plan, get_plan
 from app.infra.db import get_db_session
@@ -24,7 +26,9 @@ def resolve_org_id(request: Request) -> uuid.UUID:
 
 
 def _has_tenant_identity(request: Request) -> bool:
-    return getattr(request.state, "saas_identity", None) is not None
+    if getattr(request.state, "saas_identity", None) is not None:
+        return True
+    return _get_saas_token(request) is not None
 
 
 def has_tenant_identity(request: Request) -> bool:
@@ -59,7 +63,13 @@ async def require_booking_entitlement(
 ) -> Plan:
     if not _has_tenant_identity(request):
         return get_plan(None)
-    org_id = resolve_org_id(request)
+    if getattr(request.state, "saas_identity", None) is None:
+        token = _get_saas_token(request)
+        if token:
+            identity = await saas_auth._load_identity(request, token, strict=True)
+            request.state.saas_identity = identity
+            request.state.current_org_id = identity.org_id
+    org_id = getattr(request.state, "current_org_id", None) or settings.default_org_id
     plan, usage = await _plan_and_usage(session, org_id)
     if usage["bookings_this_month"] >= plan.limits.max_bookings_per_month:
         raise HTTPException(

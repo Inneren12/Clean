@@ -377,8 +377,8 @@ async def invoice_detail(
 @router.post("/client/orders/{order_id}/repeat", status_code=status.HTTP_201_CREATED)
 async def repeat_order(
     order_id: str,
+    request: Request,
     identity: client_schemas.ClientIdentity = Depends(require_identity),
-    http_request: Request = None,
     session: AsyncSession = Depends(get_db_session),
 ) -> client_schemas.ClientOrderSummary:
     original = await _get_client_booking(session, order_id, identity.client_id)
@@ -399,7 +399,8 @@ async def repeat_order(
         service_type=lead.structured_inputs.get("cleaning_type") if lead and lead.structured_inputs else None,
     )
 
-    org_id = entitlements.resolve_org_id(http_request)
+    org_id = entitlements.resolve_org_id(request)
+    await entitlements.require_booking_entitlement(request, session=session)
     new_booking = await booking_service.create_booking(
         starts_at=new_start,
         duration_minutes=original.duration_minutes,
@@ -478,8 +479,8 @@ async def client_slots(
 )
 async def client_create_booking(
     payload: booking_schemas.ClientBookingRequest,
+    request: Request,
     identity: client_schemas.ClientIdentity = Depends(require_identity),
-    http_request: Request = None,
     session: AsyncSession = Depends(get_db_session),
 ) -> booking_schemas.ClientBookingResponse:
     normalized_start = payload.normalized_start()
@@ -489,8 +490,10 @@ async def client_create_booking(
         if not lead or not lead.email or lead.email.lower() != identity.email.lower():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
 
+    org_id = entitlements.resolve_org_id(request)
+    await entitlements.require_booking_entitlement(request, session=session)
+
     try:
-        org_id = entitlements.resolve_org_id(http_request)
         booking = await booking_service.create_booking(
             starts_at=normalized_start,
             duration_minutes=payload.duration_minutes,

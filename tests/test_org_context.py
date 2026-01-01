@@ -58,6 +58,27 @@ async def test_saas_token_malformed_org_rejected(async_session_maker, client):
 
 
 @pytest.mark.anyio
+async def test_saas_token_inactive_membership_rejected(async_session_maker, client):
+    settings.legacy_basic_auth_enabled = False
+
+    async with async_session_maker() as session:
+        org = await saas_service.create_organization(session, "Inactive Org")
+        user = await saas_service.create_user(session, "inactive@example.com", "pw")
+        membership = await saas_service.create_membership(session, org, user, MembershipRole.ADMIN)
+        membership.is_active = False
+        await session.commit()
+
+    token = saas_service.build_access_token(user, membership)
+
+    response = client.get(
+        "/v1/auth/org-context",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.anyio
 async def test_cross_org_access_blocked(async_session_maker, client):
     settings.legacy_basic_auth_enabled = False
 

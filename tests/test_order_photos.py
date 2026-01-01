@@ -234,6 +234,7 @@ def test_signed_download_rejects_expired_token(client, async_session_maker, uplo
             "org_id": str(settings.default_org_id),
             "order_id": booking_id,
             "photo_id": photo_id,
+            "typ": "photo_download",
             "exp": datetime.now(timezone.utc) - timedelta(seconds=60),
         },
         settings.auth_secret_key,

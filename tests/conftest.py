@@ -123,6 +123,16 @@ def enable_test_mode():
 
 
 @pytest.fixture(autouse=True)
+def override_org_resolver(monkeypatch):
+    def _resolve_org_id(request):
+        header_value = request.headers.get("X-Test-Org") if request else None
+        return uuid.UUID(header_value) if header_value else settings.default_org_id
+
+    monkeypatch.setattr("app.api.entitlements.resolve_org_id", _resolve_org_id)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def clean_database(test_engine):
     async def truncate_tables() -> None:
         async with test_engine.begin() as conn:

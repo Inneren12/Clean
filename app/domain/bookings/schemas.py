@@ -203,8 +203,8 @@ class ClientSlotQuery(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     team_id: int | None = Field(None, ge=1)
-    start: datetime = Field(alias="from", validation_alias="from")
-    end: datetime = Field(alias="to", validation_alias="to")
+    start: datetime = Field(alias="from")
+    end: datetime = Field(alias="to")
     duration_minutes: int = Field(DEFAULT_SLOT_DURATION_MINUTES, gt=0)
 
     @model_validator(mode="after")

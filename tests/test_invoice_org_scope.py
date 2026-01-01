@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import uuid
 from datetime import date
@@ -24,51 +23,43 @@ def admin_credentials():
     yield
 
 
-def test_invoices_are_org_scoped(monkeypatch, client, async_session_maker):
+@pytest.mark.anyio
+async def test_invoices_are_org_scoped(client, async_session_maker):
     org_a = uuid.uuid4()
     org_b = uuid.uuid4()
 
-    def _resolve_org_id(request):
-        header_value = request.headers.get("X-Test-Org")
-        return uuid.UUID(header_value) if header_value else settings.default_org_id
-
-    monkeypatch.setattr("app.api.entitlements.resolve_org_id", _resolve_org_id)
-
-    async def _seed() -> tuple[str, str, str]:
-        async with async_session_maker() as session:
-            session.add_all(
-                [
-                    Organization(org_id=org_a, name="Org A"),
-                    Organization(org_id=org_b, name="Org B"),
-                ]
-            )
-            invoice_a = Invoice(
-                org_id=org_a,
-                invoice_number=f"A-{uuid.uuid4()}",
-                status=statuses.INVOICE_STATUS_DRAFT,
-                issue_date=date.today(),
-                currency="CAD",
-                subtotal_cents=1000,
-                tax_cents=0,
-                total_cents=1000,
-            )
-            invoice_b = Invoice(
-                org_id=org_b,
-                invoice_number=f"B-{uuid.uuid4()}",
-                status=statuses.INVOICE_STATUS_DRAFT,
-                issue_date=date.today(),
-                currency="CAD",
-                subtotal_cents=1000,
-                tax_cents=0,
-                total_cents=1000,
-            )
-            session.add_all([invoice_a, invoice_b])
-            await session.flush()
-            token = await invoice_service.upsert_public_token(session, invoice_b)
-            await session.commit()
-            return invoice_a.invoice_id, invoice_b.invoice_id, token
-
-    invoice_a_id, invoice_b_id, token = asyncio.run(_seed())
+    async with async_session_maker() as session:
+        session.add_all(
+            [
+                Organization(org_id=org_a, name="Org A"),
+                Organization(org_id=org_b, name="Org B"),
+            ]
+        )
+        invoice_a = Invoice(
+            org_id=org_a,
+            invoice_number=f"A-{uuid.uuid4()}",
+            status=statuses.INVOICE_STATUS_DRAFT,
+            issue_date=date.today(),
+            currency="CAD",
+            subtotal_cents=1000,
+            tax_cents=0,
+            total_cents=1000,
+        )
+        invoice_b = Invoice(
+            org_id=org_b,
+            invoice_number=f"B-{uuid.uuid4()}",
+            status=statuses.INVOICE_STATUS_DRAFT,
+            issue_date=date.today(),
+            currency="CAD",
+            subtotal_cents=1000,
+            tax_cents=0,
+            total_cents=1000,
+        )
+        session.add_all([invoice_a, invoice_b])
+        await session.flush()
+        token = await invoice_service.upsert_public_token(session, invoice_b)
+        await session.commit()
+        invoice_a_id, invoice_b_id = invoice_a.invoice_id, invoice_b.invoice_id
 
     headers = {**_auth_headers("admin", "secret"), "X-Test-Org": str(org_a)}
 

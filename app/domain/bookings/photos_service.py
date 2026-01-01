@@ -122,6 +122,7 @@ async def save_photo(
 
         photo = OrderPhoto(
             order_id=order.booking_id,
+            org_id=org_id,
             phase=phase.value,
             filename=filename,
             original_filename=upload.filename,
@@ -176,8 +177,13 @@ async def save_photo(
 async def list_photos(
     session: AsyncSession, order_id: str, org_id: uuid.UUID | None = None
 ) -> list[OrderPhoto]:
-    await fetch_order(session, order_id, org_id)
-    stmt = select(OrderPhoto).where(OrderPhoto.order_id == order_id).order_by(OrderPhoto.created_at)
+    target_org = org_id or settings.default_org_id
+    await fetch_order(session, order_id, target_org)
+    stmt = (
+        select(OrderPhoto)
+        .where(OrderPhoto.order_id == order_id, OrderPhoto.org_id == target_org)
+        .order_by(OrderPhoto.created_at)
+    )
     result = await session.execute(stmt)
     return list(result.scalars().all())
 
@@ -185,8 +191,13 @@ async def list_photos(
 async def get_photo(
     session: AsyncSession, order_id: str, photo_id: str, org_id: uuid.UUID | None = None
 ) -> OrderPhoto:
-    await fetch_order(session, order_id, org_id)
-    stmt = select(OrderPhoto).where(OrderPhoto.order_id == order_id, OrderPhoto.photo_id == photo_id)
+    target_org = org_id or settings.default_org_id
+    await fetch_order(session, order_id, target_org)
+    stmt = select(OrderPhoto).where(
+        OrderPhoto.order_id == order_id,
+        OrderPhoto.photo_id == photo_id,
+        OrderPhoto.org_id == target_org,
+    )
     result = await session.execute(stmt)
     photo = result.scalar_one_or_none()
     if photo is None:

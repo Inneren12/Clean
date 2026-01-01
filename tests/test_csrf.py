@@ -34,7 +34,7 @@ async def test_csrf_enforced_when_testing_disabled(client):
                 "phone": "+1 555-0000",
                 "team_id": 1,
             },
-            allow_redirects=False,
+            follow_redirects=False,
         )
         assert post_resp.status_code == 403
     finally:
