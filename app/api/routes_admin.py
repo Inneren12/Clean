@@ -465,13 +465,16 @@ def _wrap_page(
 
 @router.get("/v1/admin/leads", response_model=List[AdminLeadResponse])
 async def list_leads(
+    http_request: Request,
     status_filter: Optional[str] = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_viewer),
 ) -> List[AdminLeadResponse]:
+    org_id = entitlements.resolve_org_id(http_request)
     stmt = (
         select(Lead)
+        .where(Lead.org_id == org_id)
         .options(
             selectinload(Lead.referral_credits),
             selectinload(Lead.referred_credit),
@@ -500,7 +503,11 @@ async def update_lead_status(
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ) -> AdminLeadResponse:
-    lead = await session.get(Lead, lead_id)
+    org_id = entitlements.resolve_org_id(http_request)
+    result = await session.execute(
+        select(Lead).where(Lead.lead_id == lead_id, Lead.org_id == org_id)
+    )
+    lead = result.scalar_one_or_none()
     if lead is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
 
@@ -1220,10 +1227,12 @@ async def admin_observability(
     store: BotStore = Depends(get_bot_store),
     _identity: AdminIdentity = Depends(require_viewer),
 ) -> HTMLResponse:
+    org_id = entitlements.resolve_org_id(request)
     lang = resolve_lang(request)
     active_filters = {value.lower() for value in filters if value}
     lead_stmt = (
         select(Lead)
+        .where(Lead.org_id == org_id)
         .options(selectinload(Lead.bookings))
         .order_by(Lead.created_at.desc())
         .limit(200)

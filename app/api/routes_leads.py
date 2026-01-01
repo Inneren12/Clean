@@ -6,6 +6,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api import entitlements
 from app.dependencies import get_db_session
 from app.domain.analytics.service import (
     EventType,
@@ -88,6 +89,7 @@ async def create_lead(
     if not captcha_ok:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Captcha verification failed")
 
+    org_id = entitlements.resolve_org_id(http_request)
     estimate_payload = request.estimate_snapshot.model_dump(mode="json")
     structured_inputs = request.structured_inputs.model_dump(mode="json")
     utm = request.utm
@@ -101,13 +103,14 @@ async def create_lead(
         referrer: Lead | None = None
         if request.referral_code:
             result = await session.execute(
-                select(Lead).where(Lead.referral_code == request.referral_code)
+                select(Lead).where(Lead.referral_code == request.referral_code, Lead.org_id == org_id)
             )
             referrer = result.scalar_one_or_none()
             if referrer is None:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid referral code")
 
         lead = Lead(
+            org_id=org_id,
             name=request.name,
             phone=request.phone,
             email=request.email,

@@ -47,7 +47,10 @@ async def grant_referral_credit(session: AsyncSession, referred_lead: Lead | Non
         return
 
     result = await session.execute(
-        select(Lead).where(Lead.referral_code == referred_lead.referred_by_code)
+        select(Lead).where(
+            Lead.referral_code == referred_lead.referred_by_code,
+            Lead.org_id == referred_lead.org_id,
+        )
     )
     referrer = result.scalar_one_or_none()
     if referrer is None:
