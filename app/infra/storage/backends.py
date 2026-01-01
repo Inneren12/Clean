@@ -28,9 +28,23 @@ class StorageBackend(ABC):
     ) -> StoredObject:
         """Persist an object and return its metadata."""
 
+    async def upload(
+        self, *, key: str, body: AsyncIterator[bytes], content_type: str
+    ) -> StoredObject:
+        """Alias for put() for backward compatibility."""
+        return await self.put(key=key, body=body, content_type=content_type)
+
     @abstractmethod
     async def read(self, *, key: str) -> bytes:
         """Return the object payload as bytes."""
+
+    async def read_bytes(self, *, key: str) -> bytes:
+        """Alias for read() for backward compatibility."""
+        return await self.read(key=key)
+
+    async def download(self, *, key: str) -> bytes:
+        """Alias for read() for backward compatibility."""
+        return await self.read(key=key)
 
     @abstractmethod
     async def delete(self, *, key: str) -> None:

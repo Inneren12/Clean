@@ -131,6 +131,11 @@ async def _resolve_org_for_event(session: AsyncSession, event: Any) -> StripeOrg
         return StripeOrgContext(org_id=billing.org_id)
 
     if org_id:
+        # Verify org exists
+        from app.domain.saas.db_models import Organization
+        org_exists = await session.scalar(select(Organization.org_id).where(Organization.org_id == org_id))
+        if not org_exists:
+            raise StripeOrgResolutionError("org_not_found")
         return StripeOrgContext(org_id=org_id)
 
     raise StripeOrgResolutionError("missing_org")
@@ -363,6 +368,12 @@ async def _handle_subscription_event(session: AsyncSession, event: Any, ctx: Str
 
     if str(event_type).startswith("customer.subscription"):
         billing = await billing_service.update_from_subscription_payload(session, event)
+        if billing is not None and ctx.org_id and billing.org_id != ctx.org_id:
+            logger.warning(
+                "stripe_subscription_org_mismatch",
+                extra={"extra": {"event_type": event_type, "billing_org": str(billing.org_id), "ctx_org": str(ctx.org_id)}},
+            )
+            return False
         return billing is not None
 
     mode = _safe_get(payload_object, "mode")
@@ -604,12 +615,25 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
         try:
             ctx = await _resolve_org_for_event(session, event)
         except StripeOrgResolutionError as exc:
+            # Differentiate between security violations (400) and non-actionable events (200)
+            # Security violations: org_customer_mismatch (consistency violation)
+            # Non-actionable: invoice_not_found, booking_not_found, missing_org, invalid_org, org_not_found
+            if exc.reason == "org_customer_mismatch":
+                logger.warning(
+                    "stripe_webhook_org_mismatch",
+                    extra={"extra": {"event_id": event_id, "reason": exc.reason}},
+                )
+                metrics.record_webhook_error("org_resolution_conflict")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Org conflict") from exc
+
+            # Non-actionable: log, record metric, return 200
             logger.info(
-                "stripe_webhook_invalid_org",
+                "stripe_webhook_ignored_unresolvable",
                 extra={"extra": {"event_id": event_id, "reason": exc.reason}},
             )
-            metrics.record_webhook_error("org_resolution_failed")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Stripe org") from exc
+            metrics.record_webhook("ignored")
+            metrics.record_webhook_error(f"org_resolution_{exc.reason}")
+            return {"received": True, "processed": False}
 
         existing = await session.scalar(select(StripeEvent).where(StripeEvent.event_id == str(event_id)).with_for_update())
         if existing:

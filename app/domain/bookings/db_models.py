@@ -244,8 +244,12 @@ class OrderPhotoTombstone(Base):
     tombstone_id: Mapped[uuid.UUID] = mapped_column(
         UUID_TYPE, primary_key=True, default=uuid.uuid4
     )
-    org_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, nullable=False)
-    order_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("organizations.org_id", ondelete="CASCADE"), nullable=False
+    )
+    order_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("bookings.booking_id", ondelete="CASCADE"), nullable=False
+    )
     photo_id: Mapped[str] = mapped_column(String(36), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(255), nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

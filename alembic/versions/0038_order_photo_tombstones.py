@@ -21,8 +21,8 @@ def upgrade() -> None:
     op.create_table(
         "order_photo_tombstones",
         sa.Column("tombstone_id", UUID_TYPE, primary_key=True, nullable=False),
-        sa.Column("org_id", UUID_TYPE, nullable=False),
-        sa.Column("order_id", sa.String(length=36), nullable=False),
+        sa.Column("org_id", UUID_TYPE, sa.ForeignKey("organizations.org_id", ondelete="CASCADE"), nullable=False),
+        sa.Column("order_id", sa.String(length=36), sa.ForeignKey("bookings.booking_id", ondelete="CASCADE"), nullable=False),
         sa.Column("photo_id", sa.String(length=36), nullable=False),
         sa.Column("storage_key", sa.String(length=255), nullable=False),
         sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),

@@ -259,4 +259,3 @@ def client_no_raise(async_session_maker):
         yield test_client
     app.dependency_overrides.clear()
     app.state.db_session_factory = original_factory
-import asyncio
