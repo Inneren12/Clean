@@ -1,6 +1,7 @@
 import base64
 import logging
 import secrets
+import uuid
 from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable, Optional
@@ -46,6 +47,7 @@ ROLE_PERMISSIONS: dict[AdminRole, set[AdminPermission]] = {
 class AdminIdentity:
     username: str
     role: AdminRole
+    org_id: uuid.UUID | None = None
 
 
 @dataclass
@@ -139,7 +141,9 @@ def _authenticate_credentials(credentials: HTTPBasicCredentials | None) -> Admin
         if secrets.compare_digest(credentials.username, user.username) and secrets.compare_digest(
             credentials.password, user.password
         ):
-            return AdminIdentity(username=user.username, role=user.role)
+            return AdminIdentity(
+                username=user.username, role=user.role, org_id=settings.default_org_id
+            )
 
     raise _build_auth_exception()
 
@@ -174,6 +178,7 @@ async def get_admin_identity(
         return cached
     identity = _authenticate_credentials(credentials)
     request.state.admin_identity = identity
+    request.state.current_org_id = getattr(request.state, "current_org_id", None) or identity.org_id
     return identity
 
 
@@ -232,6 +237,7 @@ class AdminAccessMiddleware(BaseHTTPMiddleware):
             identity = _authenticate_credentials(credentials)
             _assert_permissions(identity, [AdminPermission.VIEW])
             request.state.admin_identity = identity
+            request.state.current_org_id = getattr(request.state, "current_org_id", None) or identity.org_id
             return await call_next(request)
         except HTTPException as exc:
             return await http_exception_handler(request, exc)

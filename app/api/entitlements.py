@@ -13,11 +13,14 @@ from app.settings import settings
 
 
 def resolve_org_id(request: Request) -> uuid.UUID:
+    error: HTTPException | None = getattr(request.state, "saas_identity_error", None)
+    if error:
+        raise error
+
     org_id = getattr(request.state, "current_org_id", None)
-    try:
-        return uuid.UUID(str(org_id)) if org_id else settings.default_org_id
-    except Exception:  # noqa: BLE001
-        return settings.default_org_id
+    if org_id is not None:
+        return uuid.UUID(str(org_id))
+    return settings.default_org_id
 
 
 def _has_tenant_identity(request: Request) -> bool:

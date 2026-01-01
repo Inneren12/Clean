@@ -48,7 +48,16 @@ async def require_identity(request: Request) -> client_schemas.ClientIdentity:
     token = request.cookies.get(SESSION_COOKIE_NAME) or request.headers.get("Authorization")
     if token and token.startswith("Bearer "):
         token = token.split(" ", 1)[1]
-    return await _get_identity_from_token(token)
+    identity = await _get_identity_from_token(token)
+    request.state.current_org_id = getattr(request.state, "current_org_id", None) or settings.default_org_id
+    return identity
+
+
+@router.get("/client/org-context")
+async def client_org_context(
+    request: Request, identity: client_schemas.ClientIdentity = Depends(require_identity)
+) -> JSONResponse:
+    return JSONResponse({"org_id": str(getattr(request.state, "current_org_id", None))})
 
 
 def _magic_link_destination(request: Request) -> str:

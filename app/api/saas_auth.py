@@ -38,13 +38,24 @@ def _get_cached_identity(request: Request) -> "SaaSIdentity | None":
     return getattr(request.state, "saas_identity", None)
 
 
-async def _load_identity(request: Request, token: str | None) -> SaaSIdentity | None:
+def _get_saas_token(request: Request) -> str | None:
+    authorization: str | None = request.headers.get("Authorization")
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization.split(" ", 1)[1]
+    return request.cookies.get("saas_session")
+
+
+async def _load_identity(request: Request, token: str | None, *, strict: bool = False) -> SaaSIdentity | None:
     if not token:
+        if strict:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing SaaS token")
         return None
     try:
         payload = decode_access_token(token, request.app.state.app_settings.auth_secret_key)
     except Exception:  # noqa: BLE001
         logger.info("saas_token_invalid")
+        if strict:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid SaaS token")
         return None
 
     try:
@@ -54,6 +65,8 @@ async def _load_identity(request: Request, token: str | None) -> SaaSIdentity | 
         role = MembershipRole(role_raw)
     except Exception:  # noqa: BLE001
         logger.info("saas_token_payload_invalid")
+        if strict:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid SaaS token payload")
         return None
 
     session_factory = getattr(request.app.state, "db_session_factory", None)
@@ -80,14 +93,18 @@ async def _load_identity(request: Request, token: str | None) -> SaaSIdentity | 
 
 class TenantSessionMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):  # type: ignore[override]
-        token = None
-        authorization: str | None = request.headers.get("Authorization")
-        if authorization and authorization.lower().startswith("bearer "):
-            token = authorization.split(" ", 1)[1]
-        if not token:
-            token = request.cookies.get("saas_session")
+        token = _get_saas_token(request)
+        identity = None
+        identity_error: HTTPException | None = None
 
-        identity = await _load_identity(request, token)
+        if token:
+            try:
+                identity = await _load_identity(request, token, strict=True)
+            except HTTPException as exc:
+                identity_error = exc
+        else:
+            identity = await _load_identity(request, token)
+
         if identity:
             request.state.saas_identity = identity
             request.state.current_user_id = identity.user_id
@@ -97,13 +114,22 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
                 request.state.admin_identity = AdminIdentity(
                     username=identity.email or str(identity.user_id),
                     role=admin_role,
+                    org_id=identity.org_id,
                 )
+        elif identity_error:
+            request.state.saas_identity_error = identity_error
         return await call_next(request)
 
 
-def require_saas_user(identity: SaaSIdentity | None = Depends(_get_cached_identity)):
+def require_saas_user(
+    request: Request, identity: SaaSIdentity | None = Depends(_get_cached_identity)
+):
     if not identity:
+        error_from_state: HTTPException | None = getattr(request.state, "saas_identity_error", None)
+        if error_from_state:
+            raise error_from_state
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    request.state.current_org_id = identity.org_id
     return identity
 
 
