@@ -394,7 +394,7 @@ def test_admin_send_invoice_sets_status_and_token(client, async_session_maker):
 
     try:
         resp = client.post(f"/v1/admin/invoices/{invoice_id}/send", headers=headers)
-        assert resp.status_code == 200
+        assert resp.status_code == 202
         payload = resp.json()
         assert payload["invoice"]["status"] == statuses.INVOICE_STATUS_SENT
         assert payload["email_sent"] is True

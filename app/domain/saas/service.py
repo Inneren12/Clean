@@ -5,8 +5,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.bookings.db_models import Team
+from app.domain.bookings.service import DEFAULT_TEAM_NAME
 from app.domain.saas.db_models import (
     ApiToken,
     Membership,
@@ -18,6 +21,85 @@ from app.domain.saas.db_models import (
 )
 from app.infra.auth import create_access_token, hash_api_token, hash_password, verify_password
 from app.settings import settings
+
+DEFAULT_ORG_NAME = "Default Org"
+
+
+async def ensure_default_org_and_team(session: AsyncSession) -> tuple[Organization, Team]:
+    """Ensure the deterministic default org/team exist for the current database.
+
+    Uses dialect-specific upserts so it remains idempotent across Postgres (ON CONFLICT)
+    and SQLite (INSERT OR IGNORE).
+    """
+
+    bind = session.get_bind()
+    dialect_name = getattr(getattr(bind, "dialect", None), "name", "") if bind else ""
+    org_id = settings.default_org_id
+    if dialect_name == "sqlite":
+        org_stmt = sqlite.insert(Organization).values(org_id=org_id, name=DEFAULT_ORG_NAME)
+        org_stmt = org_stmt.prefix_with("OR IGNORE")
+        team_stmt = sqlite.insert(Team).values(team_id=1, org_id=org_id, name=DEFAULT_TEAM_NAME)
+        team_stmt = team_stmt.prefix_with("OR IGNORE")
+    else:
+        org_stmt = (
+            postgresql.insert(Organization)
+            .values(org_id=org_id, name=DEFAULT_ORG_NAME)
+            .on_conflict_do_nothing()
+        )
+        team_stmt = (
+            postgresql.insert(Team)
+            .values(team_id=1, org_id=org_id, name=DEFAULT_TEAM_NAME)
+            .on_conflict_do_nothing()
+        )
+
+    await session.execute(org_stmt)
+    await session.execute(team_stmt)
+
+    org = await session.get(Organization, org_id)
+    team = await session.get(Team, 1)
+    if team and team.org_id != org_id:
+        team.org_id = org_id
+        session.add(team)
+        await session.flush()
+
+    if org is None:
+        org = Organization(org_id=org_id, name=DEFAULT_ORG_NAME)
+        session.add(org)
+        await session.flush()
+
+    if team is None:
+        team = Team(team_id=1, org_id=org_id, name="Default Team")
+        session.add(team)
+        await session.flush()
+
+    return org, team
+
+
+async def ensure_org(session: AsyncSession, org_id: uuid.UUID, name: str = "Test Org") -> Organization:
+    """Idempotently ensure an organization exists for the given org_id.
+
+    Uses dialect-aware upserts to avoid FK violations in tests while remaining
+    safe to call multiple times.
+    """
+
+    bind = session.get_bind()
+    dialect_name = getattr(getattr(bind, "dialect", None), "name", "") if bind else ""
+    if dialect_name == "sqlite":
+        stmt = sqlite.insert(Organization).values(org_id=org_id, name=name).prefix_with("OR IGNORE")
+    else:
+        stmt = (
+            postgresql.insert(Organization)
+            .values(org_id=org_id, name=name)
+            .on_conflict_do_nothing()
+        )
+
+    await session.execute(stmt)
+    org = await session.get(Organization, org_id)
+    if org is None:
+        org = Organization(org_id=org_id, name=name)
+        session.add(org)
+        await session.flush()
+    return org
 
 
 async def create_organization(session: AsyncSession, name: str) -> Organization:

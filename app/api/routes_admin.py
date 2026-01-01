@@ -2501,6 +2501,7 @@ def _build_query(params: dict[str, str | int | None]) -> str:
 @router.post(
     "/v1/admin/invoices/{invoice_id}/send",
     response_model=invoice_schemas.InvoiceSendResponse,
+    status_code=status.HTTP_202_ACCEPTED,
 )
 async def send_invoice(
     invoice_id: str,

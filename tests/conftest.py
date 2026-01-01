@@ -7,10 +7,21 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-try:
-    asyncio.get_running_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
+def ensure_event_loop() -> asyncio.AbstractEventLoop:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    if loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    return loop
+
+
+ensure_event_loop()
 
 import anyio
 import pytest
@@ -39,6 +50,7 @@ from app.domain.policy_overrides import db_models as policy_override_db_models  
 from app.domain.admin_audit import db_models as admin_audit_db_models  # noqa: F401
 from app.domain.documents import db_models as document_db_models  # noqa: F401
 from app.domain.saas import db_models as saas_db_models  # noqa: F401
+from app.domain.saas.service import ensure_default_org_and_team
 from app.domain.ops import db_models as ops_db_models  # noqa: F401
 from app.infra.bot_store import InMemoryBotStore
 from app.infra.db import Base, get_db_session
@@ -59,14 +71,15 @@ def test_engine():
         poolclass=StaticPool,
     )
 
+    seed_session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
     async def init_models() -> None:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-            await conn.execute(sa.insert(booking_db_models.Team).values(team_id=1, name="Default Team"))
-            await conn.execute(
-                sa.insert(saas_db_models.Organization).values(org_id=DEFAULT_ORG_ID, name="Default Org")
-            )
-            await conn.execute(
+
+        async with seed_session_factory() as session:
+            await ensure_default_org_and_team(session)
+            await session.execute(
                 sa.insert(booking_db_models.TeamWorkingHours),
                 [
                     {
@@ -78,6 +91,7 @@ def test_engine():
                     for day in range(7)
                 ],
             )
+            await session.commit()
 
     asyncio.run(init_models())
     yield engine
@@ -177,11 +191,11 @@ def clean_database(test_engine):
         async with test_engine.begin() as conn:
             for table in reversed(Base.metadata.sorted_tables):
                 await conn.execute(table.delete())
-            await conn.execute(sa.insert(booking_db_models.Team).values(team_id=1, name="Default Team"))
-            await conn.execute(
-                sa.insert(saas_db_models.Organization).values(org_id=DEFAULT_ORG_ID, name="Default Org")
-            )
-            await conn.execute(
+
+        seed_session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+        async with seed_session_factory() as session:
+            await ensure_default_org_and_team(session)
+            await session.execute(
                 sa.insert(booking_db_models.TeamWorkingHours),
                 [
                     {
@@ -193,6 +207,7 @@ def clean_database(test_engine):
                     for day in range(7)
                 ],
             )
+            await session.commit()
 
     asyncio.run(truncate_tables())
     rate_limiter = getattr(app.state, "rate_limiter", None)
@@ -212,6 +227,8 @@ def clean_database(test_engine):
 
 @pytest.fixture()
 def client(async_session_maker):
+    ensure_event_loop()
+
     async def override_db_session():
         async with async_session_maker() as session:
             yield session
