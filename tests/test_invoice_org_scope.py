@@ -92,4 +92,4 @@ def test_invoices_are_org_scoped(monkeypatch, client, async_session_maker):
     assert checkout_resp.status_code == 404
 
     token_resp = client.get(f"/i/{token}", headers={"X-Test-Org": str(org_a)})
-    assert token_resp.status_code == 404
+    assert token_resp.status_code == 200

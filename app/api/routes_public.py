@@ -7,7 +7,6 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api import entitlements
 from app.domain.bookings.db_models import Booking
 from app.domain.clients.db_models import ClientUser
 from app.domain.documents import service as document_service
@@ -252,8 +251,7 @@ async def submit_nps(
 async def download_invoice_pdf(
     token: str, request: Request, session: AsyncSession = Depends(get_db_session)
 ) -> Response:
-    org_id = entitlements.resolve_org_id(request)
-    invoice = await invoice_service.get_invoice_by_public_token(session, token, org_id=org_id)
+    invoice = await invoice_service.get_invoice_by_public_token(session, token)
     if invoice is None:
         raise HTTPException(status_code=404, detail="Invoice not found")
     if invoice.status == invoice_statuses.INVOICE_STATUS_VOID:
@@ -275,8 +273,7 @@ async def download_invoice_pdf(
 async def download_receipt_pdf(
     token: str, payment_id: str, request: Request, session: AsyncSession = Depends(get_db_session)
 ) -> Response:
-    org_id = entitlements.resolve_org_id(request)
-    invoice = await invoice_service.get_invoice_by_public_token(session, token, org_id=org_id)
+    invoice = await invoice_service.get_invoice_by_public_token(session, token)
     if invoice is None:
         raise HTTPException(status_code=404, detail="Invoice not found")
     payment = next((p for p in invoice.payments if p.payment_id == payment_id), None)
@@ -303,8 +300,7 @@ async def download_receipt_pdf(
 async def download_service_agreement_pdf(
     token: str, request: Request, session: AsyncSession = Depends(get_db_session)
 ) -> Response:
-    org_id = entitlements.resolve_org_id(request)
-    invoice = await invoice_service.get_invoice_by_public_token(session, token, org_id=org_id)
+    invoice = await invoice_service.get_invoice_by_public_token(session, token)
     if invoice is None:
         raise HTTPException(status_code=404, detail="Invoice not found")
     if invoice.order_id is None:
@@ -328,8 +324,7 @@ async def download_service_agreement_pdf(
 async def view_invoice(
     token: str, request: Request, session: AsyncSession = Depends(get_db_session)
 ) -> HTMLResponse:
-    org_id = entitlements.resolve_org_id(request)
-    invoice = await invoice_service.get_invoice_by_public_token(session, token, org_id=org_id)
+    invoice = await invoice_service.get_invoice_by_public_token(session, token)
     if invoice is None:
         raise HTTPException(status_code=404, detail="Invoice not found")
     lead = await invoice_service.fetch_customer(session, invoice)
@@ -350,8 +345,7 @@ async def create_invoice_payment(
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
 ) -> invoice_schemas.InvoicePaymentInitResponse:
-    org_id = entitlements.resolve_org_id(http_request)
-    invoice = await invoice_service.get_invoice_by_public_token(session, token, org_id=org_id)
+    invoice = await invoice_service.get_invoice_by_public_token(session, token)
     if invoice is None:
         raise HTTPException(status_code=404, detail="Invoice not found")
     if invoice.status == invoice_statuses.INVOICE_STATUS_VOID:
