@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -60,6 +60,23 @@ async def _lock_booking(session: AsyncSession, booking_id: str) -> Booking | Non
     return result.scalar_one_or_none()
 
 
+async def _lock_booking_by_checkout_or_intent(
+    session: AsyncSession, checkout_session_id: str | None, payment_intent_id: str | None
+) -> Booking | None:
+    conditions = []
+    if checkout_session_id:
+        conditions.append(Booking.stripe_checkout_session_id == checkout_session_id)
+    if payment_intent_id:
+        conditions.append(Booking.stripe_payment_intent_id == payment_intent_id)
+
+    if not conditions:
+        return None
+
+    stmt = select(Booking).where(or_(*conditions)).with_for_update()
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 async def _resolve_org_for_event(session: AsyncSession, event: Any) -> StripeOrgContext:
     data = _safe_get(event, "data", {}) or {}
     payload_object = _safe_get(data, "object", {}) or {}
@@ -80,6 +97,21 @@ async def _resolve_org_for_event(session: AsyncSession, event: Any) -> StripeOrg
         if booking is None:
             raise StripeOrgResolutionError("booking_not_found")
         return StripeOrgContext(org_id=booking.org_id, booking=booking)
+
+    event_type = _safe_get(event, "type", "") or ""
+    checkout_id_raw = _safe_get(payload_object, "id")
+    checkout_session_id = checkout_id_raw if isinstance(checkout_id_raw, str) and checkout_id_raw.startswith("cs_") else None
+    payment_intent_id = (
+        _safe_get(payload_object, "payment_intent")
+        if event_type.startswith("checkout.session.")
+        else _safe_get(payload_object, "id") if event_type.startswith("payment_intent.") else None
+    )
+
+    booking_from_payment = await _lock_booking_by_checkout_or_intent(
+        session, checkout_session_id, payment_intent_id
+    )
+    if booking_from_payment:
+        return StripeOrgContext(org_id=booking_from_payment.org_id, booking=booking_from_payment)
 
     org_id: uuid.UUID | None = None
     if org_id_raw:

@@ -17,18 +17,22 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "stripe_events",
-        sa.Column(
-            "org_id",
-            sa.Uuid(as_uuid=True),
-            sa.ForeignKey("organizations.org_id", ondelete="CASCADE"),
-            nullable=True,
-        ),
-    )
-    op.create_index("ix_stripe_events_org_id", "stripe_events", ["org_id"], unique=False)
+    with op.batch_alter_table("stripe_events", recreate="auto") as batch:
+        batch.add_column(sa.Column("org_id", sa.Uuid(as_uuid=True), nullable=True))
+        batch.create_foreign_key(
+            "fk_stripe_events_org_id_organizations",
+            "organizations",
+            ["org_id"],
+            ["org_id"],
+            ondelete="CASCADE",
+        )
+        batch.create_index("ix_stripe_events_org_id", ["org_id"], unique=False)
 
 
 def downgrade() -> None:
-    op.drop_index("ix_stripe_events_org_id", table_name="stripe_events")
-    op.drop_column("stripe_events", "org_id")
+    with op.batch_alter_table("stripe_events", recreate="auto") as batch:
+        batch.drop_constraint(
+            "fk_stripe_events_org_id_organizations", type_="foreignkey"
+        )
+        batch.drop_index("ix_stripe_events_org_id")
+        batch.drop_column("org_id")
