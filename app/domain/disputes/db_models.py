@@ -3,19 +3,27 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
 from app.infra.db import Base
 
+DEFAULT_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
 
 class Dispute(Base):
     __tablename__ = "disputes"
-    __table_args__ = (Index("ix_disputes_booking_state", "booking_id", "state"),)
+    __table_args__ = (
+        Index("ix_disputes_booking_state", "booking_id", "state"),
+        Index("ix_disputes_org_state", "org_id", "state"),
+    )
 
     dispute_id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.org_id"), nullable=False, default=DEFAULT_ORG_ID
     )
     booking_id: Mapped[str] = mapped_column(
         ForeignKey("bookings.booking_id"), nullable=False, index=True
@@ -46,10 +54,16 @@ class Dispute(Base):
 
 class FinancialAdjustmentEvent(Base):
     __tablename__ = "financial_adjustment_events"
-    __table_args__ = (Index("ix_financial_events_booking", "booking_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_financial_events_booking", "booking_id", "created_at"),
+        Index("ix_financial_events_org_created", "org_id", "created_at"),
+    )
 
     event_id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.org_id"), nullable=False, default=DEFAULT_ORG_ID
     )
     booking_id: Mapped[str] = mapped_column(
         ForeignKey("bookings.booking_id"), nullable=False, index=True

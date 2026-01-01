@@ -3,10 +3,12 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infra.db import Base
+
+DEFAULT_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
 class Subscription(Base):
@@ -14,6 +16,9 @@ class Subscription(Base):
 
     subscription_id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.org_id"), nullable=False, default=DEFAULT_ORG_ID
     )
     client_id: Mapped[str] = mapped_column(ForeignKey("client_users.client_id"), index=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -34,11 +39,19 @@ class Subscription(Base):
     )
     orders = relationship("Booking", back_populates="subscription")
 
+    __table_args__ = (
+        Index("ix_subscriptions_org_status", "org_id", "status"),
+        Index("ix_subscriptions_org_next_run", "org_id", "next_run_at"),
+    )
+
 
 class SubscriptionAddon(Base):
     __tablename__ = "subscription_addons"
 
     subscription_addon_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.org_id"), nullable=False, default=DEFAULT_ORG_ID
+    )
     subscription_id: Mapped[str] = mapped_column(
         ForeignKey("subscriptions.subscription_id", ondelete="CASCADE"), index=True
     )
@@ -48,4 +61,5 @@ class SubscriptionAddon(Base):
 
     __table_args__ = (
         UniqueConstraint("subscription_id", "addon_code", name="uq_subscription_addons_code"),
+        Index("ix_subscription_addons_org_subscription", "org_id", "subscription_id"),
     )

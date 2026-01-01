@@ -3,20 +3,28 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infra.db import Base
 
+DEFAULT_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
 
 class ExportEvent(Base):
     __tablename__ = "export_events"
-    __table_args__ = (Index("ix_export_events_created_lead", "created_at", "lead_id"),)
+    __table_args__ = (
+        Index("ix_export_events_created_lead", "created_at", "lead_id"),
+        Index("ix_export_events_org_created", "org_id", "created_at"),
+    )
 
     event_id: Mapped[str] = mapped_column(
         String(36),
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.org_id"), nullable=False, default=DEFAULT_ORG_ID
     )
     lead_id: Mapped[str | None] = mapped_column(String(36))
     mode: Mapped[str] = mapped_column(String(16), nullable=False)

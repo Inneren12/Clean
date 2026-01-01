@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Time,
     UniqueConstraint,
+    Uuid,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -26,11 +27,16 @@ if TYPE_CHECKING:  # pragma: no cover
     from app.domain.workers.db_models import Worker
     from app.domain.invoices.db_models import Invoice
 
+DEFAULT_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
 
 class Team(Base):
     __tablename__ = "teams"
 
     team_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.org_id"), nullable=False, default=DEFAULT_ORG_ID
+    )
     name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -46,6 +52,11 @@ class Team(Base):
 
     bookings: Mapped[list["Booking"]] = relationship("Booking", back_populates="team")
 
+    __table_args__ = (
+        Index("ix_teams_org_id", "org_id"),
+        Index("ix_teams_org_created", "org_id", "created_at"),
+    )
+
 
 class Booking(Base):
     __tablename__ = "bookings"
@@ -54,6 +65,9 @@ class Booking(Base):
         String(36),
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.org_id"), nullable=False, default=DEFAULT_ORG_ID
     )
     client_id: Mapped[str | None] = mapped_column(
         ForeignKey("client_users.client_id"), nullable=True, index=True
@@ -135,6 +149,9 @@ class Booking(Base):
         Index("ix_bookings_starts_status", "starts_at", "status"),
         Index("ix_bookings_status", "status"),
         Index("ix_bookings_checkout_session", "stripe_checkout_session_id"),
+        Index("ix_bookings_org_id", "org_id"),
+        Index("ix_bookings_org_status", "org_id", "status"),
+        Index("ix_bookings_org_starts", "org_id", "starts_at"),
         UniqueConstraint("subscription_id", "scheduled_date", name="uq_bookings_subscription_schedule"),
     )
 
@@ -146,6 +163,9 @@ class EmailEvent(Base):
         String(36),
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.org_id"), nullable=False, default=DEFAULT_ORG_ID
     )
     booking_id: Mapped[str | None] = mapped_column(
         ForeignKey("bookings.booking_id"), nullable=True, index=True
@@ -169,6 +189,7 @@ class EmailEvent(Base):
     __table_args__ = (
         Index("ix_email_events_booking_type", "booking_id", "email_type"),
         Index("ix_email_events_invoice_type", "invoice_id", "email_type"),
+        Index("ix_email_events_org_type", "org_id", "email_type"),
     )
 
 
@@ -177,6 +198,9 @@ class OrderPhoto(Base):
 
     photo_id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.org_id"), nullable=False, default=DEFAULT_ORG_ID
     )
     order_id: Mapped[str] = mapped_column(
         ForeignKey("bookings.booking_id", ondelete="CASCADE"), nullable=False, index=True
@@ -194,11 +218,16 @@ class OrderPhoto(Base):
 
     order: Mapped[Booking] = relationship("Booking", back_populates="photos")
 
+    __table_args__ = (Index("ix_order_photos_org_order", "org_id", "order_id"),)
+
 
 class TeamWorkingHours(Base):
     __tablename__ = "team_working_hours"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.org_id"), nullable=False, default=DEFAULT_ORG_ID
+    )
     team_id: Mapped[int] = mapped_column(ForeignKey("teams.team_id"), nullable=False)
     day_of_week: Mapped[int] = mapped_column(Integer, nullable=False)
     start_time: Mapped[time] = mapped_column(Time(timezone=False), nullable=False)
@@ -217,13 +246,20 @@ class TeamWorkingHours(Base):
 
     team: Mapped[Team] = relationship("Team", backref="working_hours")
 
-    __table_args__ = (UniqueConstraint("team_id", "day_of_week", name="uq_team_day"),)
+    __table_args__ = (
+        UniqueConstraint("team_id", "day_of_week", name="uq_team_day"),
+        Index("ix_team_working_hours_org_team", "org_id", "team_id"),
+        Index("ix_team_working_hours_org_day", "org_id", "day_of_week"),
+    )
 
 
 class TeamBlackout(Base):
     __tablename__ = "team_blackouts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.org_id"), nullable=False, default=DEFAULT_ORG_ID
+    )
     team_id: Mapped[int] = mapped_column(ForeignKey("teams.team_id"), nullable=False)
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -241,3 +277,8 @@ class TeamBlackout(Base):
     )
 
     team: Mapped[Team] = relationship("Team", backref="blackouts")
+
+    __table_args__ = (
+        Index("ix_team_blackouts_org_team", "org_id", "team_id"),
+        Index("ix_team_blackouts_org_starts", "org_id", "starts_at"),
+    )

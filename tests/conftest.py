@@ -54,14 +54,19 @@ def test_engine():
     async def init_models() -> None:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-            await conn.execute(sa.insert(booking_db_models.Team).values(team_id=1, name="Default Team"))
             await conn.execute(
                 sa.insert(saas_db_models.Organization).values(org_id=DEFAULT_ORG_ID, name="Default Org")
+            )
+            await conn.execute(
+                sa.insert(booking_db_models.Team).values(
+                    team_id=1, org_id=DEFAULT_ORG_ID, name="Default Team"
+                )
             )
             await conn.execute(
                 sa.insert(booking_db_models.TeamWorkingHours),
                 [
                     {
+                        "org_id": DEFAULT_ORG_ID,
                         "team_id": 1,
                         "day_of_week": day,
                         "start_time": time(hour=WORK_START_HOUR, minute=0),

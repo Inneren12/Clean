@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+import uuid
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -13,11 +14,14 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    Uuid,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infra.db import Base
+
+DEFAULT_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
 class InvoiceNumberSequence(Base):
@@ -42,6 +46,9 @@ class Invoice(Base):
         String(36),
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.org_id"), nullable=False, default=DEFAULT_ORG_ID
     )
     invoice_number: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
     order_id: Mapped[str | None] = mapped_column(ForeignKey("bookings.booking_id"), index=True)
@@ -84,11 +91,20 @@ class Invoice(Base):
         uselist=False,
     )
 
+    __table_args__ = (
+        Index("ix_invoices_org_id", "org_id"),
+        Index("ix_invoices_org_status", "org_id", "status"),
+        Index("ix_invoices_org_created", "org_id", "created_at"),
+    )
+
 
 class InvoiceItem(Base):
     __tablename__ = "invoice_items"
 
     item_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.org_id"), nullable=False, default=DEFAULT_ORG_ID
+    )
     invoice_id: Mapped[str] = mapped_column(ForeignKey("invoices.invoice_id"), nullable=False, index=True)
     description: Mapped[str] = mapped_column(String(255), nullable=False)
     qty: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -98,6 +114,10 @@ class InvoiceItem(Base):
 
     invoice: Mapped[Invoice] = relationship("Invoice", back_populates="items")
 
+    __table_args__ = (
+        Index("ix_invoice_items_org_invoice", "org_id", "invoice_id"),
+    )
+
 
 class Payment(Base):
     __tablename__ = "invoice_payments"
@@ -106,6 +126,9 @@ class Payment(Base):
         String(36),
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.org_id"), nullable=False, default=DEFAULT_ORG_ID
     )
     invoice_id: Mapped[str | None] = mapped_column(
         ForeignKey("invoices.invoice_id"), nullable=True, index=True
@@ -132,9 +155,11 @@ class Payment(Base):
     invoice: Mapped[Invoice | None] = relationship("Invoice", back_populates="payments")
 
     __table_args__ = (
+        Index("ix_invoice_payments_org_id", "org_id"),
         Index("ix_invoice_payments_invoice_status", "invoice_id", "status"),
         Index("ix_invoice_payments_provider_ref", "provider_ref"),
         Index("ix_invoice_payments_checkout_session", "checkout_session_id"),
+        Index("ix_invoice_payments_org_status", "org_id", "status"),
         UniqueConstraint("provider", "provider_ref", name="uq_invoice_payments_provider_ref"),
     )
 
@@ -158,6 +183,9 @@ class InvoicePublicToken(Base):
     __tablename__ = "invoice_public_tokens"
 
     token_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.org_id"), nullable=False, default=DEFAULT_ORG_ID
+    )
     invoice_id: Mapped[str] = mapped_column(
         ForeignKey("invoices.invoice_id"),
         nullable=False,
@@ -174,3 +202,7 @@ class InvoicePublicToken(Base):
     last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     invoice: Mapped[Invoice] = relationship("Invoice", back_populates="public_token")
+
+    __table_args__ = (
+        Index("ix_invoice_public_tokens_org_invoice", "org_id", "invoice_id"),
+    )

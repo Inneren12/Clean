@@ -7,12 +7,14 @@ from datetime import datetime
 
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
 from app.domain.leads.statuses import default_lead_status
 from app.infra.db import Base
+
+DEFAULT_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
 CHARSET = string.ascii_uppercase + string.digits
@@ -27,6 +29,9 @@ class ChatSession(Base):
     __tablename__ = "chat_sessions"
 
     session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.org_id"), nullable=False, default=DEFAULT_ORG_ID
+    )
     brand: Mapped[str] = mapped_column(String(32), nullable=False, default="economy")
     state_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     updated_at: Mapped[datetime] = mapped_column(
@@ -34,6 +39,10 @@ class ChatSession(Base):
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_chat_sessions_org_updated", "org_id", "updated_at"),
     )
 
 
@@ -44,6 +53,9 @@ class Lead(Base):
         String(36),
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.org_id"), nullable=False, default=DEFAULT_ORG_ID
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     phone: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -102,6 +114,12 @@ class Lead(Base):
             kwargs["referral_code"] = generate_referral_code()
         super().__init__(**kwargs)
 
+    __table_args__ = (
+        Index("ix_leads_org_id", "org_id"),
+        Index("ix_leads_org_status", "org_id", "status"),
+        Index("ix_leads_org_created", "org_id", "created_at"),
+    )
+
 
 class ReferralCredit(Base):
     __tablename__ = "referral_credits"
@@ -110,6 +128,9 @@ class ReferralCredit(Base):
         String(36),
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.org_id"), nullable=False, default=DEFAULT_ORG_ID
     )
     referrer_lead_id: Mapped[str] = mapped_column(
         ForeignKey("leads.lead_id"), nullable=False
@@ -129,4 +150,8 @@ class ReferralCredit(Base):
     )
     referred: Mapped[Lead] = relationship(
         Lead, back_populates="referred_credit", foreign_keys=[referred_lead_id]
+    )
+
+    __table_args__ = (
+        Index("ix_referral_credits_org_referrer", "org_id", "referrer_lead_id"),
     )
