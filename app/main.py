@@ -116,16 +116,22 @@ class MetricsMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Callable):
         path_label = "unmatched"
+        start = time.perf_counter()
+        status_code = 500
         try:
             response = await call_next(request)
+            status_code = response.status_code
         except Exception:
             route = request.scope.get("route")
             path_label = getattr(route, "path", path_label)
             self.metrics.record_http_5xx(request.method, path_label)
             raise
-        route = request.scope.get("route")
-        path_label = getattr(route, "path", path_label)
-        if response.status_code >= 500:
+        finally:
+            route = request.scope.get("route")
+            path_label = getattr(route, "path", path_label)
+            duration = time.perf_counter() - start
+            self.metrics.record_http_latency(request.method, path_label, status_code, duration)
+        if status_code >= 500:
             self.metrics.record_http_5xx(request.method, path_label)
         return response
 

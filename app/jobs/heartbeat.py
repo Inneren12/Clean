@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.domain.ops.db_models import JobHeartbeat
+from app.infra.metrics import metrics
 
 
 async def record_heartbeat(session_factory: async_sessionmaker, name: str = "jobs-runner") -> None:
@@ -15,3 +16,5 @@ async def record_heartbeat(session_factory: async_sessionmaker, name: str = "job
         else:
             heartbeat.last_heartbeat = now
         await session.commit()
+    metrics.record_job_heartbeat(name, now.timestamp())
+    metrics.record_job_success(name, now.timestamp())

@@ -1,33 +1,30 @@
-# Monitoring and operational signals
+# Monitoring & Alerting Runbook
 
-Minimum production monitoring should cover availability, async jobs, and storage pressure. Configure alerts where possible and ensure dashboards are scoped to the `/v1/admin` surface (protected by Cloudflare Access or an equivalent access proxy) and public endpoints separately.
+This service exposes Prometheus metrics at `/metrics` (token-protected in production) and health details at `/readyz`.
 
-## HTTP/API signals
+## Key signals
+- **HTTP 5xx and latency**: `http_5xx_total` and `http_request_latency_seconds` (labels: `method`, `path`, `status_class`). High error rates or long latencies indicate API regressions or dependency issues.
+- **Webhooks**: `webhook_errors_total{type}` and `webhook_events_total{result}` track Stripe webhook processing. Alerts trigger on sustained `invalid_signature`, `payload_mismatch`, or `processing_error` spikes.
+- **Email delivery**: `email_notifications_total{template,status}` (statuses: `delivered`, `skipped`, `failed`, `dead`) plus DLQ gauges `email_dlq_messages{status}` to track pending vs. dead letters.
+- **Job runner heartbeat**: `job_last_heartbeat_timestamp{job}` and `job_last_success_timestamp{job}` provide liveness. `/readyz` includes a `jobs` stanza with age seconds when `JOB_HEARTBEAT_REQUIRED=true`.
+- **Circuit breakers**: `circuit_state{circuit}` exposes breaker state (`0=closed`, `1=open`). Watch for stuck-open breakers on email or payment providers.
 
-- **5xx rate**: alert if rolling 5-minute error rate exceeds 2% or any sudden spike. Break down by path to isolate `/v1/admin` vs public APIs. Prometheus: `increase(http_5xx_total[5m])` grouped by path/method.
-- **Latency**: watch P95/99 latency for `/healthz` (fast) versus `/readyz` (includes database and optional jobs heartbeat checks).
-- **Rate-limit denials**: elevated 429s can indicate abuse or misconfiguration. If REDIS_URL is set, confirm Redis is reachable to avoid falling back to local-only limits.
-- **Readiness**: `/readyz` now returns a `jobs` block when job heartbeat checks are enabled. Alert when `status` becomes `unhealthy` or when `jobs.ok` is false for more than 2 consecutive probes.
+## First response checklist
+1. **Confirm health endpoints**
+   - `GET /readyz` should return `status: ok` with `database.ok=true` and `jobs.ok=true`.
+2. **Inspect recent deployments**
+   - Check deploy logs for errors aligned with alert start time.
+3. **Drill into metrics**
+   - 5xx/latency: filter `http_request_latency_seconds`/`http_5xx_total` by `path` to isolate endpoints.
+   - Webhooks: look at `webhook_errors_total` by `type` to distinguish bad signatures vs. processing bugs.
+   - Emails: compare `email_notifications_total{status="failed"}` with `email_dlq_messages`. Rising `dead` counts mean retries are exhausted.
+   - Jobs: verify `job_last_heartbeat_timestamp{job="jobs-runner"}` freshness matches `job_heartbeat_ttl_seconds`.
+4. **Common fixes**
+   - 5xx spike: roll back recent change, inspect app logs for stack traces with the matching `path`.
+   - Webhook signature errors: validate Stripe secret rotation and endpoint configuration; replay recent events from Stripe dashboard if safe.
+   - Email failures: confirm SMTP/SendGrid credentials and network connectivity; clear DLQ by fixing credentials then rerunning `email-dlq` job.
+   - Job heartbeat stale: restart the jobs runner process or container; check scheduler logs for crashes.
 
-## Webhooks/export
-
-- **Webhook failures**: monitor dead-letter queue growth (`export_events_dead_letter`) and repeated webhook retry errors in logs. Prometheus: `webhook_events_total{result="error"}` > 0 over 5 minutes.
-- **Blocked destinations**: alert on `export_webhook_blocked` or `export_webhook_failed` log events.
-  - Ensure `EXPORT_WEBHOOK_ALLOWED_HOSTS` is configured as bare hostnames (no scheme), either comma-separated or JSON list, so valid webhook URLs are not accidentally blocked.
-- **Billing webhooks**: watch for `stripe_webhook_error` and `stripe_webhook_replayed_mismatch` entries. Subscription events should flip `organization_billing.status` away from `inactive`; alert if status remains `inactive` for paying orgs or if repeated webhook retries are ignored. Prometheus: `increase(webhook_events_total{result="ignored"}[1h])` should stay low—spikes may indicate duplicate or malformed events.
-
-## Email and scheduled jobs
-
-- **Email job failures**: alert on consecutive failures in `email_events` processing (invoice reminders, booking reminders, NPS send). Track retries and throttle when provider limits are hit. Prometheus: `email_jobs_total{status="error"}` > 0 or steady growth of `status="skipped"` should trigger investigations.
-- **Job loop health**: heartbeat for `python -m app.jobs.run` processes; alert if missing for 10 minutes. `/readyz` exposes `jobs.ok` with age/threshold when `JOB_HEARTBEAT_REQUIRED=true`. Dashboard the gap between `jobs.age_seconds` and `jobs.threshold_seconds`.
-
-## Database and storage
-
-- **Disk usage**: track database volume usage and the uploads mount (`ORDER_UPLOAD_ROOT`). Alert at 70%/85% thresholds.
-- **Connection errors**: monitor database connection pool errors and migration drift (see `/readyz`).
-- **Backup freshness**: alert if no successful `pg_dump` within 24 hours or uploads sync fails.
-
-## Access control
-
-- Place `/v1/admin` behind Cloudflare Access (or another zero-trust gateway) to require SSO/MFA before reaching FastAPI. Keep an allowlist for monitoring probes hitting `/healthz` and `/readyz`.
-- Dashboard `/metrics` (enabled when `METRICS_ENABLED=true`) and add alerts for the counters above plus booking lifecycle volume via `bookings_total`. Protect `/metrics` behind ingress/zero-trust where possible; if direct exposure is required, set `METRICS_TOKEN` and require `Authorization: Bearer <token>`.
+## When escalating
+- Escalate to the on-call backend engineer if 5xx alerts persist beyond 15 minutes or DLQ `dead` counts grow after credential fixes.
+- Provide recent logs, alert timestamps, and the specific metric slices (labels used) reviewed.

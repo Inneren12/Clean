@@ -6,6 +6,8 @@ import time
 from collections import deque
 from typing import Awaitable, Callable, Deque, Generic, TypeVar
 
+from app.infra.metrics import metrics
+
 
 logger = logging.getLogger("app.circuit")
 
@@ -36,6 +38,7 @@ class CircuitBreaker(Generic[T]):
         self._failures: Deque[float] = deque()
         self._half_open_calls: int = 0
         self._lock = asyncio.Lock()
+        metrics.record_circuit_state(self.name, self._state)
 
     async def call(self, fn: Callable[..., T | Awaitable[T]], *args, **kwargs) -> T:
         await self._ensure_available()
@@ -57,6 +60,7 @@ class CircuitBreaker(Generic[T]):
                 if now - self._opened_at >= self.recovery_time:
                     self._state = "half_open"
                     self._half_open_calls = 0
+                    metrics.record_circuit_state(self.name, self._state)
                 else:
                     raise CircuitBreakerOpenError(f"circuit_open:{self.name}")
             if self._state == "half_open":
@@ -75,6 +79,7 @@ class CircuitBreaker(Generic[T]):
                 self._state = "open"
                 self._opened_at = now
                 self._half_open_calls = 0
+                metrics.record_circuit_state(self.name, self._state)
                 logger.warning("circuit_opened", extra={"extra": {"name": self.name}})
 
     async def _record_success(self) -> None:
@@ -84,6 +89,7 @@ class CircuitBreaker(Generic[T]):
                 logger.info("circuit_closed", extra={"extra": {"name": self.name}})
             self._state = "closed"
             self._half_open_calls = 0
+            metrics.record_circuit_state(self.name, self._state)
 
     @property
     def state(self) -> str:
