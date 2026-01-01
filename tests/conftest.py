@@ -124,9 +124,37 @@ def enable_test_mode():
 
 @pytest.fixture(autouse=True)
 def override_org_resolver(monkeypatch):
+    if not getattr(app.state, "test_org_header_middleware_added", False):
+
+        @app.middleware("http")
+        async def _inject_test_org(request, call_next):  # type: ignore[override]
+            header_value = request.headers.get("X-Test-Org")
+            if header_value:
+                try:
+                    request.state.current_org_id = uuid.UUID(header_value)
+                except Exception as exc:  # noqa: BLE001
+                    raise ValueError(f"Invalid X-Test-Org header: {header_value}") from exc
+            return await call_next(request)
+
+        app.state.test_org_header_middleware_added = True
+
     def _resolve_org_id(request):
-        header_value = request.headers.get("X-Test-Org") if request else None
-        return uuid.UUID(header_value) if header_value else settings.default_org_id
+        if request:
+            state_org_id = getattr(request.state, "current_org_id", None)
+            if state_org_id:
+                try:
+                    return uuid.UUID(str(state_org_id))
+                except Exception as exc:  # noqa: BLE001
+                    raise ValueError(f"Invalid state org id: {state_org_id}") from exc
+
+            header_value = request.headers.get("X-Test-Org")
+            if header_value:
+                try:
+                    return uuid.UUID(header_value)
+                except Exception as exc:  # noqa: BLE001
+                    raise ValueError(f"Invalid X-Test-Org header: {header_value}") from exc
+
+        return settings.default_org_id
 
     monkeypatch.setattr("app.api.entitlements.resolve_org_id", _resolve_org_id)
     yield
