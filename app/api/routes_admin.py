@@ -576,12 +576,17 @@ async def resend_last_email(
 
 @router.get("/v1/admin/export-dead-letter", response_model=List[ExportEventResponse])
 async def list_export_dead_letter(
+    request: Request,
     limit: int = Query(default=100, ge=1, le=500),
     session: AsyncSession = Depends(get_db_session),
     _principal: AdminIdentity = Depends(require_viewer),
 ) -> List[ExportEventResponse]:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
     result = await session.execute(
-        select(ExportEvent).order_by(ExportEvent.created_at.desc()).limit(limit)
+        select(ExportEvent)
+        .where(*_org_scope_filters(org_id, ExportEvent))
+        .order_by(ExportEvent.created_at.desc())
+        .limit(limit)
     )
     events = result.scalars().all()
     return [
@@ -666,6 +671,33 @@ def _normalize_range(
     if normalized_end < normalized_start:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid date range")
     return normalized_start, normalized_end
+
+
+def _org_scope_condition(entity: object, org_id: uuid.UUID, allow_null: bool = False):
+    """Return an org_id filter for a given ORM entity.
+
+    Ensures every query touching multiple tables consistently constrains each table to the
+    caller's organization. `allow_null=True` keeps LEFT JOIN rows without a related record
+    (e.g., bookings without assigned workers) while still scoping any present rows.
+    """
+
+    column = getattr(entity, "org_id", None)
+    if column is None:
+        raise ValueError(f"Entity {entity} is missing org_id for scoping")
+    if allow_null:
+        return or_(column.is_(None), column == org_id)
+    return column == org_id
+
+
+def _org_scope_filters(org_id: uuid.UUID, *entities: object) -> tuple:
+    seen = set()
+    filters = []
+    for entity in entities:
+        if entity in seen:
+            continue
+        seen.add(entity)
+        filters.append(_org_scope_condition(entity, org_id))
+    return tuple(filters)
 
 
 def _normalize_date_range(start: date | None, end: date | None) -> tuple[date, date]:
@@ -777,11 +809,13 @@ async def get_admin_metrics(
 
 @router.get("/v1/admin/reports/gst", response_model=invoice_schemas.GstReportResponse)
 async def admin_gst_report(
+    request: Request,
     from_date: date | None = Query(default=None, alias="from"),
     to_date: date | None = Query(default=None, alias="to"),
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.GstReportResponse:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
     start, end = _normalize_date_range(from_date, to_date)
     stmt = (
         select(
@@ -795,6 +829,7 @@ async def admin_gst_report(
             Invoice.status.notin_(
                 [invoice_statuses.INVOICE_STATUS_VOID, invoice_statuses.INVOICE_STATUS_DRAFT]
             ),
+            *_org_scope_filters(org_id, Invoice),
         )
         .select_from(Invoice)
     )
@@ -811,11 +846,13 @@ async def admin_gst_report(
 
 @router.get("/v1/admin/exports/sales-ledger.csv")
 async def export_sales_ledger(
+    request: Request,
     from_date: date | None = Query(default=None, alias="from"),
     to_date: date | None = Query(default=None, alias="to"),
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_finance),
 ) -> Response:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
     start, end = _normalize_date_range(from_date, to_date)
     stmt = (
         select(Invoice)
@@ -826,6 +863,7 @@ async def export_sales_ledger(
             Invoice.status.notin_(
                 [invoice_statuses.INVOICE_STATUS_VOID, invoice_statuses.INVOICE_STATUS_DRAFT]
             ),
+            *_org_scope_filters(org_id, Invoice),
         )
         .order_by(Invoice.issue_date.asc(), Invoice.invoice_number.asc())
     )
@@ -883,11 +921,13 @@ async def export_sales_ledger(
 
 @router.get("/v1/admin/exports/payments.csv")
 async def export_payments_ledger(
+    request: Request,
     from_date: date | None = Query(default=None, alias="from"),
     to_date: date | None = Query(default=None, alias="to"),
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_finance),
 ) -> Response:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
     start, end = _normalize_date_range(from_date, to_date)
     start_dt = datetime.combine(start, time.min, tzinfo=timezone.utc)
     end_dt = datetime.combine(end, time.max, tzinfo=timezone.utc)
@@ -900,6 +940,7 @@ async def export_payments_ledger(
             timestamp_expr <= end_dt,
             Payment.status == invoice_statuses.PAYMENT_STATUS_SUCCEEDED,
             Payment.invoice_id.isnot(None),
+            *_org_scope_filters(org_id, Payment, Invoice),
         )
         .order_by(timestamp_expr.asc(), Payment.created_at.asc(), Payment.payment_id.asc())
     )
@@ -948,11 +989,13 @@ async def export_payments_ledger(
 
 @router.get("/v1/admin/exports/deposits.csv")
 async def export_deposits_ledger(
+    request: Request,
     from_date: date | None = Query(default=None, alias="from"),
     to_date: date | None = Query(default=None, alias="to"),
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_finance),
 ) -> Response:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
     start, end = _normalize_date_range(from_date, to_date)
     start_dt = datetime.combine(start, time.min, tzinfo=timezone.utc)
     end_dt = datetime.combine(end, time.max, tzinfo=timezone.utc)
@@ -965,6 +1008,7 @@ async def export_deposits_ledger(
             Payment.status == invoice_statuses.PAYMENT_STATUS_SUCCEEDED,
             Payment.invoice_id.is_(None),
             Payment.booking_id.isnot(None),
+            *_org_scope_filters(org_id, Payment),
         )
         .order_by(timestamp_expr.asc(), Payment.created_at.asc(), Payment.payment_id.asc())
     )
@@ -1021,11 +1065,13 @@ def _actual_minutes(booking: Booking) -> int:
 
 @router.get("/v1/admin/reports/pnl", response_model=invoice_schemas.PnlReportResponse)
 async def admin_pnl_report(
+    request: Request,
     from_date: date | None = Query(default=None, alias="from"),
     to_date: date | None = Query(default=None, alias="to"),
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.PnlReportResponse:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
     start, end = _normalize_date_range(from_date, to_date)
     stmt = (
         select(Invoice, Booking, Worker)
@@ -1038,6 +1084,8 @@ async def admin_pnl_report(
                 [invoice_statuses.INVOICE_STATUS_VOID, invoice_statuses.INVOICE_STATUS_DRAFT]
             ),
             Booking.status.in_(["DONE", "CONFIRMED"]),
+            *_org_scope_filters(org_id, Invoice, Booking),
+            _org_scope_condition(Worker, org_id, allow_null=True),
         )
         .order_by(Invoice.issue_date.asc(), Invoice.invoice_number.asc())
     )
