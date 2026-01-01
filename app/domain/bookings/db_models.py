@@ -4,6 +4,8 @@ import uuid
 from datetime import date, datetime, time
 from typing import TYPE_CHECKING, Optional
 
+import sqlalchemy as sa
+
 from sqlalchemy import (
     Boolean,
     Date,
@@ -21,6 +23,8 @@ from sqlalchemy.types import JSON
 
 from app.infra.db import Base
 from app.domain.clients.db_models import ClientUser
+from app.domain.saas.db_models import UUID_TYPE
+from app.settings import settings
 
 if TYPE_CHECKING:  # pragma: no cover
     from app.domain.workers.db_models import Worker
@@ -54,6 +58,12 @@ class Booking(Base):
         String(36),
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE,
+        sa.ForeignKey("organizations.org_id", ondelete="CASCADE"),
+        nullable=False,
+        default=lambda: settings.default_org_id,
     )
     client_id: Mapped[str | None] = mapped_column(
         ForeignKey("client_users.client_id"), nullable=True, index=True

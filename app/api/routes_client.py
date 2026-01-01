@@ -376,6 +376,7 @@ async def invoice_detail(
 async def repeat_order(
     order_id: str,
     identity: client_schemas.ClientIdentity = Depends(require_identity),
+    http_request: Request = None,
     session: AsyncSession = Depends(get_db_session),
 ) -> client_schemas.ClientOrderSummary:
     original = await _get_client_booking(session, order_id, identity.client_id)
@@ -396,6 +397,7 @@ async def repeat_order(
         service_type=lead.structured_inputs.get("cleaning_type") if lead and lead.structured_inputs else None,
     )
 
+    org_id = entitlements.resolve_org_id(http_request)
     new_booking = await booking_service.create_booking(
         starts_at=new_start,
         duration_minutes=original.duration_minutes,
@@ -406,6 +408,7 @@ async def repeat_order(
         client_id=identity.client_id,
         lead=lead,
         service_type=lead.structured_inputs.get("cleaning_type") if lead and lead.structured_inputs else None,
+        org_id=org_id,
     )
     logger.info(
         "client_portal_repeat",
@@ -474,6 +477,7 @@ async def client_slots(
 async def client_create_booking(
     payload: booking_schemas.ClientBookingRequest,
     identity: client_schemas.ClientIdentity = Depends(require_identity),
+    http_request: Request = None,
     session: AsyncSession = Depends(get_db_session),
 ) -> booking_schemas.ClientBookingResponse:
     normalized_start = payload.normalized_start()
@@ -484,6 +488,7 @@ async def client_create_booking(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
 
     try:
+        org_id = entitlements.resolve_org_id(http_request)
         booking = await booking_service.create_booking(
             starts_at=normalized_start,
             duration_minutes=payload.duration_minutes,
@@ -493,6 +498,7 @@ async def client_create_booking(
             lead=lead,
             service_type=payload.service_type,
             team_id=payload.team_id,
+            org_id=org_id,
         )
     except ValueError as exc:  # noqa: BLE001
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

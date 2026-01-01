@@ -549,7 +549,11 @@ async def resend_last_email(
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_dispatch),
 ) -> dict[str, str]:
-    booking = await session.get(Booking, booking_id)
+    org_id = getattr(http_request.state, "org_id", None) or entitlements.resolve_org_id(http_request)
+    booking_result = await session.execute(
+        select(Booking).where(Booking.booking_id == booking_id, Booking.org_id == org_id)
+    )
+    booking = booking_result.scalar_one_or_none()
     if booking is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
 
@@ -1068,12 +1072,14 @@ async def reload_pricing(_admin: AdminIdentity = Depends(require_admin)) -> dict
 
 @router.get("/v1/admin/bookings", response_model=list[booking_schemas.AdminBookingListItem])
 async def list_bookings(
+    request: Request,
     from_date: date | None = Query(default=None, alias="from"),
     to_date: date | None = Query(default=None, alias="to"),
     status_filter: str | None = Query(default=None, alias="status"),
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_viewer),
 ):
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
     today = datetime.now(tz=booking_service.LOCAL_TZ).date()
     start_date = from_date or today
     end_date = to_date or start_date
@@ -1085,6 +1091,7 @@ async def list_bookings(
     stmt = select(Booking, Lead).outerjoin(Lead, Lead.lead_id == Booking.lead_id).where(
         Booking.starts_at >= start_dt,
         Booking.starts_at <= end_dt,
+        Booking.org_id == org_id,
     )
     if status_filter:
         stmt = stmt.where(Booking.status == status_filter.upper())
@@ -1111,7 +1118,11 @@ async def confirm_booking(
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ):
-    booking = await session.get(Booking, booking_id)
+    org_id = getattr(http_request.state, "org_id", None) or entitlements.resolve_org_id(http_request)
+    booking_result = await session.execute(
+        select(Booking).where(Booking.booking_id == booking_id, Booking.org_id == org_id)
+    )
+    booking = booking_result.scalar_one_or_none()
     if booking is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
 
@@ -1395,7 +1406,11 @@ async def cancel_booking(
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ):
-    booking = await session.get(Booking, booking_id)
+    org_id = getattr(http_request.state, "org_id", None) or entitlements.resolve_org_id(http_request)
+    booking_result = await session.execute(
+        select(Booking).where(Booking.booking_id == booking_id, Booking.org_id == org_id)
+    )
+    booking = booking_result.scalar_one_or_none()
     if booking is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
 
@@ -1462,7 +1477,11 @@ async def reschedule_booking(
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ):
-    booking = await session.get(Booking, booking_id)
+    org_id = getattr(http_request.state, "org_id", None) or entitlements.resolve_org_id(http_request)
+    booking_result = await session.execute(
+        select(Booking).where(Booking.booking_id == booking_id, Booking.org_id == org_id)
+    )
+    booking = booking_result.scalar_one_or_none()
     if booking is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
     if booking.status in {"DONE", "CANCELLED"}:
@@ -1538,7 +1557,11 @@ async def complete_booking(
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ):
-    existing = await session.get(Booking, booking_id)
+    org_id = getattr(http_request.state, "org_id", None) or entitlements.resolve_org_id(http_request)
+    existing_result = await session.execute(
+        select(Booking).where(Booking.booking_id == booking_id, Booking.org_id == org_id)
+    )
+    existing = existing_result.scalar_one_or_none()
     before_state = None
     if existing:
         before_state = booking_schemas.BookingResponse(
@@ -1560,7 +1583,7 @@ async def complete_booking(
         ).model_dump(mode="json")
     try:
         booking = await booking_service.mark_booking_completed(
-            session, booking_id, payload.actual_duration_minutes
+            session, booking_id, payload.actual_duration_minutes, org_id=org_id
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -3022,6 +3045,7 @@ async def admin_dispatch_board(
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_dispatch),
 ) -> HTMLResponse:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
     lang = resolve_lang(request)
     try:
         target_date = date.fromisoformat(day) if day else datetime.now(timezone.utc).date()
@@ -3032,7 +3056,11 @@ async def admin_dispatch_board(
 
     stmt = (
         select(Booking)
-        .where(Booking.starts_at >= start_dt, Booking.starts_at < end_dt)
+        .where(
+            Booking.starts_at >= start_dt,
+            Booking.starts_at < end_dt,
+            Booking.org_id == org_id,
+        )
         .options(
             selectinload(Booking.lead),
             selectinload(Booking.assigned_worker),
@@ -3132,7 +3160,11 @@ async def admin_assign_worker(
     identity: AdminIdentity = Depends(require_dispatch),
 ) -> Response:
     await require_csrf(request)
-    booking = await session.get(Booking, booking_id)
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    booking_result = await session.execute(
+        select(Booking).where(Booking.booking_id == booking_id, Booking.org_id == org_id)
+    )
+    booking = booking_result.scalar_one_or_none()
     if booking is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
 

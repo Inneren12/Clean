@@ -51,9 +51,12 @@ def _order_addon_response(model) -> addon_schemas.OrderAddonResponse:
 async def update_order_addons(
     order_id: str,
     payload: addon_schemas.OrderAddonUpdateRequest,
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_dispatch),
 ) -> list[addon_schemas.OrderAddonResponse]:
+    org_id = entitlements.resolve_org_id(request)
+    await photos_service.fetch_order(session, order_id, org_id)
     try:
         await addon_service.set_order_addons(session, order_id, payload.addons)
     except ValueError as exc:
@@ -71,12 +74,14 @@ async def update_order_addons(
 )
 async def list_order_addons(
     order_id: str,
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_dispatch),
 ) -> list[addon_schemas.OrderAddonResponse]:
+    org_id = entitlements.resolve_org_id(request)
     addons = await addon_service.list_order_addons(session, order_id)
     if not addons:
-        order = await photos_service.fetch_order(session, order_id)
+        order = await photos_service.fetch_order(session, order_id, org_id)
         if order is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
     return [_order_addon_response(addon) for addon in addons]
@@ -90,10 +95,12 @@ async def list_order_addons(
 async def create_reason_log(
     order_id: str,
     payload: reason_schemas.ReasonCreateRequest,
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ) -> reason_schemas.ReasonResponse:
-    await photos_service.fetch_order(session, order_id)
+    org_id = entitlements.resolve_org_id(request)
+    await photos_service.fetch_order(session, order_id, org_id)
     try:
         reason = await reason_service.create_reason(
             session,
@@ -135,10 +142,14 @@ async def list_order_reasons(
 async def update_photo_consent(
     order_id: str,
     payload: booking_schemas.ConsentPhotosUpdateRequest,
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_dispatch),
 ) -> booking_schemas.ConsentPhotosResponse:
-    order = await photos_service.update_consent(session, order_id, payload.consent_photos)
+    org_id = entitlements.resolve_org_id(request)
+    order = await photos_service.update_consent(
+        session, order_id, payload.consent_photos, org_id=org_id
+    )
     return booking_schemas.ConsentPhotosResponse(
         order_id=order.booking_id, consent_photos=order.consent_photos
     )
@@ -158,7 +169,8 @@ async def upload_order_photo(
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ) -> booking_schemas.OrderPhotoResponse:
-    order = await photos_service.fetch_order(session, order_id)
+    org_id = entitlements.resolve_org_id(request)
+    order = await photos_service.fetch_order(session, order_id, org_id)
     parsed_phase = booking_schemas.PhotoPhase.from_any_case(phase)
 
     contents = await file.read()
@@ -185,7 +197,6 @@ async def upload_order_photo(
 
     uploaded_by = identity.role.value or identity.username
     storage = resolve_storage_backend(request.app.state)
-    org_id = entitlements.resolve_org_id(request)
     photo = await photos_service.save_photo(
         session, order, file, parsed_phase, uploaded_by, org_id, storage
     )
@@ -218,13 +229,15 @@ async def upload_order_photo(
 )
 async def list_order_photos(
     order_id: str,
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_dispatch),
 ) -> booking_schemas.OrderPhotoListResponse:
     # Admin/dispatcher can list photos regardless of consent_photos status
     # This allows viewing admin_override uploads even when consent is false
-    await photos_service.fetch_order(session, order_id)
-    photos = await photos_service.list_photos(session, order_id)
+    org_id = entitlements.resolve_org_id(request)
+    await photos_service.fetch_order(session, order_id, org_id)
+    photos = await photos_service.list_photos(session, order_id, org_id)
     return booking_schemas.OrderPhotoListResponse(
         photos=[
             booking_schemas.OrderPhotoResponse(
@@ -256,9 +269,9 @@ async def signed_order_photo_url(
     identity: AdminIdentity = Depends(require_dispatch),
 ) -> booking_schemas.SignedUrlResponse:
     _ = identity
-    photo = await photos_service.get_photo(session, order_id, photo_id)
-    storage = resolve_storage_backend(request.app.state)
     org_id = entitlements.resolve_org_id(request)
+    photo = await photos_service.get_photo(session, order_id, photo_id, org_id)
+    storage = resolve_storage_backend(request.app.state)
     return await build_signed_photo_response(photo, request, storage, org_id)
 
 
@@ -282,7 +295,7 @@ async def signed_download_order_photo(
     if token_order_id != order_id or token_photo_id != photo_id or token_org_id != org_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
 
-    photo = await photos_service.get_photo(session, order_id, photo_id)
+    photo = await photos_service.get_photo(session, order_id, photo_id, org_id)
     if photo.order_id != token_order_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
 
@@ -323,9 +336,9 @@ async def download_order_photo(
     identity: AdminIdentity = Depends(require_dispatch),
 ) -> Response:
     _ = identity
-    photo = await photos_service.get_photo(session, order_id, photo_id)
-    storage = resolve_storage_backend(request.app.state)
     org_id = entitlements.resolve_org_id(request)
+    photo = await photos_service.get_photo(session, order_id, photo_id, org_id)
+    storage = resolve_storage_backend(request.app.state)
     key = photos_service.storage_key_for_photo(photo, org_id)
     ttl = settings.order_photo_signed_url_ttl_seconds
 
@@ -404,9 +417,9 @@ async def admin_order_gallery(
     session: AsyncSession = Depends(get_db_session),
     _admin: AdminIdentity = Depends(require_admin),
 ) -> HTMLResponse:
-    photos = await photos_service.list_photos(session, order_id)
-    storage = resolve_storage_backend(request.app.state)
     org_id = entitlements.resolve_org_id(request)
+    photos = await photos_service.list_photos(session, order_id, org_id)
+    storage = resolve_storage_backend(request.app.state)
     items: list[str] = []
     for photo in photos:
         signed = await build_signed_photo_response(photo, request, storage, org_id)

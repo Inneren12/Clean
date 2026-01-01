@@ -23,7 +23,7 @@ def _basic_auth_header(username: str, password: str) -> dict[str, str]:
     return {"Authorization": f"Basic {token}"}
 
 
-async def _create_booking(async_session_maker, consent: bool = False) -> str:
+async def _create_booking(async_session_maker, consent: bool = False, org_id=None) -> str:
     async with async_session_maker() as session:
         lead = Lead(
             name="Photo Lead",
@@ -48,6 +48,7 @@ async def _create_booking(async_session_maker, consent: bool = False) -> str:
         await session.commit()
         await session.refresh(lead)
         booking = Booking(
+            org_id=org_id,
             team_id=1,
             lead_id=lead.lead_id,
             starts_at=datetime.now(tz=timezone.utc),
@@ -333,7 +334,7 @@ def test_staff_can_list_photos_without_consent(client, async_session_maker, uplo
 
 def test_storage_usage_decrements_for_saas(client, async_session_maker, upload_root):
     token, org_id = _create_saas_token(async_session_maker)
-    booking_id = asyncio.run(_create_booking(async_session_maker, consent=True))
+    booking_id = asyncio.run(_create_booking(async_session_maker, consent=True, org_id=org_id))
 
     files = {"file": ("before.jpg", b"abc", "image/jpeg")}
     upload = client.post(

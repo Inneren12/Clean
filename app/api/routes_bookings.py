@@ -235,6 +235,7 @@ async def create_booking(
                 duration_minutes=request.duration_minutes,
                 lead_id=request.lead_id,
                 session=session,
+                org_id=org_id,
                 deposit_decision=deposit_decision,
                 policy_snapshot=deposit_decision.policy_snapshot,
                 risk_assessment=risk_assessment,
