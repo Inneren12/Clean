@@ -1,3 +1,5 @@
+import secrets
+
 from fastapi import APIRouter, HTTPException, Request, Response
 
 router = APIRouter()
@@ -11,9 +13,17 @@ async def metrics_endpoint(request: Request) -> Response:
 
     app_settings = getattr(request.app.state, "app_settings", None)
     token = getattr(app_settings, "metrics_token", None) if app_settings else None
-    if token:
+    require_token = (app_settings.app_env == "prod") if app_settings else False
+    if require_token:
+        if not token:
+            raise HTTPException(status_code=500, detail="Metrics token misconfigured")
         auth_header = request.headers.get("Authorization")
-        if auth_header != f"Bearer {token}":
+        provided = None
+        if auth_header and auth_header.lower().startswith("bearer "):
+            provided = auth_header.split(" ", 1)[1]
+        if provided is None:
+            provided = request.query_params.get("token")
+        if not provided or not secrets.compare_digest(provided, token):
             raise HTTPException(status_code=401, detail="Unauthorized")
 
     payload, content_type = metrics_client.render()

@@ -1,6 +1,4 @@
 import logging
-import time
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -17,6 +15,7 @@ from app.api.admin_auth import (
 )
 from app.domain.addons import schemas as addon_schemas
 from app.domain.addons import service as addon_service
+from app.api.photo_tokens import build_signed_photo_response, verify_photo_download_token
 from app.dependencies import get_db_session
 from app.domain.bookings import photos_service
 from app.domain.bookings import schemas as booking_schemas
@@ -28,24 +27,6 @@ from app.settings import settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-
-async def _signed_url_for_photo(
-    photo: booking_schemas.OrderPhotoResponse | photos_service.OrderPhoto,  # type: ignore[type-arg]
-    request: Request,
-    storage,
-    org_id,
-) -> booking_schemas.SignedUrlResponse:
-    key = photos_service.storage_key_for_photo(photo, org_id)
-    ttl = settings.order_photo_signed_url_ttl_seconds
-    download_url = str(
-        request.url_for("signed_download_order_photo", order_id=photo.order_id, photo_id=photo.photo_id)
-    )
-    signed_url = await storage.generate_signed_get_url(
-        key=key, expires_in=ttl, resource_url=download_url
-    )
-    expires_at = datetime.fromtimestamp(int(time.time()) + ttl, tz=timezone.utc)
-    return booking_schemas.SignedUrlResponse(url=signed_url, expires_at=expires_at)
 
 
 def _order_addon_response(model) -> addon_schemas.OrderAddonResponse:
@@ -278,7 +259,7 @@ async def signed_order_photo_url(
     photo = await photos_service.get_photo(session, order_id, photo_id)
     storage = resolve_storage_backend(request.app.state)
     org_id = entitlements.resolve_org_id(request)
-    return await _signed_url_for_photo(photo, request, storage, org_id)
+    return await build_signed_photo_response(photo, request, storage, org_id)
 
 
 @router.get(
@@ -291,9 +272,21 @@ async def signed_download_order_photo(
     request: Request,
     session: AsyncSession = Depends(get_db_session),
 ) -> Response:
-    photo = await photos_service.get_photo(session, order_id, photo_id)
-    storage = resolve_storage_backend(request.app.state)
+    token = request.query_params.get("token")
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+
+    token_org_id, token_order_id, token_photo_id = verify_photo_download_token(token)
     org_id = entitlements.resolve_org_id(request)
+
+    if token_order_id != order_id or token_photo_id != photo_id or token_org_id != org_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
+
+    photo = await photos_service.get_photo(session, order_id, photo_id)
+    if photo.order_id != token_order_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
+
+    storage = resolve_storage_backend(request.app.state)
     key = photos_service.storage_key_for_photo(photo, org_id)
     sig = request.query_params.get("sig")
     exp = request.query_params.get("exp")
@@ -416,7 +409,7 @@ async def admin_order_gallery(
     org_id = entitlements.resolve_org_id(request)
     items: list[str] = []
     for photo in photos:
-        signed = await _signed_url_for_photo(photo, request, storage, org_id)
+        signed = await build_signed_photo_response(photo, request, storage, org_id)
         download_url = signed.url
         items.append(
             f"<li><strong>{photo.phase}</strong> - {photo.original_filename or photo.filename} "

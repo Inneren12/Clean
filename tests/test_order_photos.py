@@ -1,11 +1,14 @@
 import asyncio
 import base64
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import jwt
 import pytest
 import sqlalchemy as sa
 
+from app.api.photo_tokens import build_photo_download_token
 from app.domain.saas import billing_service, service as saas_service
 from app.domain.saas.db_models import OrganizationUsageEvent
 
@@ -56,6 +59,32 @@ async def _create_booking(async_session_maker, consent: bool = False) -> str:
         await session.commit()
         await session.refresh(booking)
         return booking.booking_id
+
+
+def _create_photo_with_signed_url(client, async_session_maker, upload_root, admin_headers):
+    booking_id = asyncio.run(_create_booking(async_session_maker, consent=False))
+
+    consent = client.patch(
+        f"/v1/orders/{booking_id}/consent_photos",
+        json={"consent_photos": True},
+        headers=admin_headers,
+    )
+    assert consent.status_code == 200
+
+    payload = {"phase": "AFTER"}
+    files = {"file": ("after.jpg", b"hello-image", "image/jpeg")}
+    upload = client.post(
+        f"/v1/orders/{booking_id}/photos", data=payload, files=files, headers=admin_headers
+    )
+    assert upload.status_code == 201
+    photo_id = upload.json()["photo_id"]
+
+    signed = client.get(
+        f"/v1/orders/{booking_id}/photos/{photo_id}/signed_url", headers=admin_headers
+    )
+    assert signed.status_code == 200
+
+    return booking_id, photo_id, signed.json()["url"]
 
 
 def _create_saas_token(async_session_maker):
@@ -142,33 +171,13 @@ def test_upload_requires_consent(client, async_session_maker, upload_root, admin
 
 
 def test_upload_with_consent_and_download_auth(client, async_session_maker, upload_root, admin_headers):
-    booking_id = asyncio.run(_create_booking(async_session_maker, consent=False))
-
-    consent = client.patch(
-        f"/v1/orders/{booking_id}/consent_photos",
-        json={"consent_photos": True},
-        headers=admin_headers,
+    booking_id, photo_id, signed_url = _create_photo_with_signed_url(
+        client, async_session_maker, upload_root, admin_headers
     )
-    assert consent.status_code == 200
-    assert consent.json()["consent_photos"] is True
-
-    payload = {"phase": "AFTER"}
-    files = {"file": ("after.jpg", b"hello-image", "image/jpeg")}
-    upload = client.post(
-        f"/v1/orders/{booking_id}/photos", data=payload, files=files, headers=admin_headers
-    )
-    assert upload.status_code == 201
-    photo_id = upload.json()["photo_id"]
 
     listing = client.get(f"/v1/orders/{booking_id}/photos", headers=admin_headers)
     assert listing.status_code == 200
     assert len(listing.json()["photos"]) == 1
-
-    signed = client.get(
-        f"/v1/orders/{booking_id}/photos/{photo_id}/signed_url", headers=admin_headers
-    )
-    assert signed.status_code == 200
-    signed_url = signed.json()["url"]
 
     download_url = f"/v1/orders/{booking_id}/photos/{photo_id}/download"
     unauthorized = client.get(download_url)
@@ -186,6 +195,55 @@ def test_upload_with_consent_and_download_auth(client, async_session_maker, uplo
         Path(upload_root / "orders" / str(settings.default_org_id) / booking_id).glob("*")
     )
     assert stored_files, "uploaded file should be written to disk"
+
+
+def test_signed_download_requires_token(client, async_session_maker, upload_root, admin_headers):
+    booking_id, photo_id, _ = _create_photo_with_signed_url(
+        client, async_session_maker, upload_root, admin_headers
+    )
+
+    unsigned = client.get(f"/v1/orders/{booking_id}/photos/{photo_id}/signed-download")
+    assert unsigned.status_code == 401
+
+
+def test_signed_download_rejects_cross_org_token(
+    client, async_session_maker, upload_root, admin_headers
+):
+    booking_id, photo_id, _ = _create_photo_with_signed_url(
+        client, async_session_maker, upload_root, admin_headers
+    )
+
+    bad_token = build_photo_download_token(
+        org_id=uuid.uuid4(), order_id=booking_id, photo_id=photo_id
+    )
+    response = client.get(
+        f"/v1/orders/{booking_id}/photos/{photo_id}/signed-download?token={bad_token}"
+    )
+
+    assert response.status_code == 404
+
+
+def test_signed_download_rejects_expired_token(client, async_session_maker, upload_root, admin_headers):
+    booking_id, photo_id, _ = _create_photo_with_signed_url(
+        client, async_session_maker, upload_root, admin_headers
+    )
+
+    expired = jwt.encode(
+        {
+            "org_id": str(settings.default_org_id),
+            "order_id": booking_id,
+            "photo_id": photo_id,
+            "exp": datetime.now(timezone.utc) - timedelta(seconds=60),
+        },
+        settings.auth_secret_key,
+        algorithm="HS256",
+    )
+
+    response = client.get(
+        f"/v1/orders/{booking_id}/photos/{photo_id}/signed-download?token={expired}"
+    )
+
+    assert response.status_code == 401
 
 
 def test_admin_override_uploads_without_consent(client, async_session_maker, upload_root, admin_headers):

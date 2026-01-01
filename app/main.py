@@ -115,13 +115,16 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         self.metrics = metrics_client
 
     async def dispatch(self, request: Request, call_next: Callable):
-        route = request.scope.get("route")
-        path_label = getattr(route, "path", request.url.path)
+        path_label = "unmatched"
         try:
             response = await call_next(request)
         except Exception:
+            route = request.scope.get("route")
+            path_label = getattr(route, "path", path_label)
             self.metrics.record_http_5xx(request.method, path_label)
             raise
+        route = request.scope.get("route")
+        path_label = getattr(route, "path", path_label)
         if response.status_code >= 500:
             self.metrics.record_http_5xx(request.method, path_label)
         return response
@@ -175,8 +178,30 @@ def _validate_prod_config(app_settings) -> None:
         return
 
     errors: list[str] = []
-    if not app_settings.worker_portal_secret:
-        errors.append("WORKER_PORTAL_SECRET is required outside dev")
+
+    def _validate_secret(value: str | None, name: str, *, minimum: int = 32, forbidden: set[str] | None = None) -> None:
+        if not value or not value.strip():
+            errors.append(f"{name} is required outside dev")
+            return
+        if len(value.strip()) < minimum:
+            errors.append(f"{name} must be at least {minimum} characters")
+            return
+        if forbidden and value in forbidden:
+            errors.append(f"{name} must not use default or placeholder values")
+
+    _validate_secret(
+        app_settings.auth_secret_key,
+        "AUTH_SECRET_KEY",
+        forbidden={"dev-auth-secret"},
+    )
+    _validate_secret(
+        app_settings.client_portal_secret,
+        "CLIENT_PORTAL_SECRET",
+        forbidden={"dev-client-portal-secret"},
+    )
+    _validate_secret(app_settings.worker_portal_secret, "WORKER_PORTAL_SECRET")
+    if getattr(app_settings, "metrics_enabled", False):
+        _validate_secret(app_settings.metrics_token, "METRICS_TOKEN", minimum=16)
 
     admin_credentials = [
         (app_settings.owner_basic_username, app_settings.owner_basic_password),
@@ -191,7 +216,7 @@ def _validate_prod_config(app_settings) -> None:
     if errors:
         for error in errors:
             logger.error("startup_config_error", extra={"extra": {"detail": error}})
-        raise RuntimeError("Invalid production configuration; see logs for details")
+        raise RuntimeError("Invalid production configuration: " + "; ".join(errors))
 
 
 def create_app(app_settings) -> FastAPI:

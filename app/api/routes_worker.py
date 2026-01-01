@@ -40,6 +40,7 @@ from app.domain.invoices.db_models import Invoice, InvoiceItem
 from app.domain.leads.db_models import Lead
 from app.domain.nps import service as nps_service
 from app.domain.nps.db_models import NpsResponse, SupportTicket
+from app.api.photo_tokens import build_signed_photo_response
 from app.domain.notifications import email_service
 from app.domain.reason_logs import schemas as reason_schemas
 from app.domain.reason_logs import service as reason_service
@@ -53,20 +54,6 @@ from pydantic import BaseModel
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-
-async def _signed_url_for_photo(photo, request: Request, storage):
-    org_id = entitlements.resolve_org_id(request)
-    key = photos_service.storage_key_for_photo(photo, org_id)
-    ttl = settings.order_photo_signed_url_ttl_seconds
-    download_url = str(
-        request.url_for("signed_download_order_photo", order_id=photo.order_id, photo_id=photo.photo_id)
-    )
-    signed_url = await storage.generate_signed_get_url(
-        key=key, expires_in=ttl, resource_url=download_url
-    )
-    expires_at = datetime.fromtimestamp(int(time.time()) + ttl, tz=timezone.utc)
-    return booking_schemas.SignedUrlResponse(url=signed_url, expires_at=expires_at)
 
 
 class WorkerDisputeRequest(BaseModel):
@@ -1290,7 +1277,8 @@ async def worker_signed_photo_url(
     if photo.order_id != booking.booking_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
     storage = resolve_storage_backend(request.app.state)
-    return await _signed_url_for_photo(photo, request, storage)
+    org_id = entitlements.resolve_org_id(request)
+    return await build_signed_photo_response(photo, request, storage, org_id)
 
 
 @router.delete(
