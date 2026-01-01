@@ -21,7 +21,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
-from app.infra.db import Base
+from app.infra.db import Base, UUID_TYPE
 from app.domain.clients.db_models import ClientUser
 from app.infra.db import UUID_TYPE
 from app.settings import settings

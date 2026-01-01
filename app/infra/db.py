@@ -9,7 +9,9 @@ from sqlalchemy.orm import declarative_base
 
 from app.settings import settings
 
+# Shared type definition to avoid circular imports - MUST be defined BEFORE Base and models
 UUID_TYPE = sa.Uuid(as_uuid=True)
+
 Base = declarative_base()
 
 # Import models that use string-based relationship references to ensure they are registered
