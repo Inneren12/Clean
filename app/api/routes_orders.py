@@ -33,8 +33,8 @@ logger = logging.getLogger(__name__)
 def _order_org_id(identity: AdminIdentity, request: Request) -> uuid.UUID:
     saas_identity = getattr(request.state, "saas_identity", None)
     candidates = [
-        getattr(identity, "org_id", None),
         getattr(request.state, "current_org_id", None),
+        getattr(identity, "org_id", None),
         getattr(saas_identity, "org_id", None),
     ]
     for value in candidates:

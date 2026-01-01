@@ -5,7 +5,7 @@ import uuid
 
 from app.domain.bookings.db_models import Booking
 from app.domain.leads.db_models import Lead
-from app.domain.saas.db_models import Organization
+from app.domain.saas.service import ensure_org
 from app.settings import settings
 
 
@@ -26,7 +26,7 @@ def test_order_photo_upload_respects_org_header(client, async_session_maker, tmp
 
     async def _seed_booking() -> str:
         async with async_session_maker() as session:
-            org = Organization(org_id=org_id, name="Smoke Photo Org")
+            await ensure_org(session, org_id, name="Smoke Photo Org")
             lead = Lead(
                 org_id=org_id,
                 name="Photo Lead",
@@ -49,7 +49,7 @@ def test_order_photo_upload_respects_org_header(client, async_session_maker, tmp
                 status="CONFIRMED",
                 consent_photos=True,
             )
-            session.add_all([org, lead, booking])
+            session.add_all([lead, booking])
             await session.commit()
             await session.refresh(booking)
             return booking.booking_id

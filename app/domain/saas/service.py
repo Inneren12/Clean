@@ -75,6 +75,33 @@ async def ensure_default_org_and_team(session: AsyncSession) -> tuple[Organizati
     return org, team
 
 
+async def ensure_org(session: AsyncSession, org_id: uuid.UUID, name: str = "Test Org") -> Organization:
+    """Idempotently ensure an organization exists for the given org_id.
+
+    Uses dialect-aware upserts to avoid FK violations in tests while remaining
+    safe to call multiple times.
+    """
+
+    bind = session.get_bind()
+    dialect_name = getattr(getattr(bind, "dialect", None), "name", "") if bind else ""
+    if dialect_name == "sqlite":
+        stmt = sqlite.insert(Organization).values(org_id=org_id, name=name).prefix_with("OR IGNORE")
+    else:
+        stmt = (
+            postgresql.insert(Organization)
+            .values(org_id=org_id, name=name)
+            .on_conflict_do_nothing()
+        )
+
+    await session.execute(stmt)
+    org = await session.get(Organization, org_id)
+    if org is None:
+        org = Organization(org_id=org_id, name=name)
+        session.add(org)
+        await session.flush()
+    return org
+
+
 async def create_organization(session: AsyncSession, name: str) -> Organization:
     org = Organization(name=name)
     session.add(org)

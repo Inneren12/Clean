@@ -12,7 +12,7 @@ from app.domain.invoices import schemas as invoice_schemas
 from app.domain.invoices import service as invoice_service, statuses as invoice_statuses
 from app.domain.invoices.db_models import Invoice, Payment
 from app.domain.leads.db_models import Lead
-from app.domain.saas.db_models import Organization
+from app.domain.saas.service import ensure_org
 from app.infra.email import EmailAdapter
 from app.main import app
 from app.settings import settings
@@ -40,7 +40,7 @@ def smoke_org(async_session_maker):
     org_id = uuid.uuid4()
     async def _create_org():
         async with async_session_maker() as session:
-            session.add(Organization(org_id=org_id, name="Smoke Org"))
+            await ensure_org(session, org_id, name="Smoke Org")
             await session.commit()
 
     asyncio.run(_create_org())
