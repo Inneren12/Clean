@@ -100,6 +100,48 @@ class ApiToken(Base):
     organization: Mapped[Organization] = relationship("Organization", back_populates="api_tokens")
 
 
+class SaaSSession(Base):
+    __tablename__ = "saas_sessions"
+
+    session_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, sa.ForeignKey("users.user_id", ondelete="CASCADE"))
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, sa.ForeignKey("organizations.org_id", ondelete="CASCADE")
+    )
+    role: Mapped[MembershipRole] = mapped_column(sa.Enum(MembershipRole, name="membershiprole"), nullable=False)
+    refresh_token_hash: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    refresh_expires_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    rotated_from: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    revoked_reason: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+
+    user: Mapped[User] = relationship("User")
+    organization: Mapped[Organization] = relationship("Organization")
+
+
+class TokenEvent(Base):
+    __tablename__ = "token_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, sa.ForeignKey("saas_sessions.session_id", ondelete="CASCADE")
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, sa.ForeignKey("users.user_id", ondelete="CASCADE"))
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, sa.ForeignKey("organizations.org_id", ondelete="CASCADE")
+    )
+    event_type: Mapped[str] = mapped_column(sa.String(32), nullable=False)
+    token_type: Mapped[str] = mapped_column(sa.String(32), nullable=False)
+    actor_role: Mapped[MembershipRole] = mapped_column(
+        sa.Enum(MembershipRole, name="membershiprole"), nullable=False
+    )
+    request_id: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+    details: Mapped[dict] = mapped_column("metadata", sa.JSON(), default=dict, server_default=sa.text("'{}'"))
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
+
+
 class OrganizationBilling(Base):
     __tablename__ = "organization_billing"
     __table_args__ = (sa.UniqueConstraint("org_id", name="uq_org_billing_org"),)
