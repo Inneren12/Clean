@@ -112,7 +112,9 @@ class StubAdapter(EmailAdapter):
         super().__init__()
         self.sent: list[tuple[str, str, str]] = []
 
-    async def send_email(self, recipient: str, subject: str, body: str) -> bool:  # type: ignore[override]
+    async def send_email(  # type: ignore[override]
+        self, recipient: str, subject: str, body: str, *, headers: dict[str, str] | None = None
+    ) -> bool:
         self.sent.append((recipient, subject, body))
         return True
 
@@ -197,6 +199,7 @@ def test_resend_last_email_replays_latest(client, async_session_maker):
                 recipient=lead.email or "customer@example.com",
                 subject="Stored subject",
                 body="Stored body",
+                dedupe_key="booking:" + booking.booking_id + ":booking_pending:" + (lead.email or "").lower(),
             )
             session.add(event)
             await session.commit()

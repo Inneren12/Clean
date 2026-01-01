@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 
 
 class NoopEmailAdapter:
-    async def send_email(self, recipient: str, subject: str, body: str) -> bool:  # noqa: D401
+    async def send_email(
+        self, recipient: str, subject: str, body: str, headers: dict[str, str] | None = None
+    ) -> bool:  # noqa: D401
         logger.info(
             "email_send_skipped",
             extra={"extra": {"recipient": recipient, "subject": subject, "mode": "noop"}},
@@ -31,12 +33,14 @@ class EmailAdapter:
     def __init__(self, http_client: httpx.AsyncClient | None = None) -> None:
         self.http_client = http_client
 
-    async def send_email(self, recipient: str, subject: str, body: str) -> bool:
+    async def send_email(
+        self, recipient: str, subject: str, body: str, *, headers: dict[str, str] | None = None
+    ) -> bool:
         if settings.email_mode == "off":
             return False
         if not recipient:
             return False
-        await self._send_email(to_email=recipient, subject=subject, body=body)
+        await self._send_email(to_email=recipient, subject=subject, body=body, headers=headers)
         return True
 
     async def send_request_received(self, lead: Any) -> None:
@@ -72,16 +76,25 @@ class EmailAdapter:
             body = f"{body}\n\nDetails:\n{notes}"
         await self.send_email(recipient=recipient, subject=subject, body=body)
 
-    async def _send_email(self, to_email: str, subject: str, body: str) -> None:
+    async def _send_email(
+        self, to_email: str, subject: str, body: str, headers: dict[str, str] | None = None
+    ) -> None:
         if settings.email_mode == "sendgrid":
-            await self._send_via_sendgrid(to_email=to_email, subject=subject, body=body)
+            await self._send_via_sendgrid(to_email=to_email, subject=subject, body=body, headers=headers)
             return
         if settings.email_mode == "smtp":
-            await self._send_via_smtp(to_email=to_email, subject=subject, body=body)
+            await self._send_via_smtp(to_email=to_email, subject=subject, body=body, headers=headers)
             return
         raise RuntimeError("unsupported_email_mode")
 
-    async def _send_via_sendgrid(self, to_email: str, subject: str, body: str) -> None:
+    async def _send_via_sendgrid(
+        self,
+        to_email: str,
+        subject: str,
+        body: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         api_key = settings.sendgrid_api_key
         from_email = settings.email_sender
         if not api_key or not from_email:
@@ -98,6 +111,8 @@ class EmailAdapter:
         }
         if settings.email_from_name:
             payload["from"]["name"] = settings.email_from_name
+        if headers:
+            payload["headers"] = headers
         client = self.http_client or httpx.AsyncClient()
         close_client = self.http_client is None
         try:
@@ -113,7 +128,9 @@ class EmailAdapter:
         if response.status_code >= 400:
             raise RuntimeError(f"sendgrid_status_{response.status_code}")
 
-    async def _send_via_smtp(self, to_email: str, subject: str, body: str) -> None:
+    async def _send_via_smtp(
+        self, to_email: str, subject: str, body: str, *, headers: dict[str, str] | None = None
+    ) -> None:
         host = settings.smtp_host
         port = settings.smtp_port or 587
         username = settings.smtp_username
@@ -130,6 +147,9 @@ class EmailAdapter:
         message["From"] = formatted_from
         message["To"] = to_email
         message["Subject"] = subject
+        if headers:
+            for header_name, header_value in headers.items():
+                message[header_name] = header_value
         message.set_content(body)
 
         def _send_blocking() -> None:
