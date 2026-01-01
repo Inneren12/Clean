@@ -4,11 +4,12 @@ import hashlib
 import logging
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -26,6 +27,19 @@ from app.settings import settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+class StripeOrgResolutionError(Exception):
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+
+@dataclass
+class StripeOrgContext:
+    org_id: uuid.UUID | None
+    invoice: Invoice | None = None
+    booking: Booking | None = None
 
 
 def _safe_get(source: object, key: str, default: Any | None = None) -> Any:
@@ -46,7 +60,83 @@ async def _lock_booking(session: AsyncSession, booking_id: str) -> Booking | Non
     return result.scalar_one_or_none()
 
 
-async def _handle_invoice_event(session: AsyncSession, event: Any) -> bool:
+async def _lock_booking_by_checkout_or_intent(
+    session: AsyncSession, checkout_session_id: str | None, payment_intent_id: str | None
+) -> Booking | None:
+    conditions = []
+    if checkout_session_id:
+        conditions.append(Booking.stripe_checkout_session_id == checkout_session_id)
+    if payment_intent_id:
+        conditions.append(Booking.stripe_payment_intent_id == payment_intent_id)
+
+    if not conditions:
+        return None
+
+    stmt = select(Booking).where(or_(*conditions)).with_for_update()
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def _resolve_org_for_event(session: AsyncSession, event: Any) -> StripeOrgContext:
+    data = _safe_get(event, "data", {}) or {}
+    payload_object = _safe_get(data, "object", {}) or {}
+    metadata = _safe_get(payload_object, "metadata", {}) or {}
+    invoice_id = metadata.get("invoice_id") if isinstance(metadata, dict) else None
+    booking_id = metadata.get("booking_id") if isinstance(metadata, dict) else None
+    customer_id = _safe_get(payload_object, "customer")
+    org_id_raw = metadata.get("org_id") if isinstance(metadata, dict) else None
+
+    if invoice_id:
+        invoice = await _lock_invoice(session, invoice_id)
+        if invoice is None:
+            raise StripeOrgResolutionError("invoice_not_found")
+        return StripeOrgContext(org_id=invoice.org_id, invoice=invoice)
+
+    if booking_id:
+        booking = await _lock_booking(session, booking_id)
+        if booking is None:
+            raise StripeOrgResolutionError("booking_not_found")
+        return StripeOrgContext(org_id=booking.org_id, booking=booking)
+
+    event_type = _safe_get(event, "type", "") or ""
+    checkout_id_raw = _safe_get(payload_object, "id")
+    checkout_session_id = checkout_id_raw if isinstance(checkout_id_raw, str) and checkout_id_raw.startswith("cs_") else None
+    payment_intent_id = (
+        _safe_get(payload_object, "payment_intent")
+        if event_type.startswith("checkout.session.")
+        else _safe_get(payload_object, "id") if event_type.startswith("payment_intent.") else None
+    )
+
+    booking_from_payment = await _lock_booking_by_checkout_or_intent(
+        session, checkout_session_id, payment_intent_id
+    )
+    if booking_from_payment:
+        return StripeOrgContext(org_id=booking_from_payment.org_id, booking=booking_from_payment)
+
+    org_id: uuid.UUID | None = None
+    if org_id_raw:
+        try:
+            org_id = uuid.UUID(str(org_id_raw))
+        except Exception as exc:  # noqa: BLE001
+            raise StripeOrgResolutionError("invalid_org") from exc
+
+    billing = None
+    if customer_id:
+        billing = await billing_service.get_billing_by_customer(session, str(customer_id))
+
+    if billing and org_id and billing.org_id != org_id:
+        raise StripeOrgResolutionError("org_customer_mismatch")
+
+    if billing:
+        return StripeOrgContext(org_id=billing.org_id)
+
+    if org_id:
+        return StripeOrgContext(org_id=org_id)
+
+    raise StripeOrgResolutionError("missing_org")
+
+
+async def _handle_invoice_event(session: AsyncSession, event: Any, ctx: StripeOrgContext) -> bool:
     event_type = _safe_get(event, "type")
     data = _safe_get(event, "data", {}) or {}
     payload_object = _safe_get(data, "object", {}) or {}
@@ -60,11 +150,18 @@ async def _handle_invoice_event(session: AsyncSession, event: Any) -> bool:
         )
         return False
 
-    invoice = await _lock_invoice(session, invoice_id)
+    invoice = ctx.invoice or await _lock_invoice(session, invoice_id)
     if invoice is None:
         logger.info(
             "stripe_invoice_event_ignored",
             extra={"extra": {"reason": "invoice_not_found", "invoice_id": invoice_id}},
+        )
+        return False
+
+    if ctx.org_id and invoice.org_id != ctx.org_id:
+        logger.info(
+            "stripe_invoice_event_ignored",
+            extra={"extra": {"reason": "org_mismatch", "invoice_id": invoice.invoice_id}},
         )
         return False
 
@@ -142,7 +239,9 @@ async def _handle_invoice_event(session: AsyncSession, event: Any) -> bool:
     return True
 
 
-async def _handle_deposit_event(session: AsyncSession, event: Any, email_adapter: Any) -> bool:
+async def _handle_deposit_event(
+    session: AsyncSession, event: Any, email_adapter: Any, ctx: StripeOrgContext
+) -> bool:
     event_type = _safe_get(event, "type")
     data = _safe_get(event, "data", {}) or {}
     payload_object = _safe_get(data, "object", {}) or {}
@@ -156,11 +255,18 @@ async def _handle_deposit_event(session: AsyncSession, event: Any, email_adapter
         )
         return False
 
-    booking = await _lock_booking(session, booking_id)
+    booking = ctx.booking or await _lock_booking(session, booking_id)
     if booking is None:
         logger.info(
             "stripe_deposit_event_ignored",
             extra={"extra": {"reason": "booking_not_found", "booking_id": booking_id}},
+        )
+        return False
+
+    if ctx.org_id and booking.org_id != ctx.org_id:
+        logger.info(
+            "stripe_deposit_event_ignored",
+            extra={"extra": {"reason": "org_mismatch", "booking_id": booking.booking_id}},
         )
         return False
 
@@ -249,7 +355,7 @@ async def _handle_deposit_event(session: AsyncSession, event: Any, email_adapter
     return True
 
 
-async def _handle_subscription_event(session: AsyncSession, event: Any) -> bool:
+async def _handle_subscription_event(session: AsyncSession, event: Any, ctx: StripeOrgContext) -> bool:
     event_type = _safe_get(event, "type", "") or ""
     data = _safe_get(event, "data", {}) or {}
     payload_object = _safe_get(data, "object", {}) or {}
@@ -263,26 +369,17 @@ async def _handle_subscription_event(session: AsyncSession, event: Any) -> bool:
     if mode != "subscription":
         return False
 
-    org_id_raw = metadata.get("org_id") if isinstance(metadata, dict) else None
     plan_id = metadata.get("plan_id") if isinstance(metadata, dict) else None
     subscription_id = _safe_get(payload_object, "subscription") or _safe_get(payload_object, "id")
     customer_id = _safe_get(payload_object, "customer")
     period_end_ts = _safe_get(payload_object, "current_period_end")
     status = _safe_get(payload_object, "status")
 
-    if not org_id_raw:
+    org_id = ctx.org_id
+    if not org_id:
         logger.info(
             "stripe_subscription_event_ignored",
             extra={"extra": {"reason": "missing_org", "event_type": event_type}},
-        )
-        return False
-
-    try:
-        org_id = uuid.UUID(str(org_id_raw))
-    except Exception:  # noqa: BLE001
-        logger.info(
-            "stripe_subscription_event_ignored",
-            extra={"extra": {"reason": "invalid_org", "event_type": event_type}},
         )
         return False
 
@@ -302,15 +399,17 @@ async def _handle_subscription_event(session: AsyncSession, event: Any) -> bool:
     return True
 
 
-async def _handle_webhook_event(session: AsyncSession, event: Any, email_adapter: Any) -> bool:
+async def _handle_webhook_event(
+    session: AsyncSession, event: Any, email_adapter: Any, ctx: StripeOrgContext
+) -> bool:
     event_type = _safe_get(event, "type")
     data = _safe_get(event, "data", {}) or {}
     payload_object = _safe_get(data, "object", {}) or {}
     metadata = _safe_get(payload_object, "metadata", {}) or {}
     if isinstance(metadata, dict) and metadata.get("invoice_id"):
-        return await _handle_invoice_event(session, event)
+        return await _handle_invoice_event(session, event, ctx)
     if isinstance(metadata, dict) and metadata.get("booking_id"):
-        return await _handle_deposit_event(session, event, email_adapter)
+        return await _handle_deposit_event(session, event, email_adapter, ctx)
     event_type = _safe_get(event, "type")
     session_id = _safe_get(payload_object, "id")
     payment_intent_id = _safe_get(payload_object, "payment_intent") or _safe_get(payload_object, "id")
@@ -338,7 +437,7 @@ async def _handle_webhook_event(session: AsyncSession, event: Any, email_adapter
         or _safe_get(payload_object, "mode") == "subscription"
         or _safe_get(payload_object, "object") == "subscription"
     ):
-        return await _handle_subscription_event(session, event)
+        return await _handle_subscription_event(session, event, ctx)
     logger.info(
         "stripe_webhook_ignored",
         extra={"extra": {"reason": "missing_metadata", "event_type": _safe_get(event, "type")}},
@@ -500,8 +599,29 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
     processed = False
     processing_error: Exception | None = None
     async with session.begin():
+        try:
+            ctx = await _resolve_org_for_event(session, event)
+        except StripeOrgResolutionError as exc:
+            logger.info(
+                "stripe_webhook_invalid_org",
+                extra={"extra": {"event_id": event_id, "reason": exc.reason}},
+            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Stripe org") from exc
+
         existing = await session.scalar(select(StripeEvent).where(StripeEvent.event_id == str(event_id)).with_for_update())
         if existing:
+            if existing.org_id and ctx.org_id and existing.org_id != ctx.org_id:
+                logger.warning(
+                    "stripe_webhook_org_conflict",
+                    extra={
+                        "extra": {
+                            "event_id": event_id,
+                            "expected_org": str(existing.org_id),
+                            "resolved_org": str(ctx.org_id),
+                        }
+                    },
+                )
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Stripe event org mismatch")
             if existing.payload_hash != payload_hash:
                 logger.warning(
                     "stripe_webhook_replayed_mismatch",
@@ -527,12 +647,21 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
 
             record = existing
             record.status = "processing"
+            if record.org_id is None and ctx.org_id:
+                record.org_id = ctx.org_id
         else:
-            record = StripeEvent(event_id=str(event_id), status="processing", payload_hash=payload_hash)
+            record = StripeEvent(
+                event_id=str(event_id),
+                status="processing",
+                payload_hash=payload_hash,
+                org_id=ctx.org_id,
+            )
             session.add(record)
 
         try:
-            processed = await _handle_webhook_event(session, event, getattr(http_request.app.state, "email_adapter", None))
+            processed = await _handle_webhook_event(
+                session, event, getattr(http_request.app.state, "email_adapter", None), ctx
+            )
             record.status = "succeeded" if processed else "ignored"
         except Exception as exc:  # noqa: BLE001
             processed = False
