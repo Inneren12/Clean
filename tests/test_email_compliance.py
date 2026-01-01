@@ -30,7 +30,7 @@ class FailingAdapter(EmailAdapter):
         raise RuntimeError("forced_failure")
 
 
-async def _make_booking(session_factory, *, starts_at: datetime) -> Booking:
+async def _make_booking(session_factory, *, starts_at: datetime) -> str:
     async with session_factory() as session:
         lead = Lead(
             name="Reminder Lead",
@@ -62,8 +62,7 @@ async def _make_booking(session_factory, *, starts_at: datetime) -> Booking:
         )
         session.add(booking)
         await session.commit()
-        await session.refresh(booking)
-        return booking
+        return booking.booking_id
 
 
 def test_concurrent_scans_do_not_duplicate(async_session_maker):
@@ -76,7 +75,10 @@ def test_concurrent_scans_do_not_duplicate(async_session_maker):
         async with async_session_maker() as session:
             return await email_service.scan_and_send_reminders(session, adapter)
 
-    asyncio.run(asyncio.gather(_run_scan(), _run_scan()))
+    async def _main():
+        await asyncio.gather(_run_scan(), _run_scan())
+
+    asyncio.run(_main())
 
     async def _count_events() -> int:
         async with async_session_maker() as session:
@@ -89,13 +91,14 @@ def test_concurrent_scans_do_not_duplicate(async_session_maker):
 
 def test_dlq_retry_and_dead_letter(async_session_maker):
     adapter = FailingAdapter()
-    booking = asyncio.run(
+    booking_id = asyncio.run(
         _make_booking(async_session_maker, starts_at=datetime.now(tz=timezone.utc) + timedelta(hours=1))
     )
 
     async def _attempt_send() -> None:
         async with async_session_maker() as session:
-            await session.refresh(booking)
+            booking = await session.get(Booking, booking_id)
+            assert booking is not None
             lead = await session.get(Lead, booking.lead_id)
             await email_service.send_booking_confirmed_email(session, adapter, booking, lead)
 
@@ -126,7 +129,7 @@ def test_dlq_retry_and_dead_letter(async_session_maker):
 
 def test_unsubscribe_blocks_marketing(async_session_maker):
     adapter = StubAdapter()
-    booking = asyncio.run(
+    booking_id = asyncio.run(
         _make_booking(async_session_maker, starts_at=datetime.now(tz=timezone.utc) + timedelta(days=1))
     )
     original_base = settings.public_base_url
@@ -134,7 +137,8 @@ def test_unsubscribe_blocks_marketing(async_session_maker):
 
     async def _unsubscribe_and_send():
         async with async_session_maker() as session:
-            await session.refresh(booking)
+            booking = await session.get(Booking, booking_id)
+            assert booking is not None
             lead = await session.get(Lead, booking.lead_id)
             await email_service.register_unsubscribe(
                 session, recipient=lead.email, scope=email_service.SCOPE_MARKETING, org_id=booking.org_id
@@ -151,7 +155,7 @@ def test_unsubscribe_blocks_marketing(async_session_maker):
 
 def test_templates_use_configured_urls(async_session_maker):
     adapter = StubAdapter()
-    booking = asyncio.run(
+    booking_id = asyncio.run(
         _make_booking(async_session_maker, starts_at=datetime.now(tz=timezone.utc) + timedelta(hours=2))
     )
     original_base = settings.public_base_url
@@ -159,9 +163,10 @@ def test_templates_use_configured_urls(async_session_maker):
 
     async def _send():
         async with async_session_maker() as session:
+            booking = await session.get(Booking, booking_id)
+            assert booking is not None
             lead = await session.get(Lead, booking.lead_id)
             await email_service.send_booking_completed_email(session, adapter, booking, lead)
-            await session.refresh(booking)
             result = await session.execute(sa.select(EmailEvent).order_by(EmailEvent.created_at.desc()))
             return result.scalars().first()
 

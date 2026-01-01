@@ -1,13 +1,16 @@
+import asyncio
 import base64
 import hashlib
 import hmac
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import insert, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.bookings.db_models import Booking, EmailEvent
@@ -20,6 +23,19 @@ from app.settings import settings
 
 LOCAL_TZ = ZoneInfo("America/Edmonton")
 logger = logging.getLogger(__name__)
+
+
+def ensure_event_loop() -> asyncio.AbstractEventLoop:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop
+
+
+# Ensure a loop exists for call sites that expect get_event_loop() to work.
+ensure_event_loop()
 
 EMAIL_TYPE_BOOKING_PENDING = "booking_pending"
 EMAIL_TYPE_BOOKING_CONFIRMED = "booking_confirmed"
@@ -304,9 +320,12 @@ async def _reserve_email_event(
     booking_id: str | None,
     invoice_id: str | None,
     org_id,
-    ) -> tuple[str | None, str]:
-    dedupe_key = _dedupe_key(email_type, recipient, booking_id=booking_id, invoice_id=invoice_id)
-    base_stmt = insert(EmailEvent).values(
+    dedupe_key: str | None = None,
+) -> tuple[str | None, str]:
+    dedupe_key = dedupe_key or _dedupe_key(
+        email_type, recipient, booking_id=booking_id, invoice_id=invoice_id
+    )
+    stmt = insert(EmailEvent).values(
         booking_id=booking_id,
         invoice_id=invoice_id,
         email_type=email_type,
@@ -316,29 +335,25 @@ async def _reserve_email_event(
         org_id=org_id,
         dedupe_key=dedupe_key,
     )
-    dialect = session.get_bind().dialect.name if session.get_bind() else ""
-    if hasattr(base_stmt, "on_conflict_do_nothing"):
-        stmt = base_stmt.on_conflict_do_nothing(index_elements=["org_id", "dedupe_key"])
-        stmt = stmt.returning(EmailEvent.event_id)
-        event_id = (await session.execute(stmt)).scalar_one_or_none()
-        return event_id, dedupe_key
-    if dialect == "sqlite":
-        result = await session.execute(base_stmt.prefix_with("OR IGNORE"))
-        if result.rowcount == 0:
-            return None, dedupe_key
-        fetch = await session.execute(
-            select(EmailEvent.event_id).where(
-                EmailEvent.dedupe_key == dedupe_key, EmailEvent.org_id == org_id
-            )
-        )
-        return fetch.scalar_one_or_none(), dedupe_key
-    result = await session.execute(base_stmt)
-    if result.rowcount == 0:
+    bind = session.get_bind()
+    dialect = bind.dialect.name if bind else ""
+    if hasattr(stmt, "on_conflict_do_nothing"):
+        stmt = stmt.on_conflict_do_nothing(constraint="uq_email_events_org_dedupe")
+    elif dialect == "sqlite":
+        stmt = stmt.prefix_with("OR IGNORE")
+
+    try:
+        result = await session.execute(stmt.returning(EmailEvent.event_id))
+    except IntegrityError:
+        await session.rollback()
         return None, dedupe_key
-    fetch = await session.execute(
-        select(EmailEvent.event_id).where(EmailEvent.dedupe_key == dedupe_key, EmailEvent.org_id == org_id)
-    )
-    return fetch.scalar_one_or_none(), dedupe_key
+
+    event_id = result.scalar_one_or_none()
+    if event_id is None:
+        await session.rollback()
+        return None, dedupe_key
+
+    return event_id, dedupe_key
 
 
 async def _send_with_record(
@@ -352,6 +367,8 @@ async def _send_with_record(
     *,
     invoice_id: str | None = None,
 ) -> bool:
+    if settings.email_mode == "off":
+        return False
     if not lead.email:
         return False
     subject, body = render(booking, lead)
@@ -364,6 +381,14 @@ async def _send_with_record(
     if scope:
         body = _with_unsubscribe(body, unsubscribe_url)
 
+    dedupe_key = None
+    if dedupe:
+        dedupe_key = _dedupe_key(
+            email_type, lead.email, booking_id=booking.booking_id, invoice_id=invoice_id
+        )
+    else:
+        dedupe_key = f"manual:{email_type}:{booking.booking_id}:{_normalize_email(lead.email)}:{uuid.uuid4().hex}"
+
     event_id, dedupe_key = await _reserve_email_event(
         session,
         email_type=email_type,
@@ -373,9 +398,12 @@ async def _send_with_record(
         booking_id=booking.booking_id,
         invoice_id=invoice_id,
         org_id=org_id,
+        dedupe_key=dedupe_key,
     )
     if event_id is None:
         return False
+
+    await session.commit()
 
     delivered = await _try_send_email(
         adapter,
@@ -386,7 +414,6 @@ async def _send_with_record(
         headers=headers,
     )
     if delivered:
-        await session.commit()
         return True
 
     await _record_failure(
@@ -523,6 +550,8 @@ async def send_invoice_sent_email(
     public_link: str,
     public_link_pdf: str,
 ) -> bool:
+    if settings.email_mode == "off":
+        return False
     if not lead.email:
         return False
     subject, body = _render_invoice_sent(invoice, lead, public_link, public_link_pdf)
@@ -539,6 +568,7 @@ async def send_invoice_sent_email(
     )
     if event_id is None:
         return False
+    await session.commit()
     delivered = await _try_send_email(
         adapter,
         lead.email,
@@ -547,7 +577,6 @@ async def send_invoice_sent_email(
         context={"invoice_id": invoice.invoice_id, "email_type": EMAIL_TYPE_INVOICE_SENT},
     )
     if delivered:
-        await session.commit()
         return True
     await _record_failure(
         session,
@@ -574,6 +603,8 @@ async def send_invoice_overdue_email(
     *,
     public_link: str,
 ) -> bool:
+    if settings.email_mode == "off":
+        return False
     if not lead.email:
         return False
     subject, body = _render_invoice_overdue(invoice, lead, public_link)
@@ -590,6 +621,7 @@ async def send_invoice_overdue_email(
     )
     if event_id is None:
         return False
+    await session.commit()
     delivered = await _try_send_email(
         adapter,
         lead.email,
@@ -598,7 +630,6 @@ async def send_invoice_overdue_email(
         context={"invoice_id": invoice.invoice_id, "email_type": EMAIL_TYPE_INVOICE_OVERDUE},
     )
     if delivered:
-        await session.commit()
         return True
     await _record_failure(
         session,
@@ -666,16 +697,21 @@ async def resend_last_email(
     if not delivered:
         raise RuntimeError("email_send_failed")
 
-    replay = EmailEvent(
-        booking_id=booking_id,
+    manual_dedupe = f"manual_resend:{event.event_id}:{uuid.uuid4().hex}"
+    org_id = getattr(event, "org_id", settings.default_org_id)
+    event_id, _ = await _reserve_email_event(
+        session,
         email_type=event.email_type,
         recipient=event.recipient,
         subject=event.subject,
         body=event.body,
-        dedupe_key=_dedupe_key(event.email_type, event.recipient, booking_id=booking_id),
+        booking_id=booking_id,
+        invoice_id=event.invoice_id,
+        org_id=org_id,
+        dedupe_key=manual_dedupe,
     )
-    session.add(replay)
-    await session.commit()
+    if event_id:
+        await session.commit()
     return {"booking_id": booking_id, "email_type": event.email_type, "recipient": event.recipient}
 
 
