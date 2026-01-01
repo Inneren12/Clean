@@ -35,6 +35,17 @@ def has_tenant_identity(request: Request) -> bool:
     return _has_tenant_identity(request)
 
 
+async def _ensure_saas_identity_if_token_present(request: Request) -> None:
+    if getattr(request.state, "saas_identity", None) is not None:
+        return
+    token = _get_saas_token(request)
+    if not token:
+        return
+    identity = await saas_auth._load_identity(request, token, strict=True)
+    request.state.saas_identity = identity
+    request.state.current_org_id = identity.org_id
+
+
 async def _plan_and_usage(session: AsyncSession, org_id: uuid.UUID) -> Tuple[Plan, dict[str, int]]:
     plan = await billing_service.get_current_plan(session, org_id)
     usage = await billing_service.usage_snapshot(session, org_id)
@@ -45,6 +56,7 @@ async def require_worker_entitlement(
     request: Request,
     session: AsyncSession = Depends(get_db_session),
 ) -> Plan:
+    await _ensure_saas_identity_if_token_present(request)
     if not _has_tenant_identity(request):
         return get_plan(None)
     org_id = resolve_org_id(request)
@@ -61,14 +73,9 @@ async def require_booking_entitlement(
     request: Request,
     session: AsyncSession = Depends(get_db_session),
 ) -> Plan:
+    await _ensure_saas_identity_if_token_present(request)
     if not _has_tenant_identity(request):
         return get_plan(None)
-    if getattr(request.state, "saas_identity", None) is None:
-        token = _get_saas_token(request)
-        if token:
-            identity = await saas_auth._load_identity(request, token, strict=True)
-            request.state.saas_identity = identity
-            request.state.current_org_id = identity.org_id
     org_id = getattr(request.state, "current_org_id", None) or settings.default_org_id
     plan, usage = await _plan_and_usage(session, org_id)
     if usage["bookings_this_month"] >= plan.limits.max_bookings_per_month:
@@ -84,6 +91,7 @@ async def enforce_storage_entitlement(
     bytes_to_add: int,
     session: AsyncSession = Depends(get_db_session),
 ) -> Plan:
+    await _ensure_saas_identity_if_token_present(request)
     if not _has_tenant_identity(request):
         return get_plan(None)
     org_id = resolve_org_id(request)

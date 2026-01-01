@@ -72,7 +72,7 @@ async def update_order_addons(
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_dispatch),
 ) -> list[addon_schemas.OrderAddonResponse]:
-    org_id = entitlements.resolve_org_id(request)
+    org_id = _order_org_id(_identity, request)
     await photos_service.fetch_order(session, order_id, org_id)
     try:
         await addon_service.set_order_addons(session, order_id, payload.addons)
@@ -95,7 +95,7 @@ async def list_order_addons(
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_dispatch),
 ) -> list[addon_schemas.OrderAddonResponse]:
-    org_id = entitlements.resolve_org_id(request)
+    org_id = _order_org_id(_identity, request)
     await photos_service.fetch_order(session, order_id, org_id)
     addons = await addon_service.list_order_addons(session, order_id)
     return [_order_addon_response(addon) for addon in addons]
@@ -113,7 +113,7 @@ async def create_reason_log(
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ) -> reason_schemas.ReasonResponse:
-    org_id = entitlements.resolve_org_id(request)
+    org_id = _order_org_id(identity, request)
     await photos_service.fetch_order(session, order_id, org_id)
     try:
         reason = await reason_service.create_reason(
@@ -143,7 +143,7 @@ async def list_order_reasons(
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ) -> reason_schemas.ReasonListResponse:
-    org_id = entitlements.resolve_org_id(request)
+    org_id = _order_org_id(identity, request)
     await photos_service.fetch_order(session, order_id, org_id)
     reasons = await reason_service.list_reasons_for_order(session, order_id)
     return reason_schemas.ReasonListResponse(
