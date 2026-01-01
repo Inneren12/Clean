@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import logging
 import secrets
+import uuid
 from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException, Request, status
@@ -28,6 +29,7 @@ class WorkerIdentity:
     username: str
     role: str
     team_id: int
+    org_id: uuid.UUID
 
 
 @dataclass
@@ -36,6 +38,7 @@ class _ConfiguredWorker:
     password: str
     role: str
     team_id: int
+    org_id: uuid.UUID
 
 
 security = HTTPBasic(auto_error=False)
@@ -50,6 +53,7 @@ def _configured_workers() -> list[_ConfiguredWorker]:
                 password=settings.worker_basic_password,
                 role=WorkerRole.WORKER,
                 team_id=settings.worker_team_id,
+                org_id=settings.default_org_id,
             )
         )
     return configured
@@ -73,11 +77,11 @@ def _worker_secret() -> str:
     raise RuntimeError("worker_portal_secret not configured; set WORKER_PORTAL_SECRET")
 
 
-def _session_token(username: str, role: str, team_id: int) -> str:
+def _session_token(username: str, role: str, team_id: int, org_id: uuid.UUID) -> str:
     secret = _worker_secret()
-    msg = f"{username}:{role}:{team_id}".encode()
+    msg = f"{username}:{role}:{team_id}:{org_id}".encode()
     signature = hmac.new(secret.encode(), msg=msg, digestmod=hashlib.sha256).hexdigest()
-    return base64.b64encode(f"{username}:{role}:{team_id}:{signature}".encode()).decode()
+    return base64.b64encode(f"{username}:{role}:{team_id}:{org_id}:{signature}".encode()).decode()
 
 
 def _parse_session_token(token: str | None) -> WorkerIdentity:
@@ -85,11 +89,16 @@ def _parse_session_token(token: str | None) -> WorkerIdentity:
         raise _build_auth_exception()
     try:
         decoded = base64.b64decode(token).decode()
-        username, role, team_id_raw, signature = decoded.split(":", 3)
-        expected = _session_token(username, role, int(team_id_raw))
+        username, role, team_id_raw, org_id_raw, signature = decoded.split(":", 4)
+        expected = _session_token(username, role, int(team_id_raw), uuid.UUID(org_id_raw))
         if not secrets.compare_digest(token, expected):
             raise ValueError("Invalid token signature")
-        return WorkerIdentity(username=username, role=role, team_id=int(team_id_raw))
+        return WorkerIdentity(
+            username=username,
+            role=role,
+            team_id=int(team_id_raw),
+            org_id=uuid.UUID(org_id_raw),
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
@@ -109,7 +118,12 @@ def _authenticate_credentials(credentials: HTTPBasicCredentials | None) -> Worke
         if secrets.compare_digest(credentials.username, worker.username) and secrets.compare_digest(
             credentials.password, worker.password
         ):
-            return WorkerIdentity(username=worker.username, role=worker.role, team_id=worker.team_id)
+            return WorkerIdentity(
+                username=worker.username,
+                role=worker.role,
+                team_id=worker.team_id,
+                org_id=worker.org_id,
+            )
 
     raise _build_auth_exception()
 
@@ -141,6 +155,7 @@ async def get_worker_identity(
         token = request.cookies.get(SESSION_COOKIE_NAME)
         identity = _parse_session_token(token)
     request.state.worker_identity = identity
+    request.state.current_org_id = getattr(request.state, "current_org_id", None) or identity.org_id
     return identity
 
 
@@ -161,6 +176,7 @@ class WorkerAccessMiddleware(BaseHTTPMiddleware):
                 request.cookies.get(SESSION_COOKIE_NAME)
             )
             request.state.worker_identity = identity
+            request.state.current_org_id = getattr(request.state, "current_org_id", None) or identity.org_id
             return await call_next(request)
         except HTTPException as exc:
             return await http_exception_handler(request, exc)

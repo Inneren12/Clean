@@ -697,7 +697,7 @@ async def _audit_transition(
 @router.post("/worker/login")
 async def worker_login(request: Request, identity: WorkerIdentity = Depends(get_worker_identity)) -> JSONResponse:
     try:
-        token = _session_token(identity.username, identity.role, identity.team_id)
+        token = _session_token(identity.username, identity.role, identity.team_id, identity.org_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
     secure = settings.app_env != "dev" and request.url.scheme == "https"
@@ -710,6 +710,13 @@ async def worker_login(request: Request, identity: WorkerIdentity = Depends(get_
         samesite="lax",
     )
     return response
+
+
+@router.get("/worker/org-context")
+async def worker_org_context(
+    request: Request, identity: WorkerIdentity = Depends(require_worker)
+) -> JSONResponse:
+    return JSONResponse({"org_id": str(getattr(request.state, "current_org_id", None))})
 
 
 @router.get("/worker", response_class=HTMLResponse)

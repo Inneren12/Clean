@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.admin_auth import AdminPermission
+from app.api.org_context import require_org_context
 from app.api.saas_auth import require_permissions
 from app.domain.saas import service as saas_service
 from app.domain.saas.db_models import Membership, MembershipRole
@@ -35,6 +36,15 @@ async def login(payload: LoginRequest, session: AsyncSession = Depends(get_db_se
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     token = saas_service.build_access_token(user, membership)
     return TokenResponse(access_token=token, org_id=membership.org_id, role=membership.role)
+
+
+class OrgContextResponse(BaseModel):
+    org_id: uuid.UUID
+
+
+@router.get("/org-context", response_model=OrgContextResponse)
+async def org_context(org_id: uuid.UUID = Depends(require_org_context)) -> OrgContextResponse:
+    return OrgContextResponse(org_id=org_id)
 
 
 class MembershipResponse(BaseModel):
