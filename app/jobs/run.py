@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 _ADAPTER: EmailAdapter | None = None
-_STORAGE = new_storage_backend()
+_STORAGE: object | None = None
 
 
 async def _run_job(
@@ -62,8 +62,9 @@ async def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--once", action="store_true", help="Run jobs once and exit")
     args = parser.parse_args(argv)
 
-    global _ADAPTER
+    global _ADAPTER, _STORAGE
     _ADAPTER = resolve_email_adapter(settings)
+    _STORAGE = new_storage_backend()
     configure_metrics(settings.metrics_enabled)
     session_factory = get_session_factory()
 

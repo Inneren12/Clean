@@ -1,6 +1,4 @@
-import asyncio
 import base64
-import asyncio
 import hashlib
 import hmac
 import json
@@ -11,6 +9,7 @@ from typing import Callable
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, insert, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,19 +24,6 @@ from app.settings import settings
 
 LOCAL_TZ = ZoneInfo("America/Edmonton")
 logger = logging.getLogger(__name__)
-
-
-def ensure_event_loop() -> asyncio.AbstractEventLoop:
-    try:
-        return asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        return loop
-
-
-# Ensure a loop exists for call sites that expect get_event_loop() to work.
-ensure_event_loop()
 
 EMAIL_TYPE_BOOKING_PENDING = "booking_pending"
 EMAIL_TYPE_BOOKING_CONFIRMED = "booking_confirmed"
@@ -129,6 +115,9 @@ def verify_unsubscribe_token(token: str) -> dict:
     data = json.loads(raw.decode())
     if data.get("exp") and int(data["exp"]) < int(datetime.now(tz=timezone.utc).timestamp()):
         raise ValueError("token_expired")
+    # Convert org_id to UUID
+    if "org_id" in data:
+        data["org_id"] = uuid.UUID(data["org_id"])
     return data
 
 
@@ -150,18 +139,27 @@ async def _is_unsubscribed(session: AsyncSession, recipient: str, scope: str, or
 
 
 async def _record_unsubscribe(session: AsyncSession, recipient: str, scope: str, org_id) -> None:
-    base_stmt = insert(Unsubscribe).values(
-        recipient=_normalize_email(recipient), scope=scope, org_id=org_id
-    )
-    dialect = session.get_bind().dialect.name if session.get_bind() else ""
-    if hasattr(base_stmt, "on_conflict_do_nothing"):
-        stmt = base_stmt.on_conflict_do_nothing(constraint="uq_unsubscribe_recipient_scope")
+    values = {
+        "recipient": _normalize_email(recipient),
+        "scope": scope,
+        "org_id": org_id,
+    }
+    bind = session.get_bind()
+    dialect = bind.dialect.name if bind else ""
+
+    if dialect == "postgresql":
+        stmt = pg_insert(Unsubscribe).values(**values).on_conflict_do_nothing(constraint="uq_unsubscribe_recipient_scope")
         await session.execute(stmt)
-        return
-    if dialect == "sqlite":
-        await session.execute(base_stmt.prefix_with("OR IGNORE"))
-        return
-    await session.execute(base_stmt)
+    elif dialect == "sqlite":
+        stmt = insert(Unsubscribe).values(**values).prefix_with("OR IGNORE")
+        await session.execute(stmt)
+    else:
+        # Fallback: try insert and catch IntegrityError
+        try:
+            stmt = insert(Unsubscribe).values(**values)
+            await session.execute(stmt)
+        except IntegrityError:
+            await session.rollback()
 
 
 async def register_unsubscribe(session: AsyncSession, recipient: str, scope: str, org_id) -> None:
@@ -347,32 +345,37 @@ async def _reserve_email_event(
     dedupe_key = dedupe_key or _dedupe_key(
         email_type, recipient, booking_id=booking_id, invoice_id=invoice_id
     )
-    stmt = insert(EmailEvent).values(
-        booking_id=booking_id,
-        invoice_id=invoice_id,
-        email_type=email_type,
-        recipient=recipient,
-        subject=subject,
-        body=body,
-        org_id=org_id,
-        dedupe_key=dedupe_key,
-    )
+    values = {
+        "booking_id": booking_id,
+        "invoice_id": invoice_id,
+        "email_type": email_type,
+        "recipient": recipient,
+        "subject": subject,
+        "body": body,
+        "org_id": org_id,
+        "dedupe_key": dedupe_key,
+    }
+
     bind = session.get_bind()
     dialect = bind.dialect.name if bind else ""
-    if hasattr(stmt, "on_conflict_do_nothing"):
-        stmt = stmt.on_conflict_do_nothing(constraint="uq_email_events_org_dedupe")
-    elif dialect == "sqlite":
-        stmt = stmt.prefix_with("OR IGNORE")
 
     try:
-        result = await session.execute(stmt.returning(EmailEvent.event_id))
+        if dialect == "postgresql":
+            stmt = pg_insert(EmailEvent).values(**values).on_conflict_do_nothing(constraint="uq_email_events_org_dedupe")
+            result = await session.execute(stmt.returning(EmailEvent.event_id))
+        elif dialect == "sqlite":
+            stmt = insert(EmailEvent).values(**values).prefix_with("OR IGNORE")
+            result = await session.execute(stmt.returning(EmailEvent.event_id))
+        else:
+            # Fallback
+            stmt = insert(EmailEvent).values(**values)
+            result = await session.execute(stmt.returning(EmailEvent.event_id))
     except IntegrityError:
         await session.rollback()
         return None, dedupe_key
 
     event_id = result.scalar_one_or_none()
     if event_id is None:
-        await session.rollback()
         return None, dedupe_key
 
     return event_id, dedupe_key

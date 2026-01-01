@@ -254,8 +254,13 @@ async def unsubscribe(token: str, session: AsyncSession = Depends(get_db_session
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token")
 
+    # Validate scope
+    scope = data.get("scope")
+    if scope not in {email_service.SCOPE_MARKETING, email_service.SCOPE_NPS}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid scope")
+
     await email_service.register_unsubscribe(
-        session, recipient=data["email"], scope=data["scope"], org_id=data.get("org_id")
+        session, recipient=data["email"], scope=scope, org_id=data.get("org_id")
     )
     return HTMLResponse(
         _render_message(

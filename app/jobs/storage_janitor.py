@@ -55,9 +55,12 @@ async def run_storage_janitor(
             tombstone.last_error = str(exc)[:255]
             failed += 1
             if tombstone.attempts >= max_attempts:
+                # Mark as terminal: set processed_at and update error message
+                tombstone.processed_at = now
+                tombstone.last_error = f"gave_up_after_{max_attempts}_attempts"
                 logger.warning(
                     "order_photo_storage_delete_gave_up",
-                    extra={"extra": {"tombstone_id": str(tombstone.tombstone_id)}},
+                    extra={"extra": {"tombstone_id": str(tombstone.tombstone_id), "attempts": tombstone.attempts}},
                 )
             continue
 
