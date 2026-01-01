@@ -434,9 +434,7 @@ async def upsert_public_token(
     return token
 
 
-async def get_invoice_by_public_token(
-    session: AsyncSession, token: str, *, org_id: uuid.UUID | None = None
-) -> Invoice | None:
+async def get_invoice_by_public_token(session: AsyncSession, token: str) -> Invoice | None:
     token_hash = hash_public_token(token)
     stmt = (
         select(Invoice)
@@ -444,8 +442,6 @@ async def get_invoice_by_public_token(
         .options(selectinload(Invoice.items), selectinload(Invoice.payments))
         .where(InvoicePublicToken.token_hash == token_hash)
     )
-    if org_id:
-        stmt = stmt.where(Invoice.org_id == org_id)
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
