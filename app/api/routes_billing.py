@@ -11,6 +11,7 @@ from app.domain.saas import billing_service
 from app.domain.saas.plans import get_plan
 from app.infra import stripe_client as stripe_infra
 from app.infra.db import get_db_session
+from app.shared.circuit_breaker import CircuitBreakerOpenError
 from app.settings import settings
 
 router = APIRouter()
@@ -61,6 +62,11 @@ async def create_billing_checkout(
             price_id=plan.stripe_price_id,
             plan_name=plan.name,
         )
+    except CircuitBreakerOpenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Stripe temporarily unavailable",
+        ) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Stripe checkout unavailable") from exc
 
@@ -88,12 +94,20 @@ async def billing_portal(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Billing not initialized")
 
     stripe_client = stripe_infra.resolve_client(http_request.app.state)
-    portal = await stripe_infra.call_stripe_client_method(
-        stripe_client,
-        "create_billing_portal_session",
-        customer_id=billing.stripe_customer_id,
-        return_url=settings.stripe_billing_portal_return_url,
-    )
+    try:
+        portal = await stripe_infra.call_stripe_client_method(
+            stripe_client,
+            "create_billing_portal_session",
+            customer_id=billing.stripe_customer_id,
+            return_url=settings.stripe_billing_portal_return_url,
+        )
+    except CircuitBreakerOpenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Stripe temporarily unavailable",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Stripe checkout unavailable") from exc
     url = getattr(portal, "url", None) or portal.get("url")
     return {"url": url, "provider": "stripe"}
 

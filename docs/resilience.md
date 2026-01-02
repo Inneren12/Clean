@@ -3,7 +3,7 @@
 ## Redis rate limiting
 - **Policy:** Fail-open with bounded in-memory fallback. When Redis is unavailable, the limiter switches to a locked in-memory limiter for up to `RATE_LIMIT_FAIL_OPEN_SECONDS` (default 300s) and periodically probes Redis (`RATE_LIMIT_REDIS_PROBE_SECONDS`, default 5s). When Redis responds again, the limiter resets the fallback window and resumes primary enforcement.
 - **Why:** Keeps the product available during short Redis outages while still enforcing per-minute limits in a best-effort, deterministic way.
-- **Signals:** `app.rate_limit` warnings (`redis rate limiter unavailable; using in-memory fallback`) and recovery info logs, plus Prometheus metrics from `circuit_state` are emitted by the circuit breaker helpers.
+- **Signals:** `app.rate_limit` warnings (`redis rate limiter unavailable; using in-memory fallback`) and recovery info logs.
 - **Tests:** `tests/test_rate_limiter.py` exercises fail-open activation and recovery.
 
 ## Stripe circuit breaker

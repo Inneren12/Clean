@@ -11,7 +11,7 @@ This service exposes Prometheus metrics at `/metrics` (token-protected in produc
 - **HTTP 5xx and latency**: `http_5xx_total` and `http_request_latency_seconds` (labels: `method`, `path`, `status_class`). High error rates or long latencies indicate API regressions or dependency issues.
 - **Webhooks**: `webhook_errors_total{type}` and `webhook_events_total{result}` track Stripe webhook processing. Alerts trigger on sustained `invalid_signature`, `payload_mismatch`, or `processing_error` spikes.
 - **Email delivery**: `email_notifications_total{template,status}` (statuses: `delivered`, `skipped`, `failed`, `dead`) plus DLQ gauges `email_dlq_messages{status}` to track pending vs. dead letters.
-- **Job runner heartbeat**: `job_last_heartbeat_timestamp{job}` and `job_last_success_timestamp{job}` provide liveness. `/readyz` includes a `jobs` stanza with age seconds when `JOB_HEARTBEAT_REQUIRED=true`.
+- **Job runner heartbeat**: `job_last_heartbeat_timestamp{job}`, `job_last_success_timestamp{job}`, and `job_runner_up{job}` provide liveness. `/readyz` includes a `jobs` stanza with age seconds when `JOB_HEARTBEAT_REQUIRED=true`.
 - **Circuit breakers**: `circuit_state{circuit}` exposes breaker state (`0=closed`, `1=open`). Watch for stuck-open breakers on email or payment providers.
 
 ## First response checklist

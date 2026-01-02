@@ -23,6 +23,7 @@ from app.domain.saas.plans import get_plan
 from app.infra import stripe_client as stripe_infra
 from app.infra.db import get_db_session
 from app.infra.metrics import metrics
+from app.shared.circuit_breaker import CircuitBreakerOpenError
 from app.settings import settings
 
 router = APIRouter()
@@ -485,6 +486,15 @@ async def create_deposit_checkout(
             cancel_url=settings.stripe_cancel_url,
             metadata=metadata,
         )
+    except CircuitBreakerOpenError as exc:
+        logger.warning(
+            "stripe_checkout_circuit_open",
+            extra={"extra": {"booking_id": booking.booking_id, "reason": type(exc).__name__}},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Stripe temporarily unavailable",
+        ) from exc
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "stripe_checkout_creation_failed",
@@ -545,17 +555,33 @@ async def create_invoice_payment_checkout(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invoice already paid")
 
     stripe_client = stripe_infra.resolve_client(http_request.app.state)
-    checkout_session = await stripe_infra.call_stripe_client_method(
-        stripe_client,
-        "create_checkout_session",
-        amount_cents=outstanding,
-        currency=invoice.currency.lower(),
-        success_url=settings.stripe_invoice_success_url.replace("{INVOICE_ID}", invoice.invoice_id),
-        cancel_url=settings.stripe_invoice_cancel_url.replace("{INVOICE_ID}", invoice.invoice_id),
-        metadata={"invoice_id": invoice.invoice_id, "invoice_number": invoice.invoice_number},
-        payment_intent_metadata={"invoice_id": invoice.invoice_id, "invoice_number": invoice.invoice_number},
-        product_name=f"Invoice {invoice.invoice_number}",
-    )
+    try:
+        checkout_session = await stripe_infra.call_stripe_client_method(
+            stripe_client,
+            "create_checkout_session",
+            amount_cents=outstanding,
+            currency=invoice.currency.lower(),
+            success_url=settings.stripe_invoice_success_url.replace("{INVOICE_ID}", invoice.invoice_id),
+            cancel_url=settings.stripe_invoice_cancel_url.replace("{INVOICE_ID}", invoice.invoice_id),
+            metadata={"invoice_id": invoice.invoice_id, "invoice_number": invoice.invoice_number},
+            payment_intent_metadata={"invoice_id": invoice.invoice_id, "invoice_number": invoice.invoice_number},
+            product_name=f"Invoice {invoice.invoice_number}",
+        )
+    except CircuitBreakerOpenError as exc:
+        logger.warning(
+            "stripe_invoice_checkout_circuit_open",
+            extra={"extra": {"invoice_id": invoice.invoice_id, "reason": type(exc).__name__}},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Stripe temporarily unavailable",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "stripe_invoice_checkout_failed",
+            extra={"extra": {"invoice_id": invoice.invoice_id, "reason": type(exc).__name__}},
+        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Stripe checkout unavailable") from exc
     checkout_url = getattr(checkout_session, "url", None) or checkout_session.get("url")
     checkout_id = getattr(checkout_session, "id", None) or checkout_session.get("id")
 
@@ -603,6 +629,13 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
         event = await stripe_infra.call_stripe_client_method(
             stripe_client, "verify_webhook", payload=payload, signature=sig_header
         )
+    except CircuitBreakerOpenError as exc:
+        metrics.record_webhook_error("stripe_unavailable")
+        logger.warning("stripe_webhook_circuit_open", extra={"extra": {"reason": type(exc).__name__}})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Stripe temporarily unavailable",
+        ) from exc
     except Exception as exc:  # noqa: BLE001
         metrics.record_webhook("error")
         metrics.record_webhook_error("invalid_signature")
