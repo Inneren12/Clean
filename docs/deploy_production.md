@@ -38,6 +38,7 @@ Copy `.env.production.example` to your deployment workspace and fill every place
 - **Storage:** `ORDER_STORAGE_BACKEND`, S3 credentials/region/endpoint, and `ORDER_PHOTO_SIGNING_SECRET`.
 - **Exports:** `EXPORT_MODE`, `EXPORT_WEBHOOK_URL`, `EXPORT_WEBHOOK_ALLOWED_HOSTS`.
 - **Stripe:** `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`.
+- **CORS:** `CORS_ORIGINS` accepts either a JSON array (`["https://app.example.com"]`) or a comma-separated string; keep `STRICT_CORS=true` in production.
 
 ## Rollout order
 

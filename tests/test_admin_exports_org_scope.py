@@ -1,9 +1,6 @@
 import asyncio
 import base64
 import csv
-import asyncio
-import base64
-import csv
 import io
 import uuid
 from datetime import date, datetime, timezone
@@ -11,6 +8,7 @@ from datetime import date, datetime, timezone
 import pytest
 
 from app.domain.bookings.db_models import Booking
+from app.domain.bookings.db_models import Team
 from app.domain.export_events.db_models import ExportEvent
 from app.domain.invoices import statuses as invoice_statuses
 from app.domain.invoices.db_models import Invoice, Payment
@@ -49,9 +47,15 @@ def _lead_payload(name: str) -> dict:
 
 @pytest.fixture(autouse=True)
 def admin_credentials():
+    original_admin_username = settings.admin_basic_username
+    original_admin_password = settings.admin_basic_password
     settings.admin_basic_username = "admin"
     settings.admin_basic_password = "secret"
-    yield
+    try:
+        yield
+    finally:
+        settings.admin_basic_username = original_admin_username
+        settings.admin_basic_password = original_admin_password
 
 
 async def _seed_finance_records(async_session_maker):
@@ -63,14 +67,19 @@ async def _seed_finance_records(async_session_maker):
         session.add_all([lead_a, lead_b])
         await session.flush()
 
-        worker_a = Worker(org_id=org_a, team_id=1, name="Worker A", phone="123", hourly_rate_cents=3000)
-        worker_b = Worker(org_id=org_b, team_id=1, name="Worker B", phone="456", hourly_rate_cents=3000)
+        team_a = Team(org_id=org_a, name="Team A")
+        team_b = Team(org_id=org_b, name="Team B")
+        session.add_all([team_a, team_b])
+        await session.flush()
+
+        worker_a = Worker(org_id=org_a, team_id=team_a.team_id, name="Worker A", phone="123", hourly_rate_cents=3000)
+        worker_b = Worker(org_id=org_b, team_id=team_b.team_id, name="Worker B", phone="456", hourly_rate_cents=3000)
         session.add_all([worker_a, worker_b])
         await session.flush()
 
         booking_a = Booking(
             org_id=org_a,
-            team_id=1,
+            team_id=team_a.team_id,
             lead_id=lead_a.lead_id,
             assigned_worker_id=worker_a.worker_id,
             starts_at=datetime(2024, 1, 5, 12, 0, tzinfo=timezone.utc),
@@ -79,7 +88,7 @@ async def _seed_finance_records(async_session_maker):
         )
         booking_b = Booking(
             org_id=org_b,
-            team_id=1,
+            team_id=team_b.team_id,
             lead_id=lead_b.lead_id,
             assigned_worker_id=worker_b.worker_id,
             starts_at=datetime(2024, 1, 6, 12, 0, tzinfo=timezone.utc),

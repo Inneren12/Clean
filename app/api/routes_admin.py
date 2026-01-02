@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import func, select, or_
+from sqlalchemy import and_, func, select, or_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -677,15 +677,15 @@ def _org_scope_condition(entity: object, org_id: uuid.UUID, allow_null: bool = F
     """Return an org_id filter for a given ORM entity.
 
     Ensures every query touching multiple tables consistently constrains each table to the
-    caller's organization. `allow_null=True` keeps LEFT JOIN rows without a related record
-    (e.g., bookings without assigned workers) while still scoping any present rows.
+    caller's organization. `allow_null=True` is reserved for joins where the condition is
+    applied in the ON clause rather than filtering out parent rows.
     """
 
     column = getattr(entity, "org_id", None)
     if column is None:
-        raise ValueError(f"Entity {entity} is missing org_id for scoping")
+        raise RuntimeError(f"Entity {entity} is missing org_id for scoping")
     if allow_null:
-        return or_(column.is_(None), column == org_id)
+        return column == org_id
     return column == org_id
 
 
@@ -1076,7 +1076,11 @@ async def admin_pnl_report(
     stmt = (
         select(Invoice, Booking, Worker)
         .join(Booking, Invoice.order_id == Booking.booking_id)
-        .join(Worker, Booking.assigned_worker_id == Worker.worker_id, isouter=True)
+        .join(
+            Worker,
+            and_(Booking.assigned_worker_id == Worker.worker_id, Worker.org_id == org_id),
+            isouter=True,
+        )
         .where(
             Invoice.issue_date >= start,
             Invoice.issue_date <= end,
@@ -1085,7 +1089,6 @@ async def admin_pnl_report(
             ),
             Booking.status.in_(["DONE", "CONFIRMED"]),
             *_org_scope_filters(org_id, Invoice, Booking),
-            _org_scope_condition(Worker, org_id, allow_null=True),
         )
         .order_by(Invoice.issue_date.asc(), Invoice.invoice_number.asc())
     )
