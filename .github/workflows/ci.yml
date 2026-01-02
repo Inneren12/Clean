@@ -100,7 +100,7 @@ jobs:
         run: alembic upgrade head
 
       - name: Run tests
-        run: pytest -q -m "not smoke"
+        run: pytest -q -m "not smoke and not migrations"
 
       - name: Run smoke marker
         run: pytest -m smoke -vv
@@ -167,7 +167,7 @@ jobs:
           PY
 
       - name: Run migration invariants
-        run: pytest tests/test_postgres_migrations.py -q
+        run: pytest -q -m migrations tests/test_postgres_migrations.py
 
   web:
     runs-on: ubuntu-latest
