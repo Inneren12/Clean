@@ -159,7 +159,7 @@ async def test_redis_rate_limiter_uses_lua_script():
 
 
 @pytest.mark.anyio
-async def test_redis_rate_limiter_fails_closed_on_redis_errors():
+async def test_redis_rate_limiter_falls_back_to_inmemory_on_redis_errors():
     class BrokenRedis(FakeRedis):
         async def evalsha(self, sha: str, numkeys: int, *args):  # noqa: ARG002
             raise RedisError("boom")
@@ -167,14 +167,76 @@ async def test_redis_rate_limiter_fails_closed_on_redis_errors():
         async def eval(self, script: str, numkeys: int, *args):  # noqa: ARG002
             raise RedisError("boom")
 
+        async def ping(self):
+            raise RedisError("boom")
+
     limiter = RedisRateLimiter(
         "redis://localhost:6379/0",
         requests_per_minute=2,
         cleanup_minutes=1,
         redis_client=BrokenRedis(),
+        fail_open_seconds=5,
+        health_probe_seconds=0.01,
     )
 
+    assert await limiter.allow("client-5")
+    assert await limiter.allow("client-5")
     assert not await limiter.allow("client-5")
+
+    # still falling back while redis is unhealthy
+    await anyio.sleep(0.02)
+    assert not await limiter.allow("client-5")
+
+    await limiter.close()
+
+
+@pytest.mark.anyio
+async def test_redis_rate_limiter_recovers_after_outage():
+    class FlakyRedis(FakeRedis):
+        def __init__(self) -> None:
+            super().__init__()
+            self.unhealthy = True
+
+        async def evalsha(self, sha: str, numkeys: int, *args):  # noqa: ARG002
+            if self.unhealthy:
+                raise RedisError("boom")
+            return await super().evalsha(sha, numkeys, *args)
+
+        async def eval(self, script: str, numkeys: int, *args):  # noqa: ARG002
+            if self.unhealthy:
+                raise RedisError("boom")
+            return await super().eval(script, numkeys, *args)
+
+        async def ping(self):
+            if self.unhealthy:
+                raise RedisError("boom")
+            return True
+
+    fake_redis = FlakyRedis()
+    limiter = RedisRateLimiter(
+        "redis://localhost:6379/0",
+        requests_per_minute=2,
+        cleanup_minutes=1,
+        redis_client=fake_redis,
+        fail_open_seconds=0.2,
+        health_probe_seconds=0.01,
+    )
+
+    assert await limiter.allow("client-6")
+    assert await limiter.allow("client-6")
+    assert not await limiter.allow("client-6")
+
+    fake_redis.unhealthy = False
+    await anyio.sleep(0.25)
+
+    limiter._fail_open_until = time.monotonic() - 0.1  # noqa: SLF001
+    await limiter._fallback.reset()  # type: ignore[attr-defined]
+
+    assert await limiter.allow("client-6")
+    assert await limiter.allow("client-6")
+    assert not await limiter.allow("client-6")
+
+    await limiter.close()
 
 
 @pytest.mark.anyio

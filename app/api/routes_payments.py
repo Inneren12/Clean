@@ -476,7 +476,9 @@ async def create_deposit_checkout(
     stripe_client = stripe_infra.resolve_client(http_request.app.state)
     metadata = {"booking_id": booking.booking_id}
     try:
-        checkout_session = stripe_client.create_checkout_session(
+        checkout_session = await stripe_infra.call_stripe_client_method(
+            stripe_client,
+            "create_checkout_session",
             amount_cents=int(booking.deposit_cents),
             currency=settings.deposit_currency,
             success_url=settings.stripe_success_url.replace("{CHECKOUT_SESSION_ID}", "{CHECKOUT_SESSION_ID}"),
@@ -543,7 +545,9 @@ async def create_invoice_payment_checkout(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invoice already paid")
 
     stripe_client = stripe_infra.resolve_client(http_request.app.state)
-    checkout_session = stripe_client.create_checkout_session(
+    checkout_session = await stripe_infra.call_stripe_client_method(
+        stripe_client,
+        "create_checkout_session",
         amount_cents=outstanding,
         currency=invoice.currency.lower(),
         success_url=settings.stripe_invoice_success_url.replace("{INVOICE_ID}", invoice.invoice_id),
@@ -596,7 +600,9 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
 
     stripe_client = stripe_infra.resolve_client(http_request.app.state)
     try:
-        event = stripe_client.verify_webhook(payload=payload, signature=sig_header)
+        event = await stripe_infra.call_stripe_client_method(
+            stripe_client, "verify_webhook", payload=payload, signature=sig_header
+        )
     except Exception as exc:  # noqa: BLE001
         metrics.record_webhook("error")
         metrics.record_webhook_error("invalid_signature")

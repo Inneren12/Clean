@@ -328,7 +328,7 @@ async def create_booking(
                 if booking.lead_id:
                     metadata["lead_id"] = booking.lead_id
                 try:
-                    checkout_session = stripe_infra.create_checkout_session(
+                    checkout_session = await stripe_infra.create_checkout_session(
                         stripe_client=stripe_client,
                         secret_key=settings.stripe_secret_key,
                         amount_cents=deposit_decision.deposit_cents,
