@@ -86,7 +86,7 @@ class _FakeS3Client:
 async def test_email_circuit_breaker_opens_and_recovers(monkeypatch):
     monkeypatch.setattr(settings, "email_mode", "sendgrid")
     monkeypatch.setattr(settings, "sendgrid_api_key", "key")
-    monkeypatch.setattr(settings, "email_sender", "noreply@example.com")
+    monkeypatch.setattr(settings, "email_from", "noreply@example.com")
     monkeypatch.setattr(settings, "email_circuit_failure_threshold", 2)
     monkeypatch.setattr(settings, "email_circuit_recovery_seconds", 0.05)
 

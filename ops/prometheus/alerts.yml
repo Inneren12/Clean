@@ -71,15 +71,14 @@ groups:
             Stripe webhook processing is failing repeatedly (signature, payload, or processing errors).
             Confirm Stripe signing secret, review recent deploys, and replay events after mitigation.
 
-      - alert: DBPoolExhaustion
-        expr: increase(db_pool_timeout_total[5m]) > 5
+      - alert: StripeCircuitOpen
+        expr: max_over_time(circuit_state{circuit="stripe"}[5m]) == 1
         for: 5m
         labels:
           severity: page
           service: clean
         annotations:
-          summary: "Database pool timeouts observed"
+          summary: "Stripe circuit breaker held open"
           description: |
-            Database pool timeouts exceeded 5 in 5 minutes. Investigate long-running queries,
-            connection leaks, or insufficient pool sizing. Consider increasing pool size only after
-            verifying workload characteristics.
+            Stripe circuit breaker has been open for 5+ minutes. Investigate upstream Stripe outages
+            or credential/network issues; requests will fail fast until the dependency recovers.
