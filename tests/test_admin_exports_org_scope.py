@@ -18,9 +18,12 @@ from app.domain.workers.db_models import Worker
 from app.settings import settings
 
 
+ORG_HEADER = "X-Test-Org"
+
+
 def _auth_headers(username: str, password: str, org_id: uuid.UUID) -> dict[str, str]:
     token = base64.b64encode(f"{username}:{password}".encode()).decode()
-    return {"Authorization": f"Basic {token}", "X-Test-Org": str(org_id)}
+    return {"Authorization": f"Basic {token}", ORG_HEADER: str(org_id)}
 
 
 def _lead_payload(name: str) -> dict:
@@ -211,6 +214,7 @@ async def _seed_finance_records(async_session_maker):
 def test_admin_exports_are_org_scoped(client, async_session_maker):
     seeded = asyncio.run(_seed_finance_records(async_session_maker))
     headers = _auth_headers("admin", "secret", seeded["org_a"])
+    other_org_invoice = seeded["invoice_b"].invoice_number
 
     gst_resp = client.get(
         "/v1/admin/reports/gst?from=2024-01-01&to=2024-12-31",
@@ -230,6 +234,7 @@ def test_admin_exports_are_org_scoped(client, async_session_maker):
     sales_rows = list(csv.DictReader(io.StringIO(sales_resp.text)))
     numbers = [row["invoice_number"] for row in sales_rows]
     assert set(numbers) == {inv.invoice_number for inv in seeded["invoices_a"]}
+    assert other_org_invoice not in numbers
 
     payments_resp = client.get(
         "/v1/admin/exports/payments.csv?from=2024-01-01&to=2024-12-31",
@@ -239,6 +244,7 @@ def test_admin_exports_are_org_scoped(client, async_session_maker):
     payment_rows = list(csv.DictReader(io.StringIO(payments_resp.text)))
     exported_numbers = {row["invoice_number"] for row in payment_rows}
     assert exported_numbers == {inv.invoice_number for inv in seeded["invoices_a"]}
+    assert other_org_invoice not in exported_numbers
 
     deposits_resp = client.get(
         "/v1/admin/exports/deposits.csv?from=2024-01-01&to=2024-12-31",
@@ -246,6 +252,7 @@ def test_admin_exports_are_org_scoped(client, async_session_maker):
     )
     assert deposits_resp.status_code == 200
     deposit_rows = list(csv.DictReader(io.StringIO(deposits_resp.text)))
+    assert len(deposit_rows) == 1
     assert [row["booking_id"] for row in deposit_rows] == [seeded["booking_a"].booking_id]
 
     pnl_resp = client.get(
@@ -256,6 +263,7 @@ def test_admin_exports_are_org_scoped(client, async_session_maker):
     pnl_rows = pnl_resp.json()["rows"]
     assert pnl_rows
     assert {row["invoice_number"] for row in pnl_rows} == {inv.invoice_number for inv in seeded["invoices_a"]}
+    assert all(row["invoice_number"] != other_org_invoice for row in pnl_rows)
 
 
 def test_export_dead_letter_scoped(client, async_session_maker):
