@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import anyio
+
 from app.infra.stripe_resilience import stripe_circuit
 from app.shared.circuit_breaker import CircuitBreakerOpenError
 
@@ -52,7 +54,9 @@ async def create_checkout_session(
         payload["customer_email"] = customer_email
 
     try:
-        return await stripe_circuit.call(lambda: stripe_client.checkout.Session.create(**payload))
+        return await stripe_circuit.call(
+            lambda: anyio.to_thread.run_sync(lambda: stripe_client.checkout.Session.create(**payload))
+        )
     except CircuitBreakerOpenError:
         raise
 
@@ -63,7 +67,9 @@ async def parse_webhook_event(
     if not signature:
         raise ValueError("Missing Stripe signature header")
     return await stripe_circuit.call(
-        lambda: stripe_client.Webhook.construct_event(
-            payload=payload, sig_header=signature, secret=webhook_secret
+        lambda: anyio.to_thread.run_sync(
+            lambda: stripe_client.Webhook.construct_event(
+                payload=payload, sig_header=signature, secret=webhook_secret
+            )
         )
     )

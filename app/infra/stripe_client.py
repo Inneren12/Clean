@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
+import inspect
+from typing import Any, Callable
+
+import anyio
 
 from app.infra.stripe_resilience import stripe_circuit
 from app.settings import settings
@@ -20,6 +23,9 @@ class StripeClient:
         self.stripe = stripe_sdk
         self.secret_key = secret_key
         self.webhook_secret = webhook_secret
+
+    async def _call(self, fn: Callable[[], Any]) -> Any:
+        return await stripe_circuit.call(lambda: anyio.to_thread.run_sync(fn))
 
     async def create_checkout_session(
         self,
@@ -58,7 +64,7 @@ class StripeClient:
             payload["payment_intent_data"] = {"metadata": payment_intent_metadata}
         if customer_email:
             payload["customer_email"] = customer_email
-        return await stripe_circuit.call(lambda: self.stripe.checkout.Session.create(**payload))
+        return await self._call(lambda: self.stripe.checkout.Session.create(**payload))
 
     async def create_subscription_checkout_session(
         self,
@@ -98,7 +104,7 @@ class StripeClient:
         }
         if customer:
             payload["customer"] = customer
-        return await stripe_circuit.call(lambda: self.stripe.checkout.Session.create(**payload))
+        return await self._call(lambda: self.stripe.checkout.Session.create(**payload))
 
     async def create_billing_portal_session(
         self,
@@ -110,7 +116,7 @@ class StripeClient:
             raise ValueError("Stripe secret key not configured")
 
         self.stripe.api_key = self.secret_key
-        return await stripe_circuit.call(
+        return await self._call(
             lambda: self.stripe.billing_portal.Session.create(
                 customer=customer_id,
                 return_url=return_url,
@@ -122,7 +128,7 @@ class StripeClient:
             raise ValueError("Stripe webhook secret not configured")
         if not signature:
             raise ValueError("Missing Stripe signature header")
-        return await stripe_circuit.call(
+        return await self._call(
             lambda: self.stripe.Webhook.construct_event(
                 payload=payload, sig_header=signature, secret=self.webhook_secret
             )
@@ -138,3 +144,13 @@ def resolve_client(app_state: Any) -> StripeClient:
         )
         app_state.stripe_client = client
     return client
+
+
+async def call_stripe_client_method(client: Any, method_name: str, /, *args, **kwargs) -> Any:
+    method = getattr(client, method_name)
+    if method is None:
+        raise AttributeError(f"Stripe client missing method {method_name}")
+    result = method(*args, **kwargs)
+    if inspect.isawaitable(result):
+        return await result
+    return result

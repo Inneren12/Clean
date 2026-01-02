@@ -49,7 +49,9 @@ async def create_billing_checkout(
     billing = await billing_service.get_or_create_billing(session, identity.org_id)
     metadata = {"org_id": str(identity.org_id), "plan_id": plan.plan_id}
     try:
-        checkout_session = await stripe_client.create_subscription_checkout_session(
+        checkout_session = await stripe_infra.call_stripe_client_method(
+            stripe_client,
+            "create_subscription_checkout_session",
             price_cents=plan.price_cents,
             currency=plan.currency,
             success_url=settings.stripe_billing_success_url,
@@ -86,7 +88,9 @@ async def billing_portal(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Billing not initialized")
 
     stripe_client = stripe_infra.resolve_client(http_request.app.state)
-    portal = await stripe_client.create_billing_portal_session(
+    portal = await stripe_infra.call_stripe_client_method(
+        stripe_client,
+        "create_billing_portal_session",
         customer_id=billing.stripe_customer_id,
         return_url=settings.stripe_billing_portal_return_url,
     )
