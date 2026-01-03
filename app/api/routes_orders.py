@@ -2,7 +2,18 @@ import logging
 import time
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,10 +28,15 @@ from app.api.admin_auth import (
 )
 from app.domain.addons import schemas as addon_schemas
 from app.domain.addons import service as addon_service
-from app.api.photo_tokens import build_signed_photo_response, verify_photo_download_token
+from app.api.photo_tokens import (
+    build_signed_photo_response,
+    normalize_variant,
+    verify_photo_download_token,
+)
 from app.dependencies import get_db_session
 from app.domain.bookings import photos_service
 from app.domain.bookings import schemas as booking_schemas
+from app.domain.admin_audit import service as audit_service
 from app.domain.reason_logs import schemas as reason_schemas
 from app.domain.reason_logs import service as reason_service
 from app.infra.storage import resolve_storage_backend
@@ -269,6 +285,13 @@ async def list_order_photos(
                 sha256=photo.sha256,
                 uploaded_by=photo.uploaded_by,
                 created_at=photo.created_at,
+                review_status=booking_schemas.PhotoReviewStatus.from_any_case(
+                    photo.review_status
+                ),
+                review_comment=photo.review_comment,
+                reviewed_by=photo.reviewed_by,
+                reviewed_at=photo.reviewed_at,
+                needs_retake=bool(photo.needs_retake),
             )
             for photo in photos
         ]
@@ -283,6 +306,7 @@ async def signed_order_photo_url(
     order_id: str,
     photo_id: str,
     request: Request,
+    variant: str | None = Query(None),
     session: AsyncSession = Depends(get_db_session),
     identity: AdminIdentity = Depends(require_dispatch),
 ) -> booking_schemas.SignedUrlResponse:
@@ -290,7 +314,69 @@ async def signed_order_photo_url(
     org_id = _order_org_id(identity, request)
     photo = await photos_service.get_photo(session, order_id, photo_id, org_id)
     storage = resolve_storage_backend(request.app.state)
-    return await build_signed_photo_response(photo, request, storage, org_id)
+    normalized_variant = normalize_variant(variant)
+    return await build_signed_photo_response(
+        photo, request, storage, org_id, variant=normalized_variant
+    )
+
+
+@router.post(
+    "/v1/orders/{order_id}/photos/{photo_id}/review",
+    response_model=booking_schemas.OrderPhotoResponse,
+)
+async def review_order_photo(
+    order_id: str,
+    photo_id: str,
+    payload: booking_schemas.PhotoReviewUpdateRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    identity: AdminIdentity = Depends(require_admin),
+) -> booking_schemas.OrderPhotoResponse:
+    org_id = _order_org_id(identity, request)
+    photo = await photos_service.review_photo(
+        session,
+        order_id,
+        photo_id,
+        org_id=org_id,
+        reviewer=identity.username,
+        status=payload.review_status.value,
+        comment=payload.review_comment,
+        needs_retake=payload.needs_retake,
+    )
+
+    audit_log = await audit_service.record_action(
+        session,
+        identity=identity,
+        action="ORDER_PHOTO_REVIEW",
+        resource_type="photo",
+        resource_id=photo.photo_id,
+        before=None,
+        after={
+            "order_id": order_id,
+            "review_status": photo.review_status,
+            "needs_retake": photo.needs_retake,
+        },
+    )
+    audit_log.org_id = org_id
+    await session.commit()
+
+    return booking_schemas.OrderPhotoResponse(
+        photo_id=photo.photo_id,
+        order_id=photo.order_id,
+        phase=booking_schemas.PhotoPhase(photo.phase),
+        filename=photo.filename,
+        original_filename=photo.original_filename,
+        content_type=photo.content_type,
+        size_bytes=photo.size_bytes,
+        sha256=photo.sha256,
+        uploaded_by=photo.uploaded_by,
+        created_at=photo.created_at,
+        review_status=booking_schemas.PhotoReviewStatus.from_any_case(photo.review_status),
+        review_comment=photo.review_comment,
+        reviewed_by=photo.reviewed_by,
+        reviewed_at=photo.reviewed_at,
+        needs_retake=bool(photo.needs_retake),
+    )
 
 
 @router.get(
@@ -338,6 +424,7 @@ async def signed_download_order_photo(
         key=key,
         expires_in=ttl,
         resource_url=str(request.url),
+        variant=claims.variant,
     )
     response = RedirectResponse(
         url=signed_url, status_code=settings.photo_download_redirect_status
@@ -448,15 +535,18 @@ async def admin_order_gallery(
         signed = await build_signed_photo_response(photo, request, storage, org_id)
         download_url = signed.url
         thumbnail_url: str | None = None
-        if isinstance(storage, CloudflareImagesStorageBackend):
-            thumbnail_variant = (
-                settings.cf_images_thumbnail_variant or settings.cf_images_default_variant
-            )
-            thumbnail_url = await storage.generate_signed_get_url(
-                key=photos_service.storage_key_for_photo(photo, org_id),
-                expires_in=settings.photo_url_ttl_seconds,
+        thumbnail_variant = normalize_variant(
+            settings.cf_images_thumbnail_variant or settings.cf_images_default_variant
+        )
+        if thumbnail_variant and isinstance(storage, CloudflareImagesStorageBackend):
+            thumbnail_signed = await build_signed_photo_response(
+                photo,
+                request,
+                storage,
+                org_id,
                 variant=thumbnail_variant,
             )
+            thumbnail_url = thumbnail_signed.url
         items.append(
             f"<li><strong>{photo.phase}</strong> - {photo.original_filename or photo.filename} "
             f"({photo.size_bytes} bytes) - <a href=\"{download_url}\">Download</a>"
