@@ -337,9 +337,6 @@ class S3StorageBackend(StorageBackend):
         resource_url: str | None = None,
         variant: str | None = None,
     ) -> str:
-        if self.public_base_url:
-            return f"{self.public_base_url}/{key.lstrip('/')}"
-
         def _sign() -> str:
             return self.client.generate_presigned_url(
                 "get_object",
@@ -391,7 +388,11 @@ class InMemoryStorageBackend(StorageBackend):
         variant: str | None = None,
     ) -> str:
         expires_at = int(time.time()) + expires_in
-        return resource_url or f"https://example.invalid/{key}?exp={expires_at}"
+        base = f"https://example.invalid/{key}"
+        if variant:
+            base = f"{base}/{variant}"
+        separator = "&" if "?" in base else "?"
+        return f"{base}{separator}exp={expires_at}"
 
 
 class CloudflareImagesStorageBackend(StorageBackend):

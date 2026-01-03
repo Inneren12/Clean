@@ -222,6 +222,11 @@ class OrderPhoto(Base):
     uploaded_by: Mapped[str] = mapped_column(String(32), nullable=False)
     storage_provider: Mapped[str] = mapped_column(String(32), nullable=False, default="local")
     storage_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    review_status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    review_comment: Mapped[str | None] = mapped_column(String(500))
+    reviewed_by: Mapped[str | None] = mapped_column(String(64))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    needs_retake: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

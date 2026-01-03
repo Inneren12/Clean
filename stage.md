@@ -2,7 +2,7 @@
 
 ## Current stage
 - **Status:** Production-ready MVP with Conditional GO (see `release_assessment.md`).
-- **Done:** Estimator, lead intake with captcha/referrals/export, slot/booking creation with deposit policy, Stripe webhook, email reminders/resend, admin metrics CSV, retention cleanup endpoints, worker portal with checklists/time tracking, photo uploads with signed URLs, SaaS auth + billing plans, rate limiting and CORS controls, IAM onboarding v1 (temp-password gate, org-scoped user lifecycle, session revocation).
+- **Done:** Estimator, lead intake with captcha/referrals/export, slot/booking creation with deposit policy, Stripe webhook, email reminders/resend, admin metrics CSV, retention cleanup endpoints, worker portal with checklists/time tracking, photo uploads + admin review/feedback with signed-download redirects (R2/CF Images), SaaS auth + billing plans, rate limiting and CORS controls.
 - **Blocked/Risks:** Operators must wire schedulers for cleanup/email/export/retention, configure Stripe/email/export credentials, and set CORS/proxy trust lists in production.
 - **Next milestones:** Harden SaaS billing/usage reporting, expand DLQ self-healing (after replay endpoint), and wire dashboarding for job error counters/storage janitor retries.
 - **Sprint 1 (Security baseline):** DONE – admin middleware reordered to isolate `/v1/admin/*`, org-scoped finance/report/export/payment endpoints, and regression tests for cross-org leakage.

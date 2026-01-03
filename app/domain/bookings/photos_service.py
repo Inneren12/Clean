@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.bookings.db_models import Booking, OrderPhoto, OrderPhotoTombstone
 from app.domain.saas import billing_service
-from app.domain.bookings.schemas import PhotoPhase
+from app.domain.bookings.schemas import PhotoPhase, PhotoReviewStatus
 from app.infra.storage.backends import StoredObject, StorageBackend
 from app.settings import settings
 
@@ -141,6 +141,7 @@ async def save_photo(
             uploaded_by=uploaded_by,
             storage_provider=storage_provider,
             storage_key=stored.key if stored else key,
+            review_status=PhotoReviewStatus.PENDING.value,
         )
         session.add(photo)
 
@@ -277,6 +278,42 @@ async def delete_photo(
         return photo
 
     await _mark_tombstone_processed(session, tombstone)
+    return photo
+
+
+async def review_photo(
+    session: AsyncSession,
+    order_id: str,
+    photo_id: str,
+    *,
+    org_id: uuid.UUID,
+    reviewer: str,
+    status: str,
+    comment: str | None = None,
+    needs_retake: bool = False,
+) -> OrderPhoto:
+    photo = await get_photo(session, order_id, photo_id, org_id)
+    try:
+        parsed_status = PhotoReviewStatus.from_any_case(status)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    photo.review_status = parsed_status.value
+    photo.review_comment = (comment or "")[:500] or None
+    photo.reviewed_by = reviewer
+    photo.reviewed_at = datetime.now(timezone.utc)
+    photo.needs_retake = bool(needs_retake)
+
+    try:
+        await session.commit()
+        await session.refresh(photo)
+    except Exception as exc:  # noqa: BLE001
+        await session.rollback()
+        logger.exception(
+            "order_photo_review_failed",
+            extra={"extra": {"order_id": order_id, "photo_id": photo_id}},
+        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Review failed") from exc
     return photo
 
 
