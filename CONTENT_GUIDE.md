@@ -4,9 +4,23 @@
 - **Keep logic in domain services** (`app/domain/**`) and surface via routers; avoid DB writes directly in routers.
 - **Typing**: use explicit types and dataclasses/Pydantic models where present; mirror existing function signatures.
 - **Logging**: prefer structured logging via `logging.getLogger` with `extra` payloads (see `app/main.py` and `app/infra/logging.py`). Do not log secrets or tokens.
-- **Errors**: raise `DomainError` for business failures; HTTP errors use `problem_details` in `app/main.py` for consistent responses.
+- **Errors**: raise `DomainError` for business failures; HTTP errors use the shared `problem_details` factory (`app/api/problem_details.py`) so every error includes `type`, `title`, `status`, `detail`, `request_id`, and `errors`.
 - **Status codes**: follow existing patterns—422 for validation, 400/409 for business conflicts, 401/403 for auth/permission, 402 for plan limits, 404 for missing resources.
 - **No broad refactors**: preserve router/service boundaries and existing public schemas; prefer additive, minimal diffs.
+
+### Problem+JSON conventions
+- All error responses must use RFC7807-style payloads via `problem_details`, with `application/problem+json` content type.
+- Always include `request_id` (set by middleware or by `problem_details`) and populate `errors` with an empty list when no field-level errors exist.
+- Default types are derived from HTTP status (`domain` for 4xx, `server` for 5xx) unless a specific type is provided (e.g., validation, rate limit).
+
+### Auth and conflict status mapping
+
+| Scenario | Status | Notes |
+| --- | --- | --- |
+| Missing/invalid credentials or session | 401 Unauthorized | Never use for permission/role failures. |
+| Authenticated but forbidden (role, org mismatch, CSRF) | 403 Forbidden | Includes cross-org access blocks. |
+| Business conflict (already paid/not required, optimistic checks) | 409 Conflict | Use instead of 400 for state conflicts. |
+| Rate limiting | 429 Too Many Requests | Always emit Problem+JSON with `rate-limit` type. |
 
 ## Security rules
 - **Org scoping**: always pass through `require_org_context`, `TenantSessionMiddleware`, or `resolve_org_id`; never trust client-sent org identifiers without validation (`app/api/saas_auth.py`, `app/api/org_context.py`, `app/api/entitlements.py`).

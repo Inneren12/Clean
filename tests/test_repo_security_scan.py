@@ -32,6 +32,7 @@ def test_no_example_com_in_runtime_code():
     allowlist = {
         # Problem Details type URIs (RFC 7807) - namespace identifiers
         'app/main.py',           # PROBLEM_TYPE_* constants
+        'app/api/problem_details.py',
         'app/domain/errors.py',  # DomainError.type default
 
         # Example/template files
