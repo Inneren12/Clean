@@ -23,6 +23,7 @@ from app.domain.bookings import schemas as booking_schemas
 from app.domain.reason_logs import schemas as reason_schemas
 from app.domain.reason_logs import service as reason_service
 from app.infra.storage import resolve_storage_backend
+from app.infra.storage.backends import CloudflareImagesStorageBackend
 from app.domain.saas import billing_service
 from app.settings import settings
 
@@ -347,7 +348,7 @@ async def download_order_photo(
     identity: AdminIdentity = Depends(require_dispatch),
 ) -> Response:
     _ = identity
-    org_id = getattr(identity, "org_id", None) or entitlements.resolve_org_id(request)
+    org_id = _order_org_id(identity, request)
     photo = await photos_service.get_photo(session, order_id, photo_id, org_id)
     storage = resolve_storage_backend(request.app.state)
     key = photos_service.storage_key_for_photo(photo, org_id)
@@ -433,9 +434,21 @@ async def admin_order_gallery(
     for photo in photos:
         signed = await build_signed_photo_response(photo, request, storage, org_id)
         download_url = signed.url
+        thumbnail_url: str | None = None
+        if isinstance(storage, CloudflareImagesStorageBackend):
+            thumbnail_variant = (
+                settings.cf_images_thumbnail_variant or settings.cf_images_default_variant
+            )
+            thumbnail_url = await storage.generate_signed_get_url(
+                key=photos_service.storage_key_for_photo(photo, org_id),
+                expires_in=settings.order_photo_signed_url_ttl_seconds,
+                variant=thumbnail_variant,
+            )
         items.append(
             f"<li><strong>{photo.phase}</strong> - {photo.original_filename or photo.filename} "
-            f"({photo.size_bytes} bytes) - <a href=\"{download_url}\">Download</a></li>"
+            f"({photo.size_bytes} bytes) - <a href=\"{download_url}\">Download</a>"
+            + (f" - <a href=\"{thumbnail_url}\">Thumbnail</a>" if thumbnail_url else "")
+            + "</li>"
         )
     body = "<p>No photos yet.</p>" if not items else "<ul>" + "".join(items) + "</ul>"
     html = f"<h2>Order {order_id} Photos</h2>{body}"

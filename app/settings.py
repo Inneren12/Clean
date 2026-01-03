@@ -104,7 +104,15 @@ class Settings(BaseSettings):
     order_upload_root: str = Field("var/uploads/orders")
     order_photo_max_bytes: int = Field(10 * 1024 * 1024)
     order_photo_allowed_mimes_raw: str = Field("image/jpeg,image/png,image/webp")
-    order_storage_backend: Literal["local", "s3", "memory", "r2", "cloudflare_r2"] = Field("local")
+    order_storage_backend: Literal[
+        "local",
+        "s3",
+        "memory",
+        "r2",
+        "cloudflare_r2",
+        "cloudflare_images",
+        "cf_images",
+    ] = Field("local")
     order_photo_signed_url_ttl_seconds: int = Field(600)
     order_photo_signing_secret: str | None = Field(None)
     s3_endpoint: str | None = Field(None)
@@ -118,6 +126,12 @@ class Settings(BaseSettings):
     r2_secret_key: str | None = Field(None)
     r2_region: str | None = Field("auto")
     r2_public_base_url: str | None = Field(None)
+    cf_images_account_id: str | None = Field(None)
+    cf_images_api_token: str | None = Field(None)
+    cf_images_account_hash: str | None = Field(None)
+    cf_images_default_variant: str = Field("public")
+    cf_images_thumbnail_variant: str | None = Field(None)
+    cf_images_signing_key: str | None = Field(None)
     s3_connect_timeout_seconds: float = Field(3.0)
     s3_read_timeout_seconds: float = Field(10.0)
     s3_max_attempts: int = Field(4)

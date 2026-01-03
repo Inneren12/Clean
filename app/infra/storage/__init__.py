@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any
 
 from app.infra.storage.backends import (
+    CloudflareImagesStorageBackend,
     InMemoryStorageBackend,
     LocalStorageBackend,
     S3StorageBackend,
@@ -12,6 +13,8 @@ from app.settings import settings
 
 def _new_backend() -> StorageBackend:
     backend = settings.order_storage_backend.lower()
+    if backend == "cf_images":
+        backend = "cloudflare_images"
     if backend == "local":
         signing_secret = settings.order_photo_signing_secret or settings.auth_secret_key
         return LocalStorageBackend(Path(settings.order_upload_root), signing_secret=signing_secret)
@@ -48,6 +51,27 @@ def _new_backend() -> StorageBackend:
             max_payload_bytes=settings.order_photo_max_bytes,
             public_base_url=settings.r2_public_base_url,
         )
+    if backend == "cloudflare_images":
+        if not settings.cf_images_account_id:
+            raise RuntimeError(
+                "CF_IMAGES_ACCOUNT_ID is required when ORDER_STORAGE_BACKEND=cloudflare_images"
+            )
+        if not settings.cf_images_api_token:
+            raise RuntimeError(
+                "CF_IMAGES_API_TOKEN is required when ORDER_STORAGE_BACKEND=cloudflare_images"
+            )
+        if not settings.cf_images_account_hash:
+            raise RuntimeError(
+                "CF_IMAGES_ACCOUNT_HASH is required when ORDER_STORAGE_BACKEND=cloudflare_images"
+            )
+        return CloudflareImagesStorageBackend(
+            account_id=settings.cf_images_account_id,
+            api_token=settings.cf_images_api_token,
+            account_hash=settings.cf_images_account_hash,
+            default_variant=settings.cf_images_default_variant,
+            signing_key=settings.cf_images_signing_key,
+            max_payload_bytes=settings.order_photo_max_bytes,
+        )
     if backend == "memory":
         return InMemoryStorageBackend()
     raise RuntimeError(f"Unsupported storage backend: {backend}")
@@ -65,6 +89,10 @@ def resolve_storage_backend(state: Any) -> StorageBackend:
         settings.s3_endpoint,
         settings.r2_bucket,
         settings.r2_endpoint,
+        settings.cf_images_account_id,
+        settings.cf_images_account_hash,
+        settings.cf_images_default_variant,
+        settings.cf_images_api_token,
     )
     backend: StorageBackend | None = getattr(state, "storage_backend", None)
     cached_signature = getattr(state, "storage_backend_config", None)

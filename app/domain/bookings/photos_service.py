@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.bookings.db_models import Booking, OrderPhoto, OrderPhotoTombstone
 from app.domain.saas import billing_service
 from app.domain.bookings.schemas import PhotoPhase
-from app.infra.storage.backends import StorageBackend
+from app.infra.storage.backends import StoredObject, StorageBackend
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -105,6 +105,7 @@ async def save_photo(
     key = _storage_key(org_id, order.booking_id, photo_id, upload.filename)
     hasher = hashlib.sha256()
     size = 0
+    stored: StoredObject | None = None
 
     try:
         async def _stream():
@@ -121,7 +122,11 @@ async def save_photo(
                 hasher.update(chunk)
                 yield chunk
 
-        await storage.put(key=key, body=_stream(), content_type=content_type)
+        stored = await storage.put(key=key, body=_stream(), content_type=content_type)
+
+        storage_provider = settings.order_storage_backend.lower()
+        if storage_provider == "cf_images":
+            storage_provider = "cloudflare_images"
 
         photo = OrderPhoto(
             photo_id=photo_id,
@@ -131,11 +136,11 @@ async def save_photo(
             filename=filename,
             original_filename=upload.filename,
             content_type=content_type,
-            size_bytes=size,
+            size_bytes=stored.size if stored else size,
             sha256=hasher.hexdigest(),
             uploaded_by=uploaded_by,
-            storage_provider=settings.order_storage_backend,
-            storage_key=key,
+            storage_provider=storage_provider,
+            storage_key=stored.key if stored else key,
         )
         session.add(photo)
 
@@ -164,10 +169,12 @@ async def save_photo(
         )
         return photo
     except HTTPException:
-        await storage.delete(key=key)
+        if stored:
+            await storage.delete(key=stored.key)
         raise
     except Exception:  # noqa: BLE001
-        await storage.delete(key=key)
+        if stored:
+            await storage.delete(key=stored.key)
         logger.exception("order_photo_save_failed", extra={"extra": {"order_id": order.booking_id}})
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Upload failed")
     finally:
