@@ -1,12 +1,14 @@
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse
-from sqlalchemy import select, func
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api import entitlements
 from app.api.photo_tokens import build_signed_photo_response, normalize_variant
@@ -17,6 +19,7 @@ from app.domain.bookings import schemas as booking_schemas
 from app.domain.bookings import service as booking_service
 from app.domain.clients import schemas as client_schemas
 from app.domain.clients import service as client_service
+from app.domain.invoices import statuses as invoice_statuses
 from app.domain.invoices.db_models import Invoice
 from app.domain.leads.db_models import Lead
 from app.domain.subscriptions import schemas as subscription_schemas
@@ -170,11 +173,64 @@ async def _list_orders(session: AsyncSession, client_id: str) -> list[client_sch
     ]
 
 
+def _invoice_paid_cents(invoice: Invoice) -> int:
+    return sum(
+        payment.amount_cents
+        for payment in invoice.payments
+        if payment.status == invoice_statuses.PAYMENT_STATUS_SUCCEEDED
+    )
+
+
+async def _list_client_invoices(
+    session: AsyncSession, identity: client_schemas.ClientIdentity, org_id: uuid.UUID
+) -> list[client_schemas.ClientInvoiceListItem]:
+    matching_customer_ids = select(Lead.lead_id).where(
+        func.lower(Lead.email) == identity.email.lower()
+    )
+    matching_orders = select(Booking.booking_id).where(Booking.client_id == identity.client_id)
+
+    stmt = (
+        select(Invoice)
+        .options(selectinload(Invoice.payments))
+        .where(Invoice.org_id == org_id)
+        .where(
+            or_(
+                Invoice.order_id.in_(matching_orders),
+                Invoice.customer_id.in_(matching_customer_ids),
+            )
+        )
+        .order_by(Invoice.issue_date.desc())
+    )
+    result = await session.execute(stmt)
+    invoices = result.scalars().unique().all()
+
+    items: list[client_schemas.ClientInvoiceListItem] = []
+    for invoice in invoices:
+        paid_cents = _invoice_paid_cents(invoice)
+        issued_at = datetime.combine(
+            invoice.issue_date, datetime.min.time(), tzinfo=timezone.utc
+        )
+        items.append(
+            client_schemas.ClientInvoiceListItem(
+                invoice_id=invoice.invoice_id,
+                invoice_number=invoice.invoice_number,
+                status=invoice.status,
+                total_cents=invoice.total_cents,
+                currency=invoice.currency,
+                issued_at=issued_at,
+                balance_due_cents=max(invoice.total_cents - paid_cents, 0),
+                order_id=invoice.order_id,
+            )
+        )
+    return items
+
+
 def _subscription_response(model: Subscription) -> subscription_schemas.SubscriptionResponse:
     return subscription_schemas.SubscriptionResponse(
         subscription_id=model.subscription_id,
         client_id=model.client_id,
         status=model.status,
+        status_reason=model.status_reason,
         frequency=model.frequency,
         start_date=model.start_date,
         next_run_at=model.next_run_at,
@@ -251,7 +307,9 @@ async def update_subscription_status(
     session: AsyncSession = Depends(get_db_session),
 ) -> subscription_schemas.SubscriptionResponse:
     subscription = await _get_client_subscription(session, subscription_id, identity.client_id)
-    await subscription_service.update_subscription_status(session, subscription, payload.status)
+    await subscription_service.update_subscription_status(
+        session, subscription, payload.status, reason=payload.status_reason
+    )
     await session.commit()
     await session.refresh(subscription)
     return _subscription_response(subscription)
@@ -264,6 +322,20 @@ async def list_orders(
 ) -> list[client_schemas.ClientOrderSummary]:
     logger.info("client_portal_access", extra={"extra": {"client_id": identity.client_id, "path": "/client/orders"}})
     return await _list_orders(session, identity.client_id)
+
+
+@router.get("/client/invoices", response_model=list[client_schemas.ClientInvoiceListItem])
+async def list_invoices(
+    request: Request,
+    identity: client_schemas.ClientIdentity = Depends(require_identity),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[client_schemas.ClientInvoiceListItem]:
+    org_id = entitlements.resolve_org_id(request)
+    logger.info(
+        "client_portal_access",
+        extra={"extra": {"client_id": identity.client_id, "path": "/client/invoices"}},
+    )
+    return await _list_client_invoices(session, identity, org_id)
 
 
 async def _get_client_booking(session: AsyncSession, order_id: str, client_id: str) -> Booking:

@@ -5,6 +5,7 @@
 - **SaaS JWT (org-scoped)**: access tokens validated by `TenantSessionMiddleware`; sessions stored in DB and refreshed via `/v1/auth/refresh` (`app/api/saas_auth.py`, `app/api/routes_auth.py`). `require_org_context` enforces org presence when SaaS tokens are expected.
 - **Worker portal tokens**: signed tokens using `WORKER_PORTAL_SECRET`, validated by `WorkerAccessMiddleware` and endpoints in `app/api/worker_auth.py`/`routes_worker.py`.
 - **Client portal tokens**: HMAC tokens for invoice/portal links using `CLIENT_PORTAL_SECRET` with TTL (`app/api/routes_payments.py`, `app/settings.py`).
+- **Client portal isolation**: client magic links set an org context and are required for every portal call; booking/invoice/photos are resolved only when the authenticated client owns the record and the invoice/order lives under the caller's org. Signed photo downloads stay behind authenticated `/client/orders/{id}/photos/{photo_id}/signed_url` hops and reuse org-aware storage signing.
 - **Public endpoints**: `/healthz`, estimator, chat, leads, slots/bookings (with optional captcha), and Stripe webhook; all others require auth.
 - **IAM onboarding (temp passwords)**: admins issue org-scoped temp passwords via `/v1/iam/users` or reset endpoints; hashes are stored immediately and never logged. Temp-password users are marked `must_change_password` and are blocked by `PasswordChangeGateMiddleware` from all routes except login/refresh/me/logout/change-password until they set a new password.
 

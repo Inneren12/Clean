@@ -61,6 +61,7 @@ from app.domain.nps.db_models import SupportTicket
 from app.domain.leads.service import grant_referral_credit, export_payload_from_lead
 from app.domain.leads.schemas import AdminLeadResponse, AdminLeadStatusUpdateRequest, admin_lead_from_model
 from app.domain.leads.statuses import assert_valid_transition, is_valid_status
+from app.domain.config import schemas as config_schemas
 from app.domain.notifications import email_service
 from app.domain.nps import schemas as nps_schemas, service as nps_service
 from app.domain.pricing.config_loader import load_pricing_config
@@ -1142,12 +1143,24 @@ def _admin_subscription_response(model: Subscription) -> subscription_schemas.Ad
         subscription_id=model.subscription_id,
         client_id=model.client_id,
         status=model.status,
+        status_reason=model.status_reason,
         frequency=model.frequency,
         next_run_at=model.next_run_at,
+        preferred_weekday=model.preferred_weekday,
+        preferred_day_of_month=model.preferred_day_of_month,
         base_service_type=model.base_service_type,
         base_price=model.base_price,
         created_at=model.created_at,
     )
+
+
+async def _get_org_subscription(
+    session: AsyncSession, subscription_id: str, org_id: uuid.UUID
+) -> Subscription | None:
+    subscription = await session.get(Subscription, subscription_id)
+    if not subscription or subscription.org_id != org_id:
+        return None
+    return subscription
 
 
 @router.get(
@@ -1168,6 +1181,69 @@ async def list_subscriptions_admin(
     result = await session.execute(stmt)
     subscriptions = result.scalars().all()
     return [_admin_subscription_response(sub) for sub in subscriptions]
+
+
+@router.patch(
+    "/v1/admin/subscriptions/{subscription_id}",
+    response_model=subscription_schemas.AdminSubscriptionListItem,
+)
+async def update_subscription_admin(
+    subscription_id: str,
+    payload: subscription_schemas.AdminSubscriptionUpdateRequest,
+    request: Request,
+    _identity: AdminIdentity = Depends(require_admin),
+    session: AsyncSession = Depends(get_db_session),
+) -> subscription_schemas.AdminSubscriptionListItem:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    subscription = await _get_org_subscription(session, subscription_id, org_id)
+    if subscription is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscription not found")
+
+    try:
+        await subscription_service.update_subscription(session, subscription, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    await session.commit()
+    await session.refresh(subscription)
+    return _admin_subscription_response(subscription)
+
+
+@router.get(
+    "/v1/admin/feature-flags", response_model=config_schemas.FeatureFlagResponse
+)
+async def feature_flags(
+    _identity: AdminIdentity = Depends(require_admin),
+) -> config_schemas.FeatureFlagResponse:
+    flags = [
+        config_schemas.FeatureFlag(
+            key="exports",
+            enabled=settings.export_mode != "off",
+            description="Outbound exports and webhooks",
+            rollout=settings.export_mode,
+        ),
+        config_schemas.FeatureFlag(
+            key="deposits",
+            enabled=settings.deposits_enabled,
+            description="Deposit collection enabled for bookings",
+        ),
+        config_schemas.FeatureFlag(
+            key="strict_policy_mode",
+            enabled=getattr(settings, "strict_policy_mode", False),
+            description="Enforces strict client/config policies",
+        ),
+    ]
+    return config_schemas.FeatureFlagResponse(flags=flags)
+
+
+@router.get(
+    "/v1/admin/config", response_model=config_schemas.ConfigViewerResponse
+)
+async def config_viewer(
+    _identity: AdminIdentity = Depends(require_admin),
+) -> config_schemas.ConfigViewerResponse:
+    entries = _config_entries_from_settings()
+    return config_schemas.ConfigViewerResponse(entries=entries)
 
 
 @router.post(
@@ -1234,6 +1310,54 @@ def _org_scope_filters(org_id: uuid.UUID, *entities: object) -> tuple:
         seen.add(entity)
         filters.append(_org_scope_condition(entity, org_id))
     return tuple(filters)
+
+
+SECRET_KEYWORDS = ("secret", "password", "token", "key", "credential")
+CONFIG_WHITELIST = (
+    "app_env",
+    "strict_cors",
+    "strict_policy_mode",
+    "export_mode",
+    "deposits_enabled",
+    "order_storage_backend",
+    "photo_download_redirect_status",
+    "metrics_enabled",
+    "metrics_token",
+    "job_heartbeat_required",
+    "auth_secret_key",
+    "client_portal_secret",
+    "worker_portal_secret",
+    "photo_token_secret",
+    "order_photo_signing_secret",
+    "stripe_secret_key",
+    "stripe_webhook_secret",
+    "sendgrid_api_key",
+    "smtp_password",
+    "cf_images_api_token",
+    "cf_images_signing_key",
+)
+
+
+def _redact_config_value(key: str, value: object | None) -> tuple[object | None, bool]:
+    lowered = key.lower()
+    redacted = any(token in lowered for token in SECRET_KEYWORDS)
+    if redacted:
+        return ("<redacted>" if value else None), True
+    return value, False
+
+
+def _config_entries_from_settings() -> list[config_schemas.ConfigEntry]:
+    raw = settings.model_dump()
+    entries: list[config_schemas.ConfigEntry] = []
+    for key in CONFIG_WHITELIST:
+        value = raw.get(key)
+        redacted_value, is_redacted = _redact_config_value(key, value)
+        entries.append(
+            config_schemas.ConfigEntry(
+                key=key, value=redacted_value, redacted=is_redacted, source="settings"
+            )
+        )
+    return entries
 
 
 def _normalize_date_range(start: date | None, end: date | None) -> tuple[date, date]:
@@ -3348,10 +3472,24 @@ async def _record_manual_invoice_payment(
 
 @router.get("/api/admin/tickets", response_model=nps_schemas.TicketListResponse)
 async def list_support_tickets(
+    request: Request,
+    status_filter: str | None = Query(default=None, alias="status"),
+    priority: str | None = Query(default=None),
+    order_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_admin),
 ) -> nps_schemas.TicketListResponse:
-    tickets = await nps_service.list_tickets(session)
+    org_id = entitlements.resolve_org_id(request)
+    try:
+        tickets = await nps_service.list_tickets(
+            session,
+            org_id=org_id,
+            status_filter=status_filter,
+            priority_filter=priority,
+            order_id=order_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return nps_schemas.TicketListResponse(tickets=[_ticket_response(ticket) for ticket in tickets])
 
 
@@ -3359,11 +3497,15 @@ async def list_support_tickets(
 async def update_support_ticket(
     ticket_id: str,
     payload: nps_schemas.TicketUpdateRequest,
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_admin),
 ) -> nps_schemas.TicketResponse:
+    org_id = entitlements.resolve_org_id(request)
     try:
-        ticket = await nps_service.update_ticket_status(session, ticket_id, payload.status)
+        ticket = await nps_service.update_ticket_status(
+            session, ticket_id, payload.status, org_id=org_id
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if ticket is None:

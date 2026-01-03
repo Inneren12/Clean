@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -189,18 +190,46 @@ async def ensure_ticket_for_low_score(
     return ticket
 
 
-async def list_tickets(session: AsyncSession) -> list[SupportTicket]:
-    stmt = select(SupportTicket).order_by(SupportTicket.created_at.desc())
+async def list_tickets(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID | None = None,
+    status_filter: str | None = None,
+    priority_filter: str | None = None,
+    order_id: str | None = None,
+) -> list[SupportTicket]:
+    stmt = (
+        select(SupportTicket)
+        .join(Booking, SupportTicket.order_id == Booking.booking_id)
+        .order_by(SupportTicket.created_at.desc())
+    )
+    if org_id:
+        stmt = stmt.where(Booking.org_id == org_id)
+    if status_filter:
+        if status_filter not in TICKET_STATUSES:
+            raise ValueError("invalid_status")
+        stmt = stmt.where(SupportTicket.status == status_filter)
+    if priority_filter:
+        stmt = stmt.where(SupportTicket.priority == priority_filter)
+    if order_id:
+        stmt = stmt.where(SupportTicket.order_id == order_id)
+
     result = await session.execute(stmt)
     return list(result.scalars().all())
 
 
 async def update_ticket_status(
-    session: AsyncSession, ticket_id: str, status: str
+    session: AsyncSession, ticket_id: str, status: str, *, org_id: uuid.UUID | None = None
 ) -> SupportTicket | None:
     if status not in TICKET_STATUSES:
         raise ValueError("invalid_status")
-    ticket = await session.get(SupportTicket, ticket_id)
+
+    stmt = select(SupportTicket).join(Booking, SupportTicket.order_id == Booking.booking_id)
+    if org_id:
+        stmt = stmt.where(Booking.org_id == org_id)
+    stmt = stmt.where(SupportTicket.id == ticket_id)
+    result = await session.execute(stmt)
+    ticket = result.scalar_one_or_none()
     if ticket is None:
         return None
     ticket.status = status
