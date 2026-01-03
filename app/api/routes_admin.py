@@ -68,8 +68,22 @@ from app.domain.reason_logs import schemas as reason_schemas
 from app.domain.reason_logs import service as reason_service
 from app.domain.saas import billing_service, service as saas_service
 from app.domain.saas.db_models import Membership, MembershipRole, Organization, PasswordResetEvent, User
+from app.domain.ops import service as ops_service
 from app.domain.ops.db_models import JobHeartbeat
-from app.domain.ops.schemas import JobStatusResponse
+from app.domain.ops.schemas import (
+    BlockSlotRequest,
+    BulkBookingsRequest,
+    BulkBookingsResponse,
+    GlobalSearchResult,
+    JobStatusResponse,
+    MoveBookingRequest,
+    QuickActionModel,
+    ScheduleBlackout,
+    ScheduleBooking,
+    ScheduleResponse,
+    TemplatePreviewRequest,
+    TemplatePreviewResponse,
+)
 from app.domain.retention import cleanup_retention
 from app.domain.subscriptions import schemas as subscription_schemas
 from app.domain.subscriptions import service as subscription_service
@@ -744,6 +758,247 @@ async def resend_last_email(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Email send failed") from exc
 
 
+def _serialize_hit(hit) -> GlobalSearchResult:
+    return GlobalSearchResult(
+        kind=hit.kind,
+        ref=hit.ref,
+        label=hit.label,
+        status=hit.status,
+        quick_actions=[QuickActionModel(**action.__dict__) for action in hit.quick_actions],
+    )
+
+
+@router.get("/v1/admin/search", response_model=list[GlobalSearchResult])
+async def global_search(
+    request: Request,
+    q: str = Query(..., min_length=1, max_length=120),
+    limit: int = Query(20, ge=1, le=50),
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_viewer),
+) -> list[GlobalSearchResult]:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    hits = await ops_service.global_search(session, org_id, q, limit)
+    return [_serialize_hit(hit) for hit in hits]
+
+
+@router.get("/v1/admin/schedule", response_model=ScheduleResponse)
+async def list_schedule(
+    request: Request,
+    day: date = Query(default_factory=date.today),
+    team_id: int | None = None,
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_dispatch),
+) -> ScheduleResponse:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    payload = await ops_service.list_schedule(session, org_id, day, team_id)
+    return ScheduleResponse(**payload)
+
+
+@router.post("/v1/admin/schedule/{booking_id}/move", response_model=booking_schemas.AdminBookingListItem)
+async def move_booking_slot(
+    booking_id: str,
+    payload: MoveBookingRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_dispatch),
+) -> booking_schemas.AdminBookingListItem:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    try:
+        booking = await ops_service.move_booking(
+            session,
+            org_id,
+            booking_id,
+            starts_at=payload.starts_at,
+            duration_minutes=payload.duration_minutes,
+            team_id=payload.team_id,
+        )
+    except LookupError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+    except PermissionError:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cross-org move blocked")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    lead = getattr(booking, "lead", None)
+    return booking_schemas.AdminBookingListItem(
+        booking_id=booking.booking_id,
+        lead_id=booking.lead_id,
+        starts_at=booking.starts_at,
+        duration_minutes=booking.duration_minutes,
+        status=booking.status,
+        lead_name=getattr(lead, "name", None),
+        lead_email=getattr(lead, "email", None),
+    )
+
+
+@router.post("/v1/admin/schedule/block", response_model=ScheduleBlackout)
+async def block_schedule_slot(
+    payload: BlockSlotRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_dispatch),
+) -> ScheduleBlackout:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    try:
+        blackout = await ops_service.block_team_slot(
+            session,
+            org_id,
+            team_id=payload.team_id,
+            starts_at=payload.starts_at,
+            ends_at=payload.ends_at,
+            reason=payload.reason,
+        )
+    except PermissionError:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cross-org block not allowed")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    return ScheduleBlackout.from_orm(blackout)
+
+
+@router.post("/v1/admin/bookings/bulk", response_model=BulkBookingsResponse)
+async def bulk_update_bookings(
+    request: Request,
+    payload: BulkBookingsRequest,
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_dispatch),
+) -> BulkBookingsResponse:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    adapter = getattr(request.app.state, "email_adapter", None)
+    result = await ops_service.bulk_update_bookings(
+        session,
+        org_id,
+        payload.booking_ids,
+        team_id=payload.team_id,
+        status=payload.status,
+        send_reminder=payload.send_reminder,
+        adapter=adapter,
+    )
+    return BulkBookingsResponse(**result)
+
+
+async def _load_lead(session: AsyncSession, org_id, lead_id: str | None) -> Lead | None:
+    if not lead_id:
+        return None
+    result = await session.execute(select(Lead).where(Lead.lead_id == lead_id, Lead.org_id == org_id))
+    return result.scalar_one_or_none()
+
+
+async def _load_booking_with_lead(session: AsyncSession, org_id, booking_id: str | None) -> tuple[Booking | None, Lead | None]:
+    stmt = select(Booking, Lead).join(Lead, Lead.lead_id == Booking.lead_id, isouter=True).where(
+        Booking.org_id == org_id
+    )
+    if booking_id:
+        stmt = stmt.where(Booking.booking_id == booking_id)
+    stmt = stmt.order_by(Booking.created_at.desc()).limit(1)
+    result = await session.execute(stmt)
+    row = result.one_or_none()
+    if not row:
+        return None, None
+    booking, lead = row
+    return booking, lead
+
+
+async def _load_invoice_with_lead(session: AsyncSession, org_id, invoice_id: str | None) -> tuple[Invoice | None, Lead | None]:
+    stmt = select(Invoice, Lead).join(Lead, Lead.lead_id == Invoice.customer_id, isouter=True).where(
+        Invoice.org_id == org_id
+    )
+    if invoice_id:
+        stmt = stmt.where(Invoice.invoice_id == invoice_id)
+    stmt = stmt.order_by(Invoice.created_at.desc()).limit(1)
+    result = await session.execute(stmt)
+    row = result.one_or_none()
+    if not row:
+        return None, None
+    invoice, lead = row
+    return invoice, lead
+
+
+async def _preview_inputs(
+    session: AsyncSession,
+    org_id,
+    lead_id: str | None,
+    booking_id: str | None,
+    invoice_id: str | None,
+) -> tuple[Booking | None, Lead | None, Invoice | None]:
+    booking, lead = await _load_booking_with_lead(session, org_id, booking_id)
+    invoice, invoice_lead = await _load_invoice_with_lead(session, org_id, invoice_id)
+    if lead is None:
+        lead = invoice_lead or await _load_lead(session, org_id, lead_id)
+    if booking and lead is None:
+        lead = await _load_lead(session, org_id, booking.lead_id)
+    return booking, lead, invoice
+
+
+@router.get("/v1/admin/messaging/templates", response_model=list[TemplatePreviewResponse])
+async def list_messaging_templates(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_dispatch),
+) -> list[TemplatePreviewResponse]:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    templates = await ops_service.list_templates()
+
+    booking, lead = None, None
+    invoice = None
+    sample_booking, lead_candidate = await _load_booking_with_lead(session, org_id, None)
+    if sample_booking:
+        booking, lead = sample_booking, lead_candidate
+    if lead is None:
+        lead = await _load_lead(session, org_id, None)
+    invoice, invoice_lead = await _load_invoice_with_lead(session, org_id, None)
+    if lead is None:
+        lead = invoice_lead
+
+    previews: list[TemplatePreviewResponse] = []
+    for meta in templates:
+        try:
+            subject, body = await ops_service.render_template_preview(meta["template"], booking, lead, invoice)
+        except Exception:
+            subject = "Preview unavailable"
+            body = "Provide a lead/booking/invoice to render this template."
+        previews.append(
+            TemplatePreviewResponse(
+                template=meta["template"],
+                version=meta["version"],
+                subject=subject,
+                body=body,
+            )
+        )
+    return previews
+
+
+@router.post("/v1/admin/messaging/templates/preview", response_model=TemplatePreviewResponse)
+async def preview_template(
+    payload: TemplatePreviewRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_dispatch),
+) -> TemplatePreviewResponse:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    booking, lead, invoice = await _preview_inputs(session, org_id, payload.lead_id, payload.booking_id, payload.invoice_id)
+    try:
+        subject, body = await ops_service.render_template_preview(payload.template, booking, lead, invoice)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return TemplatePreviewResponse(template=payload.template, version="v1", subject=subject, body=body)
+
+
+@router.post("/v1/admin/messaging/events/{event_id}/resend", status_code=status.HTTP_202_ACCEPTED)
+async def resend_email_event(
+    event_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_dispatch),
+) -> dict[str, str]:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    adapter = getattr(request.app.state, "email_adapter", None)
+    try:
+        return await ops_service.resend_email_event(session, adapter, org_id, event_id)
+    except LookupError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email event not found")
+
+
 def _job_status_response(record: JobHeartbeat) -> JobStatusResponse:
     return JobStatusResponse(
         name=record.name,
@@ -990,7 +1245,11 @@ def _normalize_date_range(start: date | None, end: date | None) -> tuple[date, d
 
 
 def _csv_line(key: str, value: object) -> str:
-    return f"{key},{value if value is not None else ''}"
+    return f"{ops_service.safe_csv_value(key)},{ops_service.safe_csv_value(value)}"
+
+
+def _sanitize_row(values: Iterable[object]) -> list[str]:
+    return [ops_service.safe_csv_value(value) for value in values]
 
 
 @router.get("/v1/admin/metrics", response_model=analytics_schemas.AdminMetricsResponse)
@@ -1158,20 +1417,22 @@ async def export_sales_ledger(
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(
-        [
-            "invoice_number",
-            "issue_date",
-            "due_date",
-            "status",
-            "currency",
-            "subtotal_cents",
-            "tax_cents",
-            "total_cents",
-            "paid_cents",
-            "balance_due_cents",
-            "customer_id",
-            "booking_id",
-        ]
+        _sanitize_row(
+            [
+                "invoice_number",
+                "issue_date",
+                "due_date",
+                "status",
+                "currency",
+                "subtotal_cents",
+                "tax_cents",
+                "total_cents",
+                "paid_cents",
+                "balance_due_cents",
+                "customer_id",
+                "booking_id",
+            ]
+        )
     )
     for invoice in invoices:
         paid_cents = sum(
@@ -1181,20 +1442,22 @@ async def export_sales_ledger(
         )
         balance_due_cents = max(invoice.total_cents - paid_cents, 0)
         writer.writerow(
-            [
-                invoice.invoice_number,
-                invoice.issue_date.isoformat(),
-                invoice.due_date.isoformat() if invoice.due_date else "",
-                invoice.status,
-                invoice.currency,
-                invoice.subtotal_cents,
-                invoice.tax_cents,
-                invoice.total_cents,
-                paid_cents,
-                balance_due_cents,
-                invoice.customer_id or "",
-                invoice.order_id or "",
-            ]
+            _sanitize_row(
+                [
+                    invoice.invoice_number,
+                    invoice.issue_date.isoformat(),
+                    invoice.due_date.isoformat() if invoice.due_date else "",
+                    invoice.status,
+                    invoice.currency,
+                    invoice.subtotal_cents,
+                    invoice.tax_cents,
+                    invoice.total_cents,
+                    paid_cents,
+                    balance_due_cents,
+                    invoice.customer_id or "",
+                    invoice.order_id or "",
+                ]
+            )
         )
 
     return Response(
@@ -1235,34 +1498,38 @@ async def export_payments_ledger(
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(
-        [
-            "payment_id",
-            "invoice_number",
-            "booking_id",
-            "provider",
-            "method",
-            "status",
-            "amount_cents",
-            "currency",
-            "received_at",
-            "created_at",
-        ]
+        _sanitize_row(
+            [
+                "payment_id",
+                "invoice_number",
+                "booking_id",
+                "provider",
+                "method",
+                "status",
+                "amount_cents",
+                "currency",
+                "received_at",
+                "created_at",
+            ]
+        )
     )
 
     for payment, invoice_number, invoice_order_id, _payment_ts in rows:
         writer.writerow(
-            [
-                payment.payment_id,
-                invoice_number or "",
-                payment.booking_id or invoice_order_id or "",
-                payment.provider,
-                payment.method,
-                payment.status,
-                payment.amount_cents,
-                payment.currency,
-                payment.received_at.isoformat() if payment.received_at else "",
-                payment.created_at.isoformat(),
-            ]
+            _sanitize_row(
+                [
+                    payment.payment_id,
+                    invoice_number or "",
+                    payment.booking_id or invoice_order_id or "",
+                    payment.provider,
+                    payment.method,
+                    payment.status,
+                    payment.amount_cents,
+                    payment.currency,
+                    payment.received_at.isoformat() if payment.received_at else "",
+                    payment.created_at.isoformat(),
+                ]
+            )
         )
 
     return Response(
@@ -1302,29 +1569,35 @@ async def export_deposits_ledger(
 
     buffer = io.StringIO()
     writer = csv.writer(buffer)
-    writer.writerow([
-        "payment_id",
-        "booking_id",
-        "provider",
-        "method",
-        "amount_cents",
-        "currency",
-        "received_at",
-        "created_at",
-    ])
+    writer.writerow(
+        _sanitize_row(
+            [
+                "payment_id",
+                "booking_id",
+                "provider",
+                "method",
+                "amount_cents",
+                "currency",
+                "received_at",
+                "created_at",
+            ]
+        )
+    )
 
     for payment, _payment_ts in rows:
         writer.writerow(
-            [
-                payment.payment_id,
-                payment.booking_id or "",
-                payment.provider,
-                payment.method,
-                payment.amount_cents,
-                payment.currency,
-                payment.received_at.isoformat() if payment.received_at else "",
-                payment.created_at.isoformat(),
-            ]
+            _sanitize_row(
+                [
+                    payment.payment_id,
+                    payment.booking_id or "",
+                    payment.provider,
+                    payment.method,
+                    payment.amount_cents,
+                    payment.currency,
+                    payment.received_at.isoformat() if payment.received_at else "",
+                    payment.created_at.isoformat(),
+                ]
+            )
         )
 
     return Response(
@@ -2765,31 +3038,35 @@ async def admin_reason_report(
         buffer = io.StringIO()
         writer = csv.writer(buffer)
         writer.writerow(
-            [
-                "reason_id",
-                "order_id",
-                "kind",
-                "code",
-                "note",
-                "created_at",
-                "created_by",
-                "time_entry_id",
-                "invoice_item_id",
-            ]
+            _sanitize_row(
+                [
+                    "reason_id",
+                    "order_id",
+                    "kind",
+                    "code",
+                    "note",
+                    "created_at",
+                    "created_by",
+                    "time_entry_id",
+                    "invoice_item_id",
+                ]
+            )
         )
         for reason in reasons:
             writer.writerow(
-                [
-                    reason.reason_id,
-                    reason.order_id,
-                    reason.kind,
-                    reason.code,
-                    reason.note or "",
-                    reason.created_at.isoformat(),
-                    reason.created_by or "",
-                    reason.time_entry_id or "",
-                    reason.invoice_item_id or "",
-                ]
+                _sanitize_row(
+                    [
+                        reason.reason_id,
+                        reason.order_id,
+                        reason.kind,
+                        reason.code,
+                        reason.note or "",
+                        reason.created_at.isoformat(),
+                        reason.created_by or "",
+                        reason.time_entry_id or "",
+                        reason.invoice_item_id or "",
+                    ]
+                )
             )
         return Response(
             content=buffer.getvalue(),

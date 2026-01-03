@@ -24,8 +24,8 @@
 - `app/api/routes_checklists.py` – Worker/admin checklist templates and completion state.
 - `app/api/routes_worker.py` – Worker portal endpoints (auth, jobs list, job detail, uploads, status updates).
 - `app/api/routes_time_tracking.py` – Time tracking for workers and admin reviews.
+- `app/api/routes_admin.py` – Admin utilities: pricing reload, email scan/resend, cleanup, retention, export dead-letter, global search, scheduling actions, messaging previews, and bulk booking updates.
 - `app/api/routes_metrics.py` – Metrics CSV/API for admin basic auth.
-- `app/api/routes_admin.py` – Admin utilities: pricing reload, email scan/resend, cleanup, retention, export dead-letter.
 - `app/api/routes_public.py` – Public landing/docs endpoints.
 - `app/api/routes_health.py` – `/healthz` and `/readyz` checks (DB/migrations/job heartbeat).
 - `app/api/routes_bot.py` and `app/api/routes_chat.py` – Chat session handling and bot responses.
@@ -41,6 +41,7 @@
 - `app/domain/saas/service.py` – SaaS user/org lifecycle, sessions, password reset, membership roles.
 - `app/domain/saas/billing_service.py` – Plan usage tracking, metered billing records, entitlements.
 - `app/domain/time_tracking/service.py` – Worker check-in/out and admin overrides.
+- `app/domain/ops/service.py` – Org-scoped search, scheduling conflict checks, messaging previews, and bulk booking helpers.
 - `app/domain/ops/db_models.py` – Operational tables (job heartbeat, email events, exports, retention).
 - `app/infra/models.py` – SQLAlchemy models for core entities (users, orgs, leads, bookings, orders, invoices, workers, referrals, billing usage).
 

@@ -353,6 +353,11 @@ def summarize_order_time(
         "effective_seconds": effective_seconds,
         "delta_seconds": delta_seconds,
         "leak_flag": leak_flag,
+        "check_in_at": getattr(entry, "started_at", None) or booking.starts_at,
+        "check_out_at": getattr(entry, "finished_at", None),
+        "planned_vs_actual_ratio": (effective_seconds / planned_seconds) if planned_seconds else None,
+        "proof_required": leak_flag,
+        "proof_attached": bool(entry and (entry.segments or [])),
         "segments": _segments_as_models(entry),
     }
 
