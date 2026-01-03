@@ -3,8 +3,11 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect
 import sqlalchemy as sa
+import pytest
 
 from app.settings import settings
+
+pytestmark = pytest.mark.migrations
 
 
 def test_alembic_has_single_head():

@@ -13,6 +13,7 @@
 - ✅ Tests and migrations: `make test`, `pytest -m "migrations"`, and Alembic head matches `/readyz`.
 - ✅ Migration hygiene: CI fails fast if `alembic heads` returns more than one revision—add a merge migration before merging.
 - ✅ Migrations applied and `alembic_version` matches `alembic/versions` head.
+- ✅ Org isolation regressions: automated suite seeds multiple orgs and blocks cross-org finance/payments/export/iam/photo access; metrics path labels stay templated to avoid cardinality blow-ups.
 - ✅ Backups: Postgres backup + restore drill validated for tenant data (org_id scoped).
 - ✅ Config secrets: non-default secrets for auth tokens, portal secrets, metrics token, storage signing, Stripe/email keys; at least one admin Basic Auth pair configured.
 - ✅ Job heartbeat: `/readyz` shows recent heartbeat when `JOB_HEARTBEAT_REQUIRED=true`.
