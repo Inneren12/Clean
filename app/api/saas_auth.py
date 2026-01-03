@@ -5,6 +5,7 @@ from typing import Iterable
 
 import sqlalchemy as sa
 from fastapi import Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -16,6 +17,12 @@ from app.infra.auth import decode_access_token
 logger = logging.getLogger(__name__)
 
 bearer_security = HTTPBearer(auto_error=False)
+ALLOW_WHILE_MUST_CHANGE = {
+    "/v1/auth/change-password",
+    "/v1/auth/logout",
+    "/v1/auth/me",
+    "/v1/auth/refresh",
+}
 
 
 @dataclass
@@ -24,6 +31,7 @@ class SaaSIdentity:
     org_id: uuid.UUID
     role: MembershipRole
     email: str
+    must_change_password: bool = False
     session_id: uuid.UUID | None = None
 
 
@@ -85,7 +93,13 @@ async def _load_identity(request: Request, token: str | None, *, strict: bool = 
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
                 return None
         result = await session.execute(
-            sa.select(User.email, User.is_active, Membership.role, Membership.is_active)
+            sa.select(
+                User.email,
+                User.is_active,
+                User.must_change_password,
+                Membership.role,
+                Membership.is_active,
+            )
             .join(Membership, Membership.user_id == User.user_id)
             .where(
                 User.user_id == user_id,
@@ -97,12 +111,19 @@ async def _load_identity(request: Request, token: str | None, *, strict: bool = 
             if strict:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
             return None
-        email, user_active, membership_role, is_active = row
+        email, user_active, must_change_password, membership_role, is_active = row
         if not user_active or not is_active or membership_role != role:
             if strict:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
             return None
-        return SaaSIdentity(user_id=user_id, org_id=org_id, role=role, email=email, session_id=session_id)
+        return SaaSIdentity(
+            user_id=user_id,
+            org_id=org_id,
+            role=role,
+            email=email,
+            must_change_password=bool(must_change_password),
+            session_id=session_id,
+        )
 
 
 class TenantSessionMiddleware(BaseHTTPMiddleware):
@@ -132,6 +153,29 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
                 )
         elif identity_error:
             request.state.saas_identity_error = identity_error
+        return await call_next(request)
+
+
+class PasswordChangeGateMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+        identity = getattr(request.state, "saas_identity", None)
+        if identity and not getattr(identity, "must_change_password", False):
+            session_factory = getattr(request.app.state, "db_session_factory", None)
+            if session_factory:
+                async with session_factory() as session:
+                    must_change = await session.scalar(
+                        sa.select(User.must_change_password).where(User.user_id == identity.user_id)
+                    )
+                    if must_change:
+                        identity.must_change_password = True
+
+        if identity and getattr(identity, "must_change_password", False):
+            path = request.url.path
+            if not any(path.startswith(prefix) for prefix in ALLOW_WHILE_MUST_CHANGE):
+                return JSONResponse(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    content={"detail": "Password change required"},
+                )
         return await call_next(request)
 
 

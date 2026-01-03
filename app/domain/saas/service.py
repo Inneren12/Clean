@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+import string
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -131,9 +132,39 @@ async def create_organization(session: AsyncSession, name: str) -> Organization:
     return org
 
 
-async def create_user(session: AsyncSession, email: str, password: str | None = None) -> User:
+def normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def generate_temp_password(length: int = 16) -> str:
+    alphabet = string.ascii_letters + string.digits
+    while True:
+        candidate = "".join(secrets.choice(alphabet) for _ in range(length))
+        if (
+            any(c.islower() for c in candidate)
+            and any(c.isupper() for c in candidate)
+            and any(c.isdigit() for c in candidate)
+        ):
+            return candidate
+
+
+async def create_user(
+    session: AsyncSession,
+    email: str,
+    password: str | None = None,
+    *,
+    must_change_password: bool = False,
+    password_changed_at: datetime | None = None,
+    temp_password_issued_at: datetime | None = None,
+) -> User:
     password_hash = hash_password(password, settings=settings) if password else None
-    user = User(email=email, password_hash=password_hash)
+    user = User(
+        email=normalize_email(email),
+        password_hash=password_hash,
+        must_change_password=must_change_password,
+        password_changed_at=password_changed_at,
+        temp_password_issued_at=temp_password_issued_at,
+    )
     session.add(user)
     await session.flush()
     return user
@@ -169,7 +200,8 @@ async def issue_service_token(
 async def authenticate_user(
     session: AsyncSession, email: str, password: str, org_id: uuid.UUID | None
 ) -> tuple[User, Membership]:
-    user = await session.scalar(sa.select(User).where(User.email == email))
+    normalized_email = normalize_email(email)
+    user = await session.scalar(sa.select(User).where(User.email == normalized_email))
     if not user or not user.is_active or not user.password_hash:
         raise ValueError("invalid_credentials")
     valid, upgraded = verify_password(password, user.password_hash, settings=settings)
@@ -187,6 +219,24 @@ async def authenticate_user(
     if not membership:
         raise ValueError("membership_not_found")
     return user, membership
+
+
+async def issue_temp_password(session: AsyncSession, user: User) -> str:
+    temp_password = generate_temp_password()
+    user.password_hash = hash_password(temp_password, settings=settings)
+    user.must_change_password = True
+    user.temp_password_issued_at = datetime.now(timezone.utc)
+    session.add(user)
+    await session.flush()
+    return temp_password
+
+
+async def set_new_password(session: AsyncSession, user: User, new_password: str) -> None:
+    user.password_hash = hash_password(new_password, settings=settings)
+    user.must_change_password = False
+    user.password_changed_at = datetime.now(timezone.utc)
+    session.add(user)
+    await session.flush()
 
 
 def build_access_token(user: User, membership: Membership) -> str:

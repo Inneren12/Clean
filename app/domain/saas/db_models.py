@@ -41,6 +41,11 @@ class User(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(sa.String(255), nullable=False, unique=True, index=True)
     password_hash: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+    must_change_password: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=False, server_default=sa.false()
+    )
+    password_changed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    temp_password_issued_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(sa.Boolean, default=True, server_default=sa.true())
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
@@ -137,6 +142,23 @@ class TokenEvent(Base):
     request_id: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
     details: Mapped[dict] = mapped_column("metadata", sa.JSON(), default=dict, server_default=sa.text("'{}'"))
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
+
+
+class PasswordResetEvent(Base):
+    __tablename__ = "password_reset_events"
+
+    event_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, sa.ForeignKey("organizations.org_id", ondelete="CASCADE")
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, sa.ForeignKey("users.user_id", ondelete="CASCADE")
+    )
+    actor_admin: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+    reason: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
 
 
 class OrganizationBilling(Base):

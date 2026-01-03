@@ -163,6 +163,7 @@ class Settings(BaseSettings):
     email_circuit_recovery_seconds: float = Field(30.0)
     email_unsubscribe_secret: str | None = Field(None)
     email_unsubscribe_ttl_minutes: int = Field(7 * 24 * 60)
+    email_temp_passwords: bool = Field(False)
     default_org_id: uuid.UUID = Field(uuid.UUID("00000000-0000-0000-0000-000000000001"))
 
     model_config = SettingsConfigDict(env_file=".env", enable_decoding=False)
