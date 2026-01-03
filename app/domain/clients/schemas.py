@@ -38,6 +38,17 @@ class ClientInvoiceResponse(BaseModel):
     order_id: str | None = None
 
 
+class ClientInvoiceListItem(BaseModel):
+    invoice_id: str
+    invoice_number: str
+    status: str
+    total_cents: int
+    currency: str
+    issued_at: datetime
+    balance_due_cents: int
+    order_id: str | None = None
+
+
 class ReviewRequest(BaseModel):
     rating: int
     comment: str | None = None

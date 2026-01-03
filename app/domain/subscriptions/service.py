@@ -15,7 +15,7 @@ from app.domain.clients.db_models import ClientUser
 from app.domain.addons import service as addon_service
 from app.domain.invoices.schemas import InvoiceItemCreate
 from app.domain.invoices.service import create_invoice_from_order
-from app.domain.subscriptions import statuses
+from app.domain.subscriptions import schemas as subscription_schemas, statuses
 from app.domain.subscriptions.db_models import Subscription
 from app.domain.subscriptions.schemas import SubscriptionCreateRequest
 from app.infra.email import EmailAdapter
@@ -105,9 +105,38 @@ async def list_client_subscriptions(session: AsyncSession, client_id: str) -> li
 
 
 async def update_subscription_status(
-    session: AsyncSession, subscription: Subscription, new_status: str
+    session: AsyncSession, subscription: Subscription, new_status: str, *, reason: str | None = None
 ) -> Subscription:
     subscription.status = statuses.normalize_status(new_status)
+    subscription.status_reason = reason
+    await session.flush()
+    await session.refresh(subscription)
+    return subscription
+
+
+async def update_subscription(
+    session: AsyncSession, subscription: Subscription, payload: "subscription_schemas.AdminSubscriptionUpdateRequest"
+) -> Subscription:
+    if payload.status is not None:
+        subscription.status = statuses.normalize_status(payload.status)
+        subscription.status_reason = payload.status_reason
+    elif payload.status_reason is not None:
+        subscription.status_reason = payload.status_reason
+
+    if payload.frequency is not None:
+        subscription.frequency = statuses.normalize_frequency(payload.frequency)
+    if payload.preferred_weekday is not None:
+        subscription.preferred_weekday = payload.preferred_weekday
+        subscription.preferred_day_of_month = None
+    if payload.preferred_day_of_month is not None:
+        subscription.preferred_day_of_month = payload.preferred_day_of_month
+        subscription.preferred_weekday = None
+    if payload.next_run_at is not None:
+        next_run = payload.next_run_at
+        if next_run.tzinfo is None:
+            next_run = next_run.replace(tzinfo=timezone.utc)
+        subscription.next_run_at = next_run
+
     await session.flush()
     await session.refresh(subscription)
     return subscription
@@ -127,9 +156,10 @@ async def generate_due_orders(
     org_id: uuid.UUID | None = None,
 ) -> GenerationResult:
     current = now or datetime.now(timezone.utc)
+    active_statuses = (statuses.ACTIVE, statuses.TRIAL)
     stmt = (
         select(Subscription)
-        .where(Subscription.status == statuses.ACTIVE)
+        .where(Subscription.status.in_(active_statuses))
         .where(Subscription.next_run_at <= current)
     )
     if org_id:

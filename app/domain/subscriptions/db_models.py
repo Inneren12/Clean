@@ -26,6 +26,7 @@ class Subscription(Base):
     client_id: Mapped[str] = mapped_column(ForeignKey("client_users.client_id"), index=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     frequency: Mapped[str] = mapped_column(String(16), nullable=False)
+    status_reason: Mapped[str | None] = mapped_column(String(255))
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     preferred_weekday: Mapped[int | None] = mapped_column(Integer)
