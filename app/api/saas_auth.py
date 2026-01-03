@@ -13,6 +13,7 @@ from app.api.admin_auth import AdminIdentity, AdminPermission, AdminRole, ROLE_P
 from app.domain.saas import service as saas_service
 from app.domain.saas.db_models import Membership, MembershipRole, User
 from app.infra.auth import decode_access_token
+from app.infra.org_context import set_current_org_id
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,7 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
             request.state.saas_identity = identity
             request.state.current_user_id = identity.user_id
             request.state.current_org_id = identity.org_id
+            set_current_org_id(identity.org_id)
             admin_role = ROLE_TO_ADMIN_ROLE.get(identity.role)
             if admin_role:
                 request.state.admin_identity = AdminIdentity(
@@ -188,6 +190,7 @@ def require_saas_user(
             raise error_from_state
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
     request.state.current_org_id = identity.org_id
+    set_current_org_id(identity.org_id)
     return identity
 
 

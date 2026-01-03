@@ -11,6 +11,7 @@ from app.api.saas_auth import _get_saas_token
 from app.domain.saas import billing_service
 from app.domain.saas.plans import Plan, get_plan
 from app.infra.db import get_db_session
+from app.infra.org_context import set_current_org_id
 from app.settings import settings
 
 
@@ -21,7 +22,9 @@ def resolve_org_id(request: Request) -> uuid.UUID:
 
     org_id = getattr(request.state, "current_org_id", None)
     if org_id is not None:
-        return uuid.UUID(str(org_id))
+        resolved = uuid.UUID(str(org_id))
+        set_current_org_id(resolved)
+        return resolved
 
     if settings.testing:
         header_value = request.headers.get("X-Test-Org")
@@ -34,7 +37,9 @@ def resolve_org_id(request: Request) -> uuid.UUID:
                     detail="Invalid X-Test-Org header",
                 ) from exc
             request.state.current_org_id = org_uuid
+            set_current_org_id(org_uuid)
             return org_uuid
+    set_current_org_id(settings.default_org_id)
     return settings.default_org_id
 
 
@@ -57,6 +62,7 @@ async def _ensure_saas_identity_if_token_present(request: Request) -> None:
     identity = await saas_auth._load_identity(request, token, strict=True)
     request.state.saas_identity = identity
     request.state.current_org_id = identity.org_id
+    set_current_org_id(identity.org_id)
 
 
 async def _plan_and_usage(session: AsyncSession, org_id: uuid.UUID) -> Tuple[Plan, dict[str, int]]:

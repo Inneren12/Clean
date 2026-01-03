@@ -11,6 +11,7 @@ from app.domain.bookings.service import WORK_END_HOUR, WORK_START_HOUR
 from app.domain.saas.service import ensure_default_org_and_team
 from app.domain.saas import db_models as saas_db_models
 from app.infra.db import Base
+from app.infra.org_context import set_current_org_id
 from app.settings import settings
 
 DEFAULT_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -99,6 +100,7 @@ def _smoke_org_header_support():
             if header_value:
                 try:
                     request.state.current_org_id = uuid.UUID(header_value)
+                    set_current_org_id(request.state.current_org_id)
                 except Exception:  # noqa: BLE001
                     pass
             return await call_next(request)

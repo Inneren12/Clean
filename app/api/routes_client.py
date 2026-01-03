@@ -27,6 +27,7 @@ from app.domain.subscriptions import service as subscription_service
 from app.domain.subscriptions.db_models import Subscription
 from app.settings import settings
 from app.infra.storage import resolve_storage_backend
+from app.infra.org_context import set_current_org_id
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ async def require_identity(request: Request) -> client_schemas.ClientIdentity:
         token = token.split(" ", 1)[1]
     identity = await _get_identity_from_token(token)
     request.state.current_org_id = getattr(request.state, "current_org_id", None) or settings.default_org_id
+    set_current_org_id(request.state.current_org_id)
     return identity
 
 
