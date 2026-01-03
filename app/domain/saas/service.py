@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql, sqlite
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.bookings.db_models import Team
@@ -35,27 +36,48 @@ async def ensure_default_org_and_team(session: AsyncSession) -> tuple[Organizati
     bind = session.get_bind()
     dialect_name = getattr(getattr(bind, "dialect", None), "name", "") if bind else ""
     org_id = settings.default_org_id
+    org = await session.get(Organization, org_id)
+
     if dialect_name == "sqlite":
-        org_stmt = sqlite.insert(Organization).values(org_id=org_id, name=DEFAULT_ORG_NAME)
-        org_stmt = org_stmt.prefix_with("OR IGNORE")
         team_stmt = sqlite.insert(Team).values(team_id=1, org_id=org_id, name=DEFAULT_TEAM_NAME)
         team_stmt = team_stmt.prefix_with("OR IGNORE")
     else:
-        org_stmt = (
-            postgresql.insert(Organization)
-            .values(org_id=org_id, name=DEFAULT_ORG_NAME)
-            .on_conflict_do_nothing()
-        )
         team_stmt = (
             postgresql.insert(Team)
             .values(team_id=1, org_id=org_id, name=DEFAULT_TEAM_NAME)
             .on_conflict_do_nothing()
         )
 
-    await session.execute(org_stmt)
-    await session.execute(team_stmt)
+    if org is None:
+        if dialect_name == "sqlite":
+            org_stmt = sqlite.insert(Organization).values(org_id=org_id, name=DEFAULT_ORG_NAME)
+            org_stmt = org_stmt.prefix_with("OR IGNORE")
+        else:
+            org_stmt = (
+                postgresql.insert(Organization)
+                .values(org_id=org_id, name=DEFAULT_ORG_NAME)
+                .on_conflict_do_nothing()
+            )
 
-    org = await session.get(Organization, org_id)
+        try:
+            await session.execute(org_stmt)
+        except IntegrityError:
+            await session.rollback()
+        org = await session.get(Organization, org_id)
+        if org is None:
+            org = await session.scalar(
+                sa.select(Organization).where(Organization.name == DEFAULT_ORG_NAME)
+            )
+            if org is None:
+                org = Organization(org_id=org_id, name=DEFAULT_ORG_NAME)
+                session.add(org)
+                await session.flush()
+
+    try:
+        await session.execute(team_stmt)
+    except IntegrityError:
+        await session.rollback()
+
     team = await session.get(Team, 1)
     if team and team.org_id != org_id:
         team.org_id = org_id

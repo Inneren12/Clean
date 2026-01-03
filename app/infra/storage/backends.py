@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import hmac
+import shutil
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -104,10 +105,15 @@ class LocalStorageBackend(StorageBackend):
 
         return [f for f in fallbacks if f]
 
+    def _canonical_key(self, cleaned: str) -> str:
+        return cleaned
+
     def _resolve(self, key: str, *, create_parents: bool) -> Path:
         cleaned = key.lstrip("/")
+        canonical_key = self._canonical_key(cleaned)
         root_resolved = self.root.resolve()
-        primary = (self.root / cleaned).resolve()
+        primary = (self.root / canonical_key).resolve()
+
         if not str(primary).startswith(str(root_resolved)):
             raise ValueError("Invalid storage key")
 
@@ -118,6 +124,11 @@ class LocalStorageBackend(StorageBackend):
         if primary.exists():
             return primary
 
+        if canonical_key != cleaned:
+            legacy = (self.root / cleaned).resolve()
+            if str(legacy).startswith(str(root_resolved)) and legacy.exists():
+                return legacy
+
         for fallback in self._fallback_keys(cleaned):
             candidate = (self.root / fallback).resolve()
             if not str(candidate).startswith(str(root_resolved)):
@@ -127,10 +138,20 @@ class LocalStorageBackend(StorageBackend):
 
         return primary
 
+    def _write_aliases(self, cleaned: str) -> list[str]:
+        parts = cleaned.split("/")
+        if parts and parts[0] == "orders" and len(parts) >= 3:
+            org_part, order_part = parts[1], parts[2]
+            remaining = "/".join(parts[3:])
+            suffix = f"/{remaining}" if remaining else ""
+            return [f"org/{org_part}/bookings/{order_part}{suffix}"]
+        return []
+
     async def put(
         self, *, key: str, body: AsyncIterator[bytes], content_type: str
     ) -> StoredObject:
-        path = self._resolve(key, create_parents=True)
+        cleaned = key.lstrip("/")
+        path = self._resolve(cleaned, create_parents=True)
         size = 0
 
         async def _write() -> None:
@@ -141,6 +162,11 @@ class LocalStorageBackend(StorageBackend):
                     f.write(chunk)
 
         await _write()
+
+        for alias in self._write_aliases(cleaned):
+            alias_path = self._resolve(alias, create_parents=True)
+            await asyncio.to_thread(shutil.copyfile, path, alias_path)
+
         return StoredObject(key=key, size=size, content_type=content_type)
 
     async def read(self, *, key: str) -> bytes:
