@@ -16,7 +16,7 @@ from app.domain.analytics.service import (
     log_event,
 )
 from app.domain.leads.db_models import Lead
-from app.domain.leads.service import ensure_unique_referral_code
+from app.domain.leads.service import ensure_unique_referral_code, export_payload_from_lead
 from app.domain.leads.schemas import LeadCreateRequest, LeadResponse
 from app.domain.leads.statuses import LEAD_STATUS_NEW
 from app.infra.captcha import verify_turnstile
@@ -167,36 +167,10 @@ async def create_lead(
     export_resolver = getattr(http_request.app.state, "export_resolver", None)
     export_session_factory = getattr(http_request.app.state, "db_session_factory", None)
     email_adapter: EmailAdapter | None = getattr(http_request.app.state, "email_adapter", None)
+    export_payload = export_payload_from_lead(lead)
     background_tasks.add_task(
         schedule_export,
-        {
-            "lead_id": lead.lead_id,
-            "name": lead.name,
-            "phone": lead.phone,
-            "email": lead.email,
-            "postal_code": lead.postal_code,
-            "address": lead.address,
-            "preferred_dates": lead.preferred_dates,
-            "access_notes": lead.access_notes,
-            "parking": lead.parking,
-            "pets": lead.pets,
-            "allergies": lead.allergies,
-            "notes": lead.notes,
-            "structured_inputs": lead.structured_inputs,
-            "estimate_snapshot": lead.estimate_snapshot,
-            "pricing_config_version": lead.pricing_config_version,
-            "config_hash": lead.config_hash,
-            "status": lead.status,
-            "utm_source": lead.utm_source,
-            "utm_medium": lead.utm_medium,
-            "utm_campaign": lead.utm_campaign,
-            "utm_term": lead.utm_term,
-            "utm_content": lead.utm_content,
-            "referrer": lead.referrer,
-            "referral_code": lead.referral_code,
-            "referred_by_code": lead.referred_by_code,
-            "created_at": lead.created_at.isoformat(),
-        },
+        export_payload,
         export_transport,
         export_resolver,
         export_session_factory,

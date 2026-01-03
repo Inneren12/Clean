@@ -6,6 +6,7 @@
 - **Worker portal tokens**: signed tokens using `WORKER_PORTAL_SECRET`, validated by `WorkerAccessMiddleware` and endpoints in `app/api/worker_auth.py`/`routes_worker.py`.
 - **Client portal tokens**: HMAC tokens for invoice/portal links using `CLIENT_PORTAL_SECRET` with TTL (`app/api/routes_payments.py`, `app/settings.py`).
 - **Public endpoints**: `/healthz`, estimator, chat, leads, slots/bookings (with optional captcha), and Stripe webhook; all others require auth.
+- **IAM onboarding (temp passwords)**: admins issue org-scoped temp passwords via `/v1/iam/users` or reset endpoints; hashes are stored immediately and never logged. Temp-password users are marked `must_change_password` and are blocked by `PasswordChangeGateMiddleware` from all routes except login/refresh/me/logout/change-password until they set a new password.
 
 ## Authorization & RBAC
 - **Admin roles**: OWNER/ADMIN/DISPATCHER/FINANCE/VIEWER map to permissions in `admin_auth.py` and SaaS membership roles in `saas_auth.py`.
@@ -15,8 +16,14 @@
 ## Session and token handling
 - **Access/refresh**: access JWTs carry `org_id`, `role`, `sid`; refresh tokens rotate sessions and revoke prior ones (`saas_auth.py`, `app/infra/auth.py`).
 - **Password hashing**: Argon2id default with bcrypt fallback; legacy SHA-256 hashes auto-upgrade (`app/infra/auth.py`).
-- **Revocation**: logout/password change revokes session records; `PasswordChangeGateMiddleware` blocks requests until password updated.
+- **Revocation**: logout/password change revokes session records; `PasswordChangeGateMiddleware` blocks requests until password updated. Admin-driven temp-password resets/deactivations call per-org session revocation so stale access/refresh tokens cannot be replayed.
 - **CSRF**: token helpers in `app/infra/csrf.py` for stateful flows.
+
+## Token TTLs and limits
+- **Access token TTL**: `AUTH_ACCESS_TOKEN_TTL_MINUTES` (default 15 minutes) controls JWT validity returned from `/v1/auth/login`/`refresh`.
+- **Session TTL**: `AUTH_SESSION_TTL_MINUTES` caps session `expires_at`; refresh tokens rotate sessions before expiry.
+- **Refresh token TTL**: `AUTH_REFRESH_TOKEN_TTL_MINUTES` (default 14 days) caps refresh token use; rotation sets `revoked_reason` on prior session.
+- **Temp passwords**: one-time secrets returned only in admin IAM responses; optional emailing is controlled by `EMAIL_TEMP_PASSWORDS`. They remain valid only until the user sets a new password, after which all sessions are rotated.
 
 ## Transport and rate limits
 - **Rate limiting**: middleware using Redis or in-memory limiter with proxy-aware client key resolution (`app/main.py`, `app/infra/security.py`).
