@@ -365,9 +365,9 @@ def test_r2_backend_redirects_with_public_base(
         )
 
         assert download.status_code in {302, 307}
-        assert download.headers["location"].startswith(
-            f"https://cdn.example.com/{photo.storage_key}"
-        )
+        assert download.headers["location"].startswith("https://r2.example.com/")
+        assert photo.storage_key in download.headers["location"]
+        assert "ttl=" in download.headers["location"]
     finally:
         settings.order_storage_backend = original_backend
         app.state.storage_backend = original_storage

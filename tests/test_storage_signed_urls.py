@@ -185,8 +185,8 @@ class TestInMemoryStorageBackendSignedUrls:
             )
         )
 
-        # Should return the provided resource_url (InMemoryStorageBackend is for testing)
-        assert signed_url == resource_url
+        assert signed_url.startswith("https://example.invalid/test-file.txt")
+        assert "exp=" in signed_url
 
     def test_in_memory_backend_full_workflow(self):
         """
@@ -210,13 +210,12 @@ class TestInMemoryStorageBackendSignedUrls:
             assert stored.key == key
             assert stored.size == len(content)
 
-            # Generate signed URL (returns resource_url as-is for testing)
             signed_url = await backend.generate_signed_get_url(
                 key=key,
                 expires_in=3600,
                 resource_url="https://api.example.test/download"
             )
-            assert signed_url == "https://api.example.test/download"
+            assert signed_url.startswith("https://example.invalid/uploads/photo.jpg")
 
             # Read file back
             read_content = await backend.read(key=key)
