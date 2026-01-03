@@ -45,6 +45,8 @@ echo "[backup] Writing dump to $DUMP_FILE"
 pg_dump \
   --format=custom \
   --blobs \
+  --no-owner \
+  --no-privileges \
   --file="$DUMP_FILE" \
   --host="$POSTGRES_HOST" \
   --port="$PORT" \

@@ -4,7 +4,7 @@
 - **Status:** Production-ready MVP with Conditional GO (see `release_assessment.md`).
 - **Done:** Estimator, lead intake with captcha/referrals/export, slot/booking creation with deposit policy, Stripe webhook, email reminders/resend, admin metrics CSV, retention cleanup endpoints, worker portal with checklists/time tracking, photo uploads + admin review/feedback with signed-download redirects (R2/CF Images), SaaS auth + billing plans, rate limiting and CORS controls.
 - **Blocked/Risks:** Operators must wire schedulers for cleanup/email/export/retention, configure Stripe/email/export credentials, and set CORS/proxy trust lists in production.
-- **Next milestones:** Harden SaaS billing/usage reporting, automate dead-letter replay, add monitoring for job heartbeat and storage delete retries.
+- **Next milestones:** Harden SaaS billing/usage reporting, expand DLQ self-healing (after replay endpoint), and wire dashboarding for job error counters/storage janitor retries.
 - **Sprint 1 (Security baseline):** DONE – admin middleware reordered to isolate `/v1/admin/*`, org-scoped finance/report/export/payment endpoints, and regression tests for cross-org leakage.
 
 ## Production readiness gates (must stay green)
@@ -20,7 +20,7 @@
 ## Known risks and mitigations
 - **Scheduler gaps:** If cleanup/reminder/export jobs are not scheduled, stale bookings/emails accumulate; mitigate by wiring cron/Scheduler and monitoring job heartbeat.
 - **Stripe outage/circuit trips:** Deposit creation or billing may fail; retries exist but preserve DB consistency—surface errors to clients and alert on repeated failures.
-- **Export webhook failures:** Dead letters accumulate; operators must review `GET /v1/admin/export-dead-letter` and replay manually.
+- **Export webhook failures:** Dead letters accumulate; operators must review `GET /v1/admin/export-dead-letter` and use `POST /v1/admin/export-dead-letter/{id}/replay` after fixing the target.
 - **Storage limits:** Entitlements enforce per-plan bytes; ensure `storage_janitor` runs and `order_photo_max_bytes` tuned.
 
 ## Release checklist (copy/paste)

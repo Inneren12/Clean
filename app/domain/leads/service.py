@@ -1,5 +1,7 @@
 import logging
 
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -82,3 +84,35 @@ async def grant_referral_credit(session: AsyncSession, referred_lead: Lead | Non
             }
         },
     )
+
+
+def export_payload_from_lead(lead: Lead) -> dict[str, Any]:
+    return {
+        "lead_id": lead.lead_id,
+        "name": lead.name,
+        "phone": lead.phone,
+        "email": lead.email,
+        "postal_code": lead.postal_code,
+        "address": lead.address,
+        "preferred_dates": lead.preferred_dates,
+        "access_notes": lead.access_notes,
+        "parking": lead.parking,
+        "pets": lead.pets,
+        "allergies": lead.allergies,
+        "notes": lead.notes,
+        "structured_inputs": lead.structured_inputs,
+        "estimate_snapshot": lead.estimate_snapshot,
+        "pricing_config_version": lead.pricing_config_version,
+        "config_hash": lead.config_hash,
+        "status": lead.status,
+        "utm_source": lead.utm_source,
+        "utm_medium": lead.utm_medium,
+        "utm_campaign": lead.utm_campaign,
+        "utm_term": lead.utm_term,
+        "utm_content": lead.utm_content,
+        "referrer": lead.referrer,
+        "referral_code": lead.referral_code,
+        "referred_by_code": lead.referred_by_code,
+        "created_at": lead.created_at.isoformat() if lead.created_at else None,
+        "org_id": str(getattr(lead, "org_id", "")),
+    }
