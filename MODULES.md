@@ -17,7 +17,7 @@
 - **Email and export**: adapters and factories (`email.py`, `export.py`).
 - **Security**: rate limiter and client key resolution (`security.py`), captcha verification (`captcha.py`).
 - **Stripe**: resilient client and circuit breaker wrappers (`stripe_client.py`, `stripe_resilience.py`, `stripe.py`).
-- **Storage**: backends/factory for photos (`storage/__init__.py`, `storage/backends.py`).
+- **Storage**: backends/factory for photos (`storage/__init__.py`, `storage/backends.py`) covering local, S3/R2 presigned GETs, and Cloudflare Images signed delivery variants.
 - **Metrics & logging**: `metrics.py` instruments middleware and jobs; `logging.py` configures structured logging; `i18n.py` handles localized strings.
 
 ## Shared utilities (`app/shared`)

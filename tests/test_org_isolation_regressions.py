@@ -201,4 +201,7 @@ async def test_signed_photo_urls_are_org_scoped(
     )
     assert stored_files, "file should be stored under the org namespace"
 
+    canonical_files = list(Path(upload_root / "orders" / str(org_a) / booking_id).glob("*"))
+    assert canonical_files, "file should be stored under tmp/orders/{org}/{order}"
+
     settings.default_org_id = original_default_org
