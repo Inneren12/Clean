@@ -8,7 +8,7 @@ from datetime import date, datetime, time, timezone, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 import uuid
 from typing import Iterable, List, Literal, Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -50,7 +50,7 @@ from app.domain.bookings import schemas as booking_schemas
 from app.domain.bookings import service as booking_service
 from app.domain.bookings.service import DEFAULT_TEAM_NAME
 from app.domain.export_events.db_models import ExportEvent
-from app.domain.export_events.schemas import ExportEventResponse
+from app.domain.export_events.schemas import ExportEventResponse, ExportReplayResponse
 from app.domain.invoices import schemas as invoice_schemas
 from app.domain.invoices import service as invoice_service
 from app.domain.invoices import statuses as invoice_statuses
@@ -58,7 +58,7 @@ from app.domain.invoices.db_models import Invoice, Payment
 from app.domain.leads import statuses as lead_statuses
 from app.domain.leads.db_models import Lead, ReferralCredit
 from app.domain.nps.db_models import SupportTicket
-from app.domain.leads.service import grant_referral_credit
+from app.domain.leads.service import grant_referral_credit, export_payload_from_lead
 from app.domain.leads.schemas import AdminLeadResponse, AdminLeadStatusUpdateRequest, admin_lead_from_model
 from app.domain.leads.statuses import assert_valid_transition, is_valid_status
 from app.domain.notifications import email_service
@@ -68,12 +68,15 @@ from app.domain.reason_logs import schemas as reason_schemas
 from app.domain.reason_logs import service as reason_service
 from app.domain.saas import billing_service, service as saas_service
 from app.domain.saas.db_models import Membership, MembershipRole, Organization, PasswordResetEvent, User
+from app.domain.ops.db_models import JobHeartbeat
+from app.domain.ops.schemas import JobStatusResponse
 from app.domain.retention import cleanup_retention
 from app.domain.subscriptions import schemas as subscription_schemas
 from app.domain.subscriptions import service as subscription_service
 from app.domain.subscriptions.db_models import Subscription
 from app.domain.admin_audit import service as audit_service
 from app.domain.workers.db_models import Worker
+from app.infra.export import send_export_with_retry, validate_webhook_url
 from app.infra.csrf import get_csrf_token, issue_csrf_token, render_csrf_input, require_csrf
 from app.infra.bot_store import BotStore
 from app.infra.i18n import render_lang_toggle, resolve_lang, tr
@@ -741,6 +744,47 @@ async def resend_last_email(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Email send failed") from exc
 
 
+def _job_status_response(record: JobHeartbeat) -> JobStatusResponse:
+    return JobStatusResponse(
+        name=record.name,
+        last_heartbeat=record.last_heartbeat,
+        last_success_at=record.last_success_at,
+        last_error=record.last_error,
+        last_error_at=record.last_error_at,
+        consecutive_failures=record.consecutive_failures or 0,
+    )
+
+
+@router.get("/v1/admin/jobs/status", response_model=list[JobStatusResponse])
+async def list_job_statuses(
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_viewer),
+) -> list[JobStatusResponse]:
+    result = await session.execute(select(JobHeartbeat).order_by(JobHeartbeat.name))
+    records = result.scalars().all()
+    return [_job_status_response(record) for record in records]
+
+
+async def _resolve_export_payload(
+    session: AsyncSession, event: ExportEvent, org_id: uuid.UUID | None
+) -> dict:
+    if event.payload:
+        return event.payload
+    if not event.lead_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="export_payload_unavailable",
+        )
+    stmt = select(Lead).where(Lead.lead_id == event.lead_id)
+    if org_id:
+        stmt = stmt.where(Lead.org_id == org_id)
+    result = await session.execute(stmt)
+    lead = result.scalar_one_or_none()
+    if lead is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found for export event")
+    return export_payload_from_lead(lead)
+
+
 @router.get("/v1/admin/export-dead-letter", response_model=List[ExportEventResponse])
 async def list_export_dead_letter(
     request: Request,
@@ -761,13 +805,73 @@ async def list_export_dead_letter(
             event_id=event.event_id,
             lead_id=event.lead_id,
             mode=event.mode,
+            target_url=event.target_url,
             target_url_host=event.target_url_host,
+            payload=event.payload,
             attempts=event.attempts,
             last_error_code=event.last_error_code,
             created_at=event.created_at,
+            replay_count=event.replay_count or 0,
+            last_replayed_at=event.last_replayed_at,
+            last_replayed_by=event.last_replayed_by,
         )
         for event in events
     ]
+
+
+@router.post(
+    "/v1/admin/export-dead-letter/{event_id}/replay",
+    response_model=ExportReplayResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def replay_export_dead_letter(
+    event_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    identity: AdminIdentity = Depends(require_admin),
+) -> ExportReplayResponse:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    org_uuid = uuid.UUID(str(org_id)) if org_id else None
+    result = await session.execute(
+        select(ExportEvent).where(ExportEvent.event_id == event_id, *_org_scope_filters(org_uuid, ExportEvent))
+    )
+    event = result.scalar_one_or_none()
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Export event not found")
+
+    payload = await _resolve_export_payload(session, event, org_uuid)
+    target_url = event.target_url or settings.export_webhook_url
+    if not target_url:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="export_target_missing")
+
+    export_resolver = getattr(request.app.state, "export_resolver", None)
+    is_valid, reason = await validate_webhook_url(target_url, resolver=export_resolver)
+    if not is_valid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"invalid_export_target:{reason}")
+
+    transport = getattr(request.app.state, "export_transport", None)
+    success, attempts, last_error_code = await send_export_with_retry(
+        target_url, payload, transport=transport
+    )
+    now = datetime.now(tz=timezone.utc)
+    event.payload = payload
+    event.target_url = target_url
+    event.target_url_host = urlparse(target_url).hostname
+    event.attempts = attempts
+    event.last_error_code = None if success else last_error_code
+    event.replay_count = (event.replay_count or 0) + 1
+    event.last_replayed_at = now
+    event.last_replayed_by = identity.username
+    await session.commit()
+
+    return ExportReplayResponse(
+        event_id=event.event_id,
+        success=success,
+        attempts=attempts,
+        last_error_code=event.last_error_code,
+        last_replayed_at=event.last_replayed_at,
+        last_replayed_by=event.last_replayed_by or identity.username,
+    )
 
 
 @router.post("/v1/admin/retention/cleanup")

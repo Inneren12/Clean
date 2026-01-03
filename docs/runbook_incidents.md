@@ -4,7 +4,7 @@ Actionable procedures for the most common monitoring alerts on the Clean service
 
 ## ServiceNotReady
 - **What to check:**
-  - `GET /readyz` should return `status: ok` with `database.ok` and `jobs.ok` true.
+  - `GET /readyz` should return `status: ok` with `database.ok` and `jobs.ok` true; alert is driven by `http_5xx_total{path="/readyz"}`.
   - Inspect recent deploys or restarts around the alert start time.
   - Confirm backing services (Postgres, storage) are reachable from the API pod/VM.
 - **What to do:**
@@ -35,11 +35,22 @@ Actionable procedures for the most common monitoring alerts on the Clean service
   - `job_last_success_timestamp` for critical jobs (booking reminders, invoice reminders, DLQ, NPS, storage-janitor).
 - **What to do:**
   - Restart the jobs runner process or container and watch the heartbeat metric.
-  - Re-run failed jobs manually with `python -m app.jobs.run --job <name> --once` if safe.
+  - Re-run failed jobs manually with `python -m app.jobs.run --job <name> --once` if safe. Check `/v1/admin/jobs/status` for `consecutive_failures` and `last_error` details.
   - If the runner cannot connect to the database, verify `DATABASE_URL` and network reachability.
 - **How to confirm fixed:**
   - Heartbeat timestamp updates and `job_runner_up{job="jobs-runner"}` stays at 1 for 10+ minutes.
   - Job success timestamps advance after the restart with no new error log lines.
+
+## JobLoopFailures
+- **What to check:**
+  - Alert is driven by `job_errors_total`; inspect `/v1/admin/jobs/status` for jobs with non-zero `consecutive_failures` and populated `last_error`.
+  - Confirm whether the failing job is tied to email sending, DLQ replay, or storage cleanup.
+- **What to do:**
+  - Fix the underlying dependency (email provider, webhook target) and then rerun the specific job with `python -m app.jobs.run --job <name> --once`.
+  - If exports failed, replay with `POST /v1/admin/export-dead-letter/{id}/replay` once the target is healthy.
+- **How to confirm fixed:**
+  - `job_errors_total` stops incrementing and `job_last_success_timestamp{job}` updates.
+  - `/v1/admin/jobs/status` shows `consecutive_failures` reset to 0.
 
 ## DBPoolExhaustion
 - **What to check:**
@@ -71,10 +82,10 @@ Actionable procedures for the most common monitoring alerts on the Clean service
 - **What to check:**
   - `email_jobs_total{status="error"}` increases and associated job names (booking-reminders, invoice-reminders, nps-send, email-dlq, storage-janitor).
   - SMTP/SendGrid credentials, network egress, and template rendering errors in logs.
-  - `email_dlq_messages{status}` growth indicating retries are exhausted.
+  - `email_dlq_messages{status}` growth indicating retries are exhausted; alert uses `email_dlq_messages{status="dead"}`.
 - **What to do:**
   - Fix credentials or networking issues; re-run the affected job with `--once` after remediation.
-  - Clear DLQ entries by replaying once the root cause is fixed; avoid deleting without processing.
+  - Clear DLQ entries by replaying once the root cause is fixed with `POST /v1/admin/export-dead-letter/{id}/replay`; avoid deleting without processing.
   - If templates fail, patch the template or input data and deploy a fix before rerunning jobs.
 - **How to confirm fixed:**
   - `email_jobs_total{status="error"}` stops increasing and subsequent runs report `sent` or `skipped` outcomes.

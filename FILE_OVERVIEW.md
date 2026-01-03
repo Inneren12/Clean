@@ -12,6 +12,7 @@
 - `app/api/admin_auth.py` – Basic Auth roles (owner/admin/dispatcher/finance/viewer), admin auditing middleware, permission helpers.
 - `app/api/worker_auth.py` – Worker token issuance/verification, portal session TTLs, and worker access middleware.
 - `app/api/routes_auth.py` – SaaS login/refresh/logout/me/password change endpoints and session lifecycle.
+- `app/api/routes_iam.py` – Org-scoped IAM console: list/create/deactivate users, reset temp passwords, update roles, revoke sessions.
 
 ## Core flows (routers)
 - `app/api/routes_estimate.py` – Pricing estimator endpoint.
@@ -54,6 +55,7 @@
 - `app/infra/captcha.py` – Cloudflare Turnstile verification helper.
 - `app/infra/metrics.py` – Metrics client and recording helpers for HTTP and jobs; used by middleware and jobs.
 - `app/infra/logging.py` – Structured logging setup for request/job logs.
+- `app/domain/ops/schemas.py` – Pydantic responses for ops-facing endpoints (job status, monitoring).
 
 ## Background jobs and ops
 - `app/jobs/run.py` – Entry to invoke scheduled jobs (email scan, retention cleanup, storage delete retries).
@@ -62,7 +64,9 @@
 - `app/jobs/heartbeat.py` – Record job heartbeat into DB and metrics.
 - `docker-compose.yml` – Dev stack for API + Postgres + Redis.
 - `.github/workflows/ci.yml` – Test pipeline running lint/tests/migrations; `load-smoke.yml` for load smoke; `deploy_cloudflare.yml` for deployment.
-- `ops/prometheus/alerts.yml` – Prometheus alert examples for latency/errors/health.
+- `ops/prometheus/alerts.yml` – Prometheus alert examples for latency/errors/health/jobs/DLQ.
+- `scripts/backup_pg.sh` / `scripts/restore_pg.sh` – Postgres backup/restore helpers (custom-format dumps, no `--create` by default; `ALLOW_CREATE_IN_DUMP` gate for create-in-dump restores).
+- Runbooks: `docs/runbook_monitoring.md`, `docs/runbook_incidents.md`, `docs/runbook_backup_restore.md` for ops procedures.
 
 ## Frontend
 - `web/app/page.tsx` – Chat UI entry.
