@@ -21,7 +21,7 @@ async def test_duplicate_email_globally_unique(async_session_maker):
         await session.commit()
 
     async with async_session_maker() as session:
-        org_two = Organization(org_id=uuid.uuid4(), name="Second Org")
+        org_two = Organization(org_id=uuid.uuid4(), name=f"Second Org {uuid.uuid4()}")
         session.add(org_two)
         await session.flush()
         with pytest.raises(Exception):

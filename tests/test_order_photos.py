@@ -15,9 +15,10 @@ import sqlalchemy as sa
 from app.api.photo_tokens import build_photo_download_token
 from app.domain.saas import billing_service, service as saas_service
 from app.domain.saas.db_models import OrganizationUsageEvent
-from app.domain.bookings.db_models import OrderPhotoTombstone
+from app.domain.bookings.db_models import OrderPhoto, OrderPhotoTombstone
 from app.infra.storage.backends import LocalStorageBackend
 from app.jobs import storage_janitor
+from app.infra.storage.backends import S3StorageBackend
 
 from app.domain.bookings.db_models import Booking
 from app.domain.leads.db_models import Lead
@@ -108,6 +109,17 @@ def _create_saas_token(async_session_maker):
             return token, org.org_id
 
     return asyncio.run(_inner())
+
+
+class FakeR2Client:
+    def __init__(self):
+        self.objects: dict[str, bytes] = {}
+
+    def put_object(self, Bucket: str, Key: str, Body: bytes, ContentType: str):
+        self.objects[Key] = Body
+
+    def generate_presigned_url(self, ClientMethod: str, Params: dict, ExpiresIn: int) -> str:
+        return f"https://r2.example.com/{Params['Key']}?ttl={ExpiresIn}"
 
 
 @pytest.fixture()
@@ -205,6 +217,58 @@ def test_upload_with_consent_and_download_auth(client, async_session_maker, uplo
     assert stored_files, "uploaded file should be written to disk"
 
 
+def test_local_storage_writes_under_orders_prefix(client, async_session_maker, tmp_path, admin_headers):
+    original_backend = settings.order_storage_backend
+    original_root = settings.order_upload_root
+    original_storage = getattr(app.state, "storage_backend", None)
+    original_signature = getattr(app.state, "storage_backend_config", None)
+
+    try:
+        settings.order_storage_backend = "local"
+        stale_root = tmp_path / "stale"
+        fresh_root = tmp_path / "fresh"
+        settings.order_upload_root = str(stale_root)
+        app.state.storage_backend = LocalStorageBackend(root=stale_root)
+        app.state.storage_backend_config = (
+            settings.order_storage_backend,
+            stale_root.resolve(),
+            None,
+            None,
+            None,
+            None,
+        )
+
+        settings.order_upload_root = str(fresh_root)
+
+        booking_id = asyncio.run(_create_booking(async_session_maker, consent=True))
+        files = {"file": ("after.jpg", b"hello-image", "image/jpeg")}
+        response = client.post(
+            f"/v1/orders/{booking_id}/photos",
+            data={"phase": "AFTER"},
+            files=files,
+            headers=admin_headers,
+        )
+
+        assert response.status_code == 201
+        photo_id = response.json()["photo_id"]
+
+        stored_files = list(
+            Path(fresh_root / "orders" / str(settings.default_org_id) / booking_id).glob("*")
+        )
+        assert stored_files, "uploaded file should be persisted in org/order scoped folder"
+
+        download = client.get(
+            f"/v1/orders/{booking_id}/photos/{photo_id}/download", headers=admin_headers
+        )
+        assert download.status_code == 200
+        assert download.content == b"hello-image"
+    finally:
+        settings.order_storage_backend = original_backend
+        settings.order_upload_root = original_root
+        app.state.storage_backend = original_storage
+        app.state.storage_backend_config = original_signature
+
+
 def test_signed_download_requires_token(client, async_session_maker, upload_root, admin_headers):
     booking_id, photo_id, _ = _create_photo_with_signed_url(
         client, async_session_maker, upload_root, admin_headers
@@ -253,6 +317,65 @@ def test_signed_download_rejects_expired_token(client, async_session_maker, uplo
     )
 
     assert response.status_code == 401
+
+
+def test_r2_backend_redirects_with_public_base(
+    client, async_session_maker, admin_headers, upload_root
+):
+    original_backend = settings.order_storage_backend
+    original_storage = getattr(app.state, "storage_backend", None)
+    original_signature = getattr(app.state, "storage_backend_config", None)
+    settings.order_storage_backend = "r2"
+    settings.r2_bucket = "test-bucket"
+    settings.r2_access_key = "ak"
+    settings.r2_secret_key = "sk"
+    settings.r2_endpoint = "https://example.invalid"
+    app.state.storage_backend = S3StorageBackend(
+        bucket="test-bucket",
+        access_key="ak",
+        secret_key="sk",
+        region="auto",
+        endpoint="https://example.invalid",
+        public_base_url="https://cdn.example.com",
+        client=FakeR2Client(),
+    )
+    app.state.storage_backend_config = None
+
+    try:
+        booking_id = asyncio.run(_create_booking(async_session_maker, consent=True))
+        files = {"file": ("before.jpg", b"abc", "image/jpeg")}
+        upload = client.post(
+            f"/v1/orders/{booking_id}/photos",
+            data={"phase": "before"},
+            files=files,
+            headers=admin_headers,
+        )
+        assert upload.status_code == 201
+        photo_id = upload.json()["photo_id"]
+
+        async def _fetch_photo() -> OrderPhoto:
+            async with async_session_maker() as session:
+                return await session.get(OrderPhoto, photo_id)
+
+        photo = asyncio.run(_fetch_photo())
+        assert photo is not None
+        assert photo.storage_provider == "r2"
+        assert photo.storage_key.startswith("orders/")
+
+        download = client.get(
+            f"/v1/orders/{booking_id}/photos/{photo_id}/download",
+            headers=admin_headers,
+            allow_redirects=False,
+        )
+
+        assert download.status_code in {302, 307}
+        assert download.headers["location"].startswith(
+            f"https://cdn.example.com/{photo.storage_key}"
+        )
+    finally:
+        settings.order_storage_backend = original_backend
+        app.state.storage_backend = original_storage
+        app.state.storage_backend_config = original_signature
 
 
 def test_local_signed_url_validation_roundtrip(tmp_path):
@@ -416,6 +539,7 @@ def test_delete_failure_creates_tombstone_and_janitor_cleans(client, async_sessi
 
     storage = FailingDeleteStorage(upload_root)
     app.state.storage_backend = storage
+    app.state.storage_backend_config = None
 
     booking_id, photo_id, _ = _create_photo_with_signed_url(
         client, async_session_maker, upload_root, admin_headers

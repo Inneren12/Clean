@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import hmac
+import shutil
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -79,19 +80,78 @@ class LocalStorageBackend(StorageBackend):
         self.root = root
         self.signing_secret = signing_secret or "local-storage-secret"
 
-    def _resolve(self, key: str) -> Path:
+    def _fallback_keys(self, cleaned: str) -> list[str]:
+        fallbacks: list[str] = []
+        parts = cleaned.split("/")
+
+        if parts and parts[0] == "orders":
+            without_prefix = "/".join(parts[1:])
+            if without_prefix:
+                fallbacks.append(without_prefix)
+            if len(parts) >= 4:
+                org_part, order_part = parts[1], parts[2]
+                remaining = "/".join(parts[3:])
+                fallbacks.append(f"org/{org_part}/bookings/{order_part}/{remaining}")
+            if len(parts) >= 3:
+                fallbacks.append("orders/" + "/".join(parts[2:]))
+        elif parts and parts[0] == "org" and len(parts) >= 4 and parts[2] == "bookings":
+            org_part, order_part = parts[1], parts[3]
+            remaining = "/".join(parts[4:])
+            fallbacks.append(f"orders/{org_part}/{order_part}/{remaining}")
+        elif parts and parts[0] == "bookings" and len(parts) >= 2:
+            order_part = parts[1]
+            remaining = "/".join(parts[2:])
+            fallbacks.append(f"orders/{order_part}/{remaining}")
+
+        return [f for f in fallbacks if f]
+
+    def _canonical_key(self, cleaned: str) -> str:
+        return cleaned
+
+    def _resolve(self, key: str, *, create_parents: bool) -> Path:
         cleaned = key.lstrip("/")
-        candidate = (self.root / cleaned).resolve()
+        canonical_key = self._canonical_key(cleaned)
         root_resolved = self.root.resolve()
-        if not str(candidate).startswith(str(root_resolved)):
+        primary = (self.root / canonical_key).resolve()
+
+        if not str(primary).startswith(str(root_resolved)):
             raise ValueError("Invalid storage key")
-        candidate.parent.mkdir(parents=True, exist_ok=True)
-        return candidate
+
+        if create_parents:
+            primary.parent.mkdir(parents=True, exist_ok=True)
+            return primary
+
+        if primary.exists():
+            return primary
+
+        if canonical_key != cleaned:
+            legacy = (self.root / cleaned).resolve()
+            if str(legacy).startswith(str(root_resolved)) and legacy.exists():
+                return legacy
+
+        for fallback in self._fallback_keys(cleaned):
+            candidate = (self.root / fallback).resolve()
+            if not str(candidate).startswith(str(root_resolved)):
+                continue
+            if candidate.exists():
+                return candidate
+
+        return primary
+
+    def _write_aliases(self, cleaned: str) -> list[str]:
+        parts = cleaned.split("/")
+        if parts and parts[0] == "orders" and len(parts) >= 3:
+            org_part, order_part = parts[1], parts[2]
+            remaining = "/".join(parts[3:])
+            suffix = f"/{remaining}" if remaining else ""
+            return [f"org/{org_part}/bookings/{order_part}{suffix}"]
+        return []
 
     async def put(
         self, *, key: str, body: AsyncIterator[bytes], content_type: str
     ) -> StoredObject:
-        path = self._resolve(key)
+        cleaned = key.lstrip("/")
+        path = self._resolve(cleaned, create_parents=True)
         size = 0
 
         async def _write() -> None:
@@ -102,10 +162,15 @@ class LocalStorageBackend(StorageBackend):
                     f.write(chunk)
 
         await _write()
+
+        for alias in self._write_aliases(cleaned):
+            alias_path = self._resolve(alias, create_parents=True)
+            await asyncio.to_thread(shutil.copyfile, path, alias_path)
+
         return StoredObject(key=key, size=size, content_type=content_type)
 
     async def read(self, *, key: str) -> bytes:
-        path = self._resolve(key)
+        path = self._resolve(key, create_parents=False)
 
         def _read() -> bytes:
             return path.read_bytes()
@@ -113,7 +178,7 @@ class LocalStorageBackend(StorageBackend):
         return await asyncio.to_thread(_read)
 
     async def delete(self, *, key: str) -> None:
-        path = self._resolve(key)
+        path = self._resolve(key, create_parents=False)
         path.unlink(missing_ok=True)
 
     async def list(self, *, prefix: str = "") -> list[str]:
@@ -162,7 +227,7 @@ class LocalStorageBackend(StorageBackend):
         return hmac.compare_digest(expected, signature)
 
     def path_for(self, key: str) -> Path:
-        return self._resolve(key)
+        return self._resolve(key, create_parents=False)
 
 
 class S3StorageBackend(StorageBackend):
@@ -178,12 +243,13 @@ class S3StorageBackend(StorageBackend):
         read_timeout: float = 10.0,
         max_attempts: int = 4,
         max_payload_bytes: int | None = None,
+        public_base_url: str | None = None,
         enable_circuit_breaker: bool = True,
         circuit_failure_threshold: int | None = None,
         circuit_recovery_seconds: float | None = None,
         circuit_window_seconds: float | None = None,
         client: Any | None = None,
-    ) -> None:
+        ) -> None:
         if client:
             self.client = client
         else:
@@ -203,6 +269,7 @@ class S3StorageBackend(StorageBackend):
             )
         self.bucket = bucket
         self.max_payload_bytes = max_payload_bytes
+        self.public_base_url = public_base_url.rstrip("/") if public_base_url else None
         self._breaker: CircuitBreaker | None = None
         if enable_circuit_breaker:
             self._breaker = CircuitBreaker(
@@ -253,6 +320,9 @@ class S3StorageBackend(StorageBackend):
     async def generate_signed_get_url(
         self, *, key: str, expires_in: int, resource_url: str | None = None
     ) -> str:
+        if self.public_base_url:
+            return f"{self.public_base_url}/{key.lstrip('/')}"
+
         def _sign() -> str:
             return self.client.generate_presigned_url(
                 "get_object",
