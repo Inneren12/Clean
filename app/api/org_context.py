@@ -3,6 +3,7 @@ import uuid
 from fastapi import Depends, HTTPException, Request, status
 
 from app.api.saas_auth import SaaSIdentity, _get_cached_identity, _get_saas_token
+from app.infra.org_context import set_current_org_id
 from app.settings import settings
 
 
@@ -13,6 +14,7 @@ async def require_org_context(
 
     if identity:
         request.state.current_org_id = identity.org_id
+        set_current_org_id(identity.org_id)
         return identity.org_id
 
     if token_present:
@@ -31,4 +33,5 @@ async def require_org_context(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid org context")
 
     request.state.current_org_id = org_id
+    set_current_org_id(org_id)
     return org_id

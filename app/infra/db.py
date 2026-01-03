@@ -1,6 +1,7 @@
 import logging
 from typing import Any, AsyncGenerator
 
+from fastapi import Request
 import sqlalchemy as sa
 from sqlalchemy import event
 from sqlalchemy.exc import TimeoutError
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import declarative_base
 
 from app.settings import settings
+from app.infra.org_context import get_current_org_id, set_current_org_id
 
 # Shared type definition to avoid circular imports - MUST be defined BEFORE Base and models
 UUID_TYPE = sa.Uuid(as_uuid=True)
@@ -46,6 +48,7 @@ def _get_session_factory() -> async_sessionmaker[AsyncSession]:
 
         _engine = create_async_engine(settings.database_url, **engine_kwargs)
         _configure_logging(_engine, is_postgres)
+        _configure_org_context(_engine, is_postgres)
         _session_factory = async_sessionmaker(
             _engine,
             expire_on_commit=False,
@@ -54,8 +57,10 @@ def _get_session_factory() -> async_sessionmaker[AsyncSession]:
     return _session_factory
 
 
-async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
+async def get_db_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
     session_factory = _get_session_factory()
+    org_id = getattr(request.state, "current_org_id", None) or settings.default_org_id
+    set_current_org_id(org_id)
     try:
         async with session_factory() as session:
             yield session
@@ -78,3 +83,16 @@ def _configure_logging(engine, is_postgres: bool) -> None:
                 "db_pool_timeout",
                 extra={"extra": {"operation": str(context.statement) if context.statement else None}},
             )
+
+
+def _configure_org_context(engine, is_postgres: bool) -> None:
+    if not is_postgres:
+        return
+
+    @event.listens_for(engine.sync_engine, "begin")
+    def set_org_id_on_begin(conn):  # noqa: ANN001
+        org_id = get_current_org_id()
+        if org_id is None:
+            return
+
+        conn.exec_driver_sql("SET LOCAL app.current_org_id = %s", (str(org_id),))

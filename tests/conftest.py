@@ -54,6 +54,7 @@ from app.domain.saas.service import ensure_default_org_and_team
 from app.domain.ops import db_models as ops_db_models  # noqa: F401
 from app.infra.bot_store import InMemoryBotStore
 from app.infra.db import Base, get_db_session
+from app.infra.org_context import set_current_org_id
 from app.main import app
 from app.settings import settings
 
@@ -175,6 +176,7 @@ def override_org_resolver(monkeypatch):
             if header_value:
                 try:
                     request.state.current_org_id = uuid.UUID(header_value)
+                    set_current_org_id(request.state.current_org_id)
                 except Exception as exc:  # noqa: BLE001
                     raise ValueError(f"Invalid X-Test-Org header: {header_value}") from exc
             return await call_next(request)
@@ -186,17 +188,22 @@ def override_org_resolver(monkeypatch):
             state_org_id = getattr(request.state, "current_org_id", None)
             if state_org_id:
                 try:
-                    return uuid.UUID(str(state_org_id))
+                    resolved = uuid.UUID(str(state_org_id))
+                    set_current_org_id(resolved)
+                    return resolved
                 except Exception as exc:  # noqa: BLE001
                     raise ValueError(f"Invalid state org id: {state_org_id}") from exc
 
             header_value = request.headers.get("X-Test-Org")
             if header_value:
                 try:
-                    return uuid.UUID(header_value)
+                    resolved = uuid.UUID(header_value)
+                    set_current_org_id(resolved)
+                    return resolved
                 except Exception as exc:  # noqa: BLE001
                     raise ValueError(f"Invalid X-Test-Org header: {header_value}") from exc
 
+        set_current_org_id(settings.default_org_id)
         return settings.default_org_id
 
     monkeypatch.setattr("app.api.entitlements.resolve_org_id", _resolve_org_id)

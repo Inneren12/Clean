@@ -8,6 +8,11 @@
 5. Start scheduled jobs (cron/Scheduler) calling: `/v1/admin/cleanup`, `/v1/admin/email-scan`, `/v1/admin/retention/cleanup`, `/v1/admin/export-dead-letter`, optional `storage_janitor` from `app/jobs/run.py`. Monitor loop health via `/v1/admin/jobs/status` (heartbeats, last success, consecutive failures).
 6. Verify health endpoints and Stripe webhook secret; set `JOB_HEARTBEAT_REQUIRED=true` if monitoring job heartbeat.
 
+## Postgres row-level security
+- Migration `0044_postgres_rls_org_isolation` enables and forces RLS on org-owned tables (leads, bookings, invoices, invoice_payments, workers, teams, order_photos, export_events, email_events). The migration is a no-op on SQLite but must be applied in Postgres before rollout.
+- The API sets a per-request `app.current_org_id` session variable via `SET LOCAL` at transaction start; use the application role (not a superuser) and ensure background jobs set org context before touching tenant tables.
+- Verification: `SELECT * FROM pg_policies WHERE polname LIKE '%org_isolation%'` should list the policies; `SET LOCAL app.current_org_id = '<org_uuid>'; SELECT COUNT(*) FROM leads;` should only count rows for that org, and no rows are returned when the variable is unset.
+
 ## Environment variable groups
 - **Auth & portals:** `AUTH_SECRET_KEY`, `CLIENT_PORTAL_SECRET`, `WORKER_PORTAL_SECRET`, Basic Auth username/password pairs, `LEGACY_BASIC_AUTH_ENABLED`. JWT/session TTLs come from `AUTH_ACCESS_TOKEN_TTL_MINUTES`, `AUTH_SESSION_TTL_MINUTES`, and `AUTH_REFRESH_TOKEN_TTL_MINUTES`.
 - **Database:** `DATABASE_URL`, pool/timeout overrides; statement timeout controlled via `DATABASE_STATEMENT_TIMEOUT_MS`.

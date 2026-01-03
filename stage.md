@@ -6,6 +6,7 @@
 - **Blocked/Risks:** Operators must wire schedulers for cleanup/email/export/retention, configure Stripe/email/export credentials, and set CORS/proxy trust lists in production.
 - **Next milestones:** Harden SaaS billing/usage reporting, expand DLQ self-healing (after replay endpoint), and wire dashboarding for job error counters/storage janitor retries. Admin productivity Sprints 11–15 shipped (global search, scheduling controls, time tracking surface area, messaging previews/resend, safe CSV + bulk actions). Sprints 16–19 deliver client self-service (bookings/invoices/photos), subscription pause/resume with reasons, NPS ticket filters, and guarded feature-flag/config viewers.
 - **Sprint 1 (Security baseline):** DONE – admin middleware reordered to isolate `/v1/admin/*`, org-scoped finance/report/export/payment endpoints, and regression tests for cross-org leakage.
+- **P1 (Postgres RLS guardrail):** DONE – org isolation enforced via Postgres RLS on core tables using `app.current_org_id`; keep existing `org_id` filters and follow OPERATIONS RLS verification steps during rollout.
 
 ## Production readiness gates (must stay green)
 - ✅ Tests and migrations: `make test`, `pytest -m "migrations"`, and Alembic head matches `/readyz`.
@@ -23,6 +24,7 @@
 - **Stripe outage/circuit trips:** Deposit creation or billing may fail; retries exist but preserve DB consistency—surface errors to clients and alert on repeated failures.
 - **Export webhook failures:** Dead letters accumulate; operators must review `GET /v1/admin/export-dead-letter` and use `POST /v1/admin/export-dead-letter/{id}/replay` after fixing the target.
 - **Storage limits:** Entitlements enforce per-plan bytes; ensure `storage_janitor` runs and `order_photo_max_bytes` tuned.
+- **Org context missing under RLS:** Postgres requires `app.current_org_id` per transaction; missing context yields empty results and blocked inserts. Verify API/cron tasks set org context (see OPERATIONS.md) when enabling RLS.
 
 ## Release checklist (copy/paste)
 - [ ] Set environment: `APP_ENV=prod`, `STRICT_CORS=true`, `CORS_ORIGINS=[...]`, proxy trust lists configured.

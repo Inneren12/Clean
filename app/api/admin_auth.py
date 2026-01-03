@@ -13,6 +13,7 @@ from fastapi.security.utils import get_authorization_scheme_param
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.settings import settings
+from app.infra.org_context import set_current_org_id
 
 logger = logging.getLogger(__name__)
 
@@ -176,10 +177,12 @@ async def get_admin_identity(
     cached: AdminIdentity | None = getattr(request.state, "admin_identity", None)
     if cached:
         request.state.current_org_id = getattr(request.state, "current_org_id", None) or cached.org_id
+        set_current_org_id(request.state.current_org_id)
         return cached
     identity = _authenticate_credentials(credentials)
     request.state.admin_identity = identity
     request.state.current_org_id = getattr(request.state, "current_org_id", None) or identity.org_id
+    set_current_org_id(request.state.current_org_id)
     return identity
 
 
@@ -250,6 +253,7 @@ class AdminAccessMiddleware(BaseHTTPMiddleware):
             _assert_permissions(identity, [AdminPermission.VIEW])
             request.state.admin_identity = identity
             request.state.current_org_id = getattr(request.state, "current_org_id", None) or identity.org_id
+            set_current_org_id(request.state.current_org_id)
             return await call_next(request)
         except HTTPException as exc:
             return await http_exception_handler(request, exc)
