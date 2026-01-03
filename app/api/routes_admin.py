@@ -796,9 +796,16 @@ def _admin_subscription_response(model: Subscription) -> subscription_schemas.Ad
     response_model=list[subscription_schemas.AdminSubscriptionListItem],
 )
 async def list_subscriptions_admin(
-    identity: AdminIdentity = Depends(require_admin), session: AsyncSession = Depends(get_db_session)
+    request: Request,
+    identity: AdminIdentity = Depends(require_admin),
+    session: AsyncSession = Depends(get_db_session),
 ) -> list[subscription_schemas.AdminSubscriptionListItem]:
-    stmt = select(Subscription).order_by(Subscription.created_at.desc())
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    stmt = (
+        select(Subscription)
+        .where(Subscription.org_id == org_id)
+        .order_by(Subscription.created_at.desc())
+    )
     result = await session.execute(stmt)
     subscriptions = result.scalars().all()
     return [_admin_subscription_response(sub) for sub in subscriptions]
@@ -814,7 +821,10 @@ async def run_subscriptions(
     session: AsyncSession = Depends(get_db_session),
 ) -> subscription_schemas.SubscriptionRunResult:
     adapter = getattr(http_request.app.state, "email_adapter", None)
-    result = await subscription_service.generate_due_orders(session, email_adapter=adapter)
+    org_id = getattr(http_request.state, "org_id", None) or entitlements.resolve_org_id(http_request)
+    result = await subscription_service.generate_due_orders(
+        session, email_adapter=adapter, org_id=org_id
+    )
     await session.commit()
     return subscription_schemas.SubscriptionRunResult(
         processed=result.processed, created_orders=result.created_orders
@@ -881,12 +891,14 @@ def _csv_line(key: str, value: object) -> str:
 
 @router.get("/v1/admin/metrics", response_model=analytics_schemas.AdminMetricsResponse)
 async def get_admin_metrics(
+    request: Request,
     from_ts: datetime | None = Query(default=None, alias="from"),
     to_ts: datetime | None = Query(default=None, alias="to"),
     format: str | None = Query(default=None, pattern="^(json|csv)$"),
     session: AsyncSession = Depends(get_db_session),
     _admin: AdminIdentity = Depends(require_admin),
 ):
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
     start, end = _normalize_range(from_ts, to_ts)
     if not settings.metrics_enabled:
         return analytics_schemas.AdminMetricsResponse(
@@ -919,10 +931,12 @@ async def get_admin_metrics(
                 retention_90_day=0.0,
             ),
         )
-    conversions = await conversion_counts(session, start, end)
-    avg_revenue = await average_revenue_cents(session, start, end)
-    avg_estimated, avg_actual, avg_delta, sample_size = await duration_accuracy(session, start, end)
-    kpis = await kpi_aggregates(session, start, end)
+    conversions = await conversion_counts(session, start, end, org_id=org_id)
+    avg_revenue = await average_revenue_cents(session, start, end, org_id=org_id)
+    avg_estimated, avg_actual, avg_delta, sample_size = await duration_accuracy(
+        session, start, end, org_id=org_id
+    )
+    kpis = await kpi_aggregates(session, start, end, org_id=org_id)
 
     response_body = analytics_schemas.AdminMetricsResponse(
         range_start=start,
@@ -1314,7 +1328,9 @@ async def list_bookings(
     if end_dt < start_dt:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid date range")
 
-    stmt = select(Booking, Lead).outerjoin(Lead, Lead.lead_id == Booking.lead_id).where(
+    stmt = select(Booking, Lead).outerjoin(
+        Lead, and_(Lead.lead_id == Booking.lead_id, Lead.org_id == org_id)
+    ).where(
         Booking.starts_at >= start_dt,
         Booking.starts_at <= end_dt,
         Booking.org_id == org_id,

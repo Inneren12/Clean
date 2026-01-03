@@ -1,4 +1,5 @@
 import math
+import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -66,11 +67,17 @@ async def log_event(
 
 
 async def conversion_counts(
-    session: AsyncSession, start: datetime, end: datetime
+    session: AsyncSession, start: datetime, end: datetime, *, org_id: uuid.UUID
 ) -> dict[EventType, int]:
     stmt: Select = (
         select(EventLog.event_type, func.count())
-        .where(EventLog.occurred_at >= start, EventLog.occurred_at <= end)
+        .outerjoin(Booking, Booking.booking_id == EventLog.booking_id)
+        .outerjoin(Lead, Lead.lead_id == EventLog.lead_id)
+        .where(
+            EventLog.occurred_at >= start,
+            EventLog.occurred_at <= end,
+            sa.or_(Lead.org_id == org_id, Booking.org_id == org_id),
+        )
         .group_by(EventLog.event_type)
     )
     result = await session.execute(stmt)
@@ -84,15 +91,21 @@ async def conversion_counts(
 
 
 async def average_revenue_cents(
-    session: AsyncSession, start: datetime, end: datetime
+    session: AsyncSession, start: datetime, end: datetime, *, org_id: uuid.UUID
 ) -> float | None:
-    stmt = select(func.avg(EventLog.estimated_revenue_cents)).where(
-        EventLog.event_type.in_(
-            [EventType.booking_confirmed.value, EventType.job_completed.value]
-        ),
-        EventLog.occurred_at >= start,
-        EventLog.occurred_at <= end,
-        EventLog.estimated_revenue_cents.isnot(None),
+    stmt = (
+        select(func.avg(EventLog.estimated_revenue_cents))
+        .outerjoin(Booking, Booking.booking_id == EventLog.booking_id)
+        .outerjoin(Lead, Lead.lead_id == EventLog.lead_id)
+        .where(
+            EventLog.event_type.in_(
+                [EventType.booking_confirmed.value, EventType.job_completed.value]
+            ),
+            EventLog.occurred_at >= start,
+            EventLog.occurred_at <= end,
+            EventLog.estimated_revenue_cents.isnot(None),
+            sa.or_(Lead.org_id == org_id, Booking.org_id == org_id),
+        )
     )
     result = await session.execute(stmt)
     avg_value = result.scalar_one_or_none()
@@ -100,7 +113,7 @@ async def average_revenue_cents(
 
 
 async def duration_accuracy(
-    session: AsyncSession, start: datetime, end: datetime
+    session: AsyncSession, start: datetime, end: datetime, *, org_id: uuid.UUID
 ) -> tuple[float | None, float | None, float | None, int]:
     stmt = (
         select(Booking.duration_minutes, Booking.actual_duration_minutes)
@@ -110,6 +123,7 @@ async def duration_accuracy(
             EventLog.occurred_at >= start,
             EventLog.occurred_at <= end,
             Booking.actual_duration_minutes.isnot(None),
+            Booking.org_id == org_id,
         )
     )
     result = await session.execute(stmt)
@@ -200,7 +214,9 @@ def _day_diff_expression(bind, current: sa.ColumnElement, previous: sa.ColumnEle
     return func.julianday(current) - func.julianday(previous)
 
 
-async def kpi_aggregates(session: AsyncSession, start: datetime, end: datetime) -> dict[str, object]:
+async def kpi_aggregates(
+    session: AsyncSession, start: datetime, end: datetime, *, org_id: uuid.UUID
+) -> dict[str, object]:
     bind = session.get_bind()
     revenue_expr = Booking.base_charge_cents - Booking.refund_total_cents - Booking.credit_note_total_cents
     planned_minutes = func.coalesce(Booking.planned_minutes, Booking.duration_minutes)
@@ -220,7 +236,12 @@ async def kpi_aggregates(session: AsyncSession, start: datetime, end: datetime) 
         )
         .select_from(Booking)
         .join(Lead, Booking.lead_id == Lead.lead_id, isouter=True)
-        .where(Booking.starts_at >= start, Booking.starts_at <= end)
+        .where(
+            Booking.starts_at >= start,
+            Booking.starts_at <= end,
+            Booking.org_id == org_id,
+            sa.or_(Lead.org_id == org_id, Lead.lead_id.is_(None)),
+        )
     )
 
     aggregate_row = await session.execute(aggregate_stmt)
@@ -265,7 +286,7 @@ async def kpi_aggregates(session: AsyncSession, start: datetime, end: datetime) 
             func.coalesce(Booking.client_id, Booking.lead_id).label("customer_id"),
             Booking.starts_at.label("starts_at"),
         )
-        .where(Booking.status == "DONE")
+        .where(Booking.status == "DONE", Booking.org_id == org_id)
         .subquery()
     )
 

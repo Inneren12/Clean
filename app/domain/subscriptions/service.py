@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 
@@ -123,6 +124,7 @@ async def generate_due_orders(
     *,
     now: datetime | None = None,
     email_adapter: EmailAdapter | None = None,
+    org_id: uuid.UUID | None = None,
 ) -> GenerationResult:
     current = now or datetime.now(timezone.utc)
     stmt = (
@@ -130,6 +132,8 @@ async def generate_due_orders(
         .where(Subscription.status == statuses.ACTIVE)
         .where(Subscription.next_run_at <= current)
     )
+    if org_id:
+        stmt = stmt.where(Subscription.org_id == org_id)
     result = await session.execute(stmt)
     subscriptions = result.scalars().all()
     created = 0

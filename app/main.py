@@ -247,16 +247,16 @@ def create_app(app_settings) -> FastAPI:
     async def shutdown_limiter() -> None:
         await rate_limiter.close()
 
-    app.add_middleware(RateLimitMiddleware, limiter=rate_limiter, app_settings=app_settings)
-    app.add_middleware(MetricsMiddleware, metrics_client=metrics_client)
-    app.add_middleware(LoggingMiddleware)
-    app.add_middleware(RequestIdMiddleware)
-    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(WorkerAccessMiddleware)
+    app.add_middleware(AdminAuditMiddleware)
     app.add_middleware(AdminAccessMiddleware)
     app.add_middleware(PasswordChangeGateMiddleware)
     app.add_middleware(TenantSessionMiddleware)
-    app.add_middleware(AdminAuditMiddleware)
-    app.add_middleware(WorkerAccessMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(LoggingMiddleware)
+    app.add_middleware(MetricsMiddleware, metrics_client=metrics_client)
+    app.add_middleware(RateLimitMiddleware, limiter=rate_limiter, app_settings=app_settings)
+    app.add_middleware(RequestIdMiddleware)
 
     app.add_middleware(
         CORSMiddleware,
