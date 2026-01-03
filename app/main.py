@@ -8,7 +8,6 @@ from typing import Callable, Iterable
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -32,6 +31,13 @@ from app.api.worker_auth import WorkerAccessMiddleware
 from app.api.routes_public import router as public_router
 from app.api.routes_leads import router as leads_router
 from app.api.routes_billing import router as billing_router
+from app.api.problem_details import (
+    PROBLEM_TYPE_DOMAIN,
+    PROBLEM_TYPE_RATE_LIMIT,
+    PROBLEM_TYPE_SERVER,
+    PROBLEM_TYPE_VALIDATION,
+    problem_details,
+)
 from app.api.saas_auth import PasswordChangeGateMiddleware, TenantSessionMiddleware
 from app.domain.errors import DomainError
 from app.infra.db import get_session_factory
@@ -41,32 +47,7 @@ from app.infra.metrics import configure_metrics, metrics
 from app.infra.security import RateLimiter, create_rate_limiter, resolve_client_key
 from app.settings import settings
 
-PROBLEM_TYPE_VALIDATION = "https://example.com/problems/validation-error"
-PROBLEM_TYPE_DOMAIN = "https://example.com/problems/domain-error"
-PROBLEM_TYPE_RATE_LIMIT = "https://example.com/problems/rate-limit"
-PROBLEM_TYPE_SERVER = "https://example.com/problems/server-error"
-
 logger = logging.getLogger(__name__)
-
-
-def problem_details(
-    request: Request,
-    status: int,
-    title: str,
-    detail: str,
-    errors: list[dict[str, str]] | None = None,
-    type_: str = "about:blank",
-    headers: dict[str, str] | None = None,
-) -> JSONResponse:
-    content = {
-        "type": type_,
-        "title": title,
-        "status": status,
-        "detail": detail,
-        "request_id": getattr(request.state, "request_id", None),
-        "errors": errors or [],
-    }
-    return JSONResponse(status_code=status, content=content, headers=headers)
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
@@ -84,10 +65,12 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         start = time.time()
         response = await call_next(request)
         latency_ms = int((time.time() - start) * 1000)
+        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request.state.request_id = request_id
         logger.info(
             "request",
             extra={
-                "request_id": request.state.request_id,
+                "request_id": request_id,
                 "method": request.method,
                 "path": request.url.path,
                 "status_code": response.status_code,

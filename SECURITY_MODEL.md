@@ -8,6 +8,7 @@
 - **Client portal isolation**: client magic links set an org context and are required for every portal call; booking/invoice/photos are resolved only when the authenticated client owns the record and the invoice/order lives under the caller's org. Signed photo downloads stay behind authenticated `/client/orders/{id}/photos/{photo_id}/signed_url` hops and reuse org-aware storage signing.
 - **Public endpoints**: `/healthz`, estimator, chat, leads, slots/bookings (with optional captcha), and Stripe webhook; all others require auth.
 - **IAM onboarding (temp passwords)**: admins issue org-scoped temp passwords via `/v1/iam/users` or reset endpoints; hashes are stored immediately and never logged. Temp-password users are marked `must_change_password` and are blocked by `PasswordChangeGateMiddleware` from all routes except login/refresh/me/logout/change-password until they set a new password.
+- **Unauthorized vs forbidden**: 401 is reserved for missing/invalid credentials or expired sessions; authenticated-but-disallowed calls (role, org, CSRF, consent) return 403.
 
 ## Authorization & RBAC
 - **Admin roles**: OWNER/ADMIN/DISPATCHER/FINANCE/VIEWER map to permissions in `admin_auth.py` and SaaS membership roles in `saas_auth.py`.

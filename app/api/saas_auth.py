@@ -5,11 +5,11 @@ from typing import Iterable
 
 import sqlalchemy as sa
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.admin_auth import AdminIdentity, AdminPermission, AdminRole, ROLE_PERMISSIONS
+from app.api.problem_details import problem_details
 from app.domain.saas import service as saas_service
 from app.domain.saas.db_models import Membership, MembershipRole, User
 from app.infra.auth import decode_access_token
@@ -174,9 +174,11 @@ class PasswordChangeGateMiddleware(BaseHTTPMiddleware):
         if identity and getattr(identity, "must_change_password", False):
             path = request.url.path
             if not any(path.startswith(prefix) for prefix in ALLOW_WHILE_MUST_CHANGE):
-                return JSONResponse(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    content={"detail": "Password change required"},
+                return problem_details(
+                    request,
+                    status=status.HTTP_403_FORBIDDEN,
+                    title="Forbidden",
+                    detail="Password change required",
                 )
         return await call_next(request)
 
