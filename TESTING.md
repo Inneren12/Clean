@@ -29,4 +29,5 @@ Defined in `pytest.ini`:
 ## Troubleshooting
 - If rate limiter blocks tests, set `RATE_LIMIT_PER_MINUTE` high or disable Redis to use in-memory limiter (`app/infra/security.py`).
 - If migrations drift, run `alembic upgrade head` and re-run `pytest -m "migrations"`.
+- If `alembic heads` returns more than one revision, create a merge migration (`alembic merge -m "merge alembic heads" heads`) before opening a PR so CI can upgrade cleanly.
 - For Stripe/email tests, stub settings are used; ensure secrets are set only when running against real services.

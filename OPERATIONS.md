@@ -31,3 +31,9 @@
 ## Backups and restores
 - Postgres backups should capture tenant-scoped tables (`org_id` columns). Validate restore before releases; ensure `alembic_version` matches after restore.
 - Storage backends: verify bucket access and signed URL keys; for local storage, include `order_upload_root` volume in backups.
+
+## Storage configuration
+- **Local**: defaults to `ORDER_UPLOAD_ROOT=tmp` with files under `orders/{org_id}/{order_id}/...`; mount this path to durable storage or ensure it is backed up.
+- **Cloudflare R2/S3-compatible**: set `ORDER_STORAGE_BACKEND=r2` (or `cloudflare_r2`) with `R2_BUCKET`, `R2_ACCESS_KEY`, `R2_SECRET_KEY`, optional `R2_ENDPOINT`/`R2_REGION`. Downloads use presigned GETs honoring `photo_url_ttl_seconds`.
+- **Cloudflare Images**: set `ORDER_STORAGE_BACKEND=cloudflare_images` (or `cf_images`) with `CF_IMAGES_ACCOUNT_ID`, `CF_IMAGES_ACCOUNT_HASH`, `CF_IMAGES_API_TOKEN`, and `CF_IMAGES_SIGNING_KEY`; variants controlled by `CF_IMAGES_DEFAULT_VARIANT`/`CF_IMAGES_THUMBNAIL_VARIANT` and delivered via signed exp/sig redirects.
+- **Delivery policy**: all backends require app-minted tokens (UA binding and one-time Redis optional) before issuing redirects; do not expose permanent public bucket URLs in admin/worker/client views.
