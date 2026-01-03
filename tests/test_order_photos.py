@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlparse
 
-import jwt
 import pytest
 import sqlalchemy as sa
 
@@ -210,6 +209,8 @@ def test_upload_with_consent_and_download_auth(client, async_session_maker, uplo
     signed_fetch = client.get(signed_url)
     assert signed_fetch.status_code == 200
     assert signed_fetch.content == b"hello-image"
+    assert signed_fetch.headers.get("cache-control") == "no-store, private"
+    assert signed_fetch.headers.get("pragma") == "no-cache"
 
     stored_files = list(
         Path(upload_root / "orders" / str(settings.default_org_id) / booking_id).glob("*")
@@ -286,7 +287,7 @@ def test_signed_download_rejects_cross_org_token(
     )
 
     bad_token = build_photo_download_token(
-        org_id=uuid.uuid4(), order_id=booking_id, photo_id=photo_id
+        org_id=uuid.uuid4(), order_id=booking_id, photo_id=photo_id, user_agent="testclient"
     )
     response = client.get(
         f"/v1/orders/{booking_id}/photos/{photo_id}/signed-download?token={bad_token}"
@@ -300,16 +301,11 @@ def test_signed_download_rejects_expired_token(client, async_session_maker, uplo
         client, async_session_maker, upload_root, admin_headers
     )
 
-    expired = jwt.encode(
-        {
-            "org_id": str(settings.default_org_id),
-            "order_id": booking_id,
-            "photo_id": photo_id,
-            "typ": "photo_download",
-            "exp": datetime.now(timezone.utc) - timedelta(seconds=60),
-        },
-        settings.auth_secret_key,
-        algorithm="HS256",
+    expired = build_photo_download_token(
+        org_id=settings.default_org_id,
+        order_id=booking_id,
+        photo_id=photo_id,
+        ttl_seconds=-60,
     )
 
     response = client.get(

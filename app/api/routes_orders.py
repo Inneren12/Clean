@@ -1,4 +1,5 @@
 import logging
+import time
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
@@ -306,34 +307,46 @@ async def signed_download_order_photo(
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
-    token_org_id, token_order_id, token_photo_id = verify_photo_download_token(token)
-    if token_order_id != order_id or token_photo_id != photo_id:
+    claims = await verify_photo_download_token(token, user_agent=request.headers.get("user-agent"))
+    if claims.order_id != order_id or claims.photo_id != photo_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
 
-    photo = await photos_service.get_photo(session, order_id, photo_id, token_org_id)
-    if photo.order_id != token_order_id:
+    photo = await photos_service.get_photo(session, order_id, photo_id, claims.org_id)
+    if photo.order_id != claims.order_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
 
     storage = resolve_storage_backend(request.app.state)
-    key = photos_service.storage_key_for_photo(photo, token_org_id)
+    key = photos_service.storage_key_for_photo(photo, claims.org_id)
+    ttl = min(settings.photo_url_ttl_seconds, max(claims.exp - int(time.time()), 1))
+
     if storage.supports_direct_io():
-        if not storage.validate_signed_get_url(key=key, url=str(request.url)):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid signature")
         file_path = storage.path_for(key) if hasattr(storage, "path_for") else None
         if not file_path or not file_path.exists():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File missing")
-        return FileResponse(
+        response = FileResponse(
             path=file_path,
             media_type=photo.content_type,
             filename=photo.original_filename or photo.filename,
         )
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     signed_url = await storage.generate_signed_get_url(
         key=key,
-        expires_in=settings.order_photo_signed_url_ttl_seconds,
+        expires_in=ttl,
         resource_url=str(request.url),
     )
-    return RedirectResponse(url=signed_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+    response = RedirectResponse(
+        url=signed_url, status_code=settings.photo_download_redirect_status
+    )
+    response.headers["Cache-Control"] = "no-store, private"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 @router.get(
@@ -352,7 +365,7 @@ async def download_order_photo(
     photo = await photos_service.get_photo(session, order_id, photo_id, org_id)
     storage = resolve_storage_backend(request.app.state)
     key = photos_service.storage_key_for_photo(photo, org_id)
-    ttl = settings.order_photo_signed_url_ttl_seconds
+    ttl = settings.photo_url_ttl_seconds
 
     signature = request.query_params.get("sig")
     expires_raw = request.query_params.get("exp")
@@ -441,7 +454,7 @@ async def admin_order_gallery(
             )
             thumbnail_url = await storage.generate_signed_get_url(
                 key=photos_service.storage_key_for_photo(photo, org_id),
-                expires_in=settings.order_photo_signed_url_ttl_seconds,
+                expires_in=settings.photo_url_ttl_seconds,
                 variant=thumbnail_variant,
             )
         items.append(
