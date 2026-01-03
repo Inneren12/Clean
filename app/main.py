@@ -27,6 +27,7 @@ from app.api.routes_time_tracking import router as time_tracking_router
 from app.api.routes_ui_lang import router as ui_lang_router
 from app.api.routes_worker import router as worker_router
 from app.api.routes_auth import router as auth_router
+from app.api.routes_iam import router as iam_router
 from app.api.worker_auth import WorkerAccessMiddleware
 from app.api.routes_public import router as public_router
 from app.api.routes_leads import router as leads_router
@@ -325,6 +326,7 @@ def create_app(app_settings) -> FastAPI:
     app.include_router(health_router)
     app.include_router(public_router)
     app.include_router(auth_router)
+    app.include_router(iam_router)
     app.include_router(bot_router)
     app.include_router(estimate_router)
     app.include_router(chat_router)
