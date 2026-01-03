@@ -9,7 +9,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import entitlements
-from app.api.photo_tokens import build_signed_photo_response
+from app.api.photo_tokens import build_signed_photo_response, normalize_variant
 from app.dependencies import get_db_session
 from app.domain.bookings.db_models import Booking, OrderPhoto
 from app.domain.bookings import photos_service
@@ -326,6 +326,7 @@ async def client_photo_signed_url(
     order_id: str,
     photo_id: str,
     request: Request,
+    variant: str | None = Query(None),
     identity: client_schemas.ClientIdentity = Depends(require_identity),
     session: AsyncSession = Depends(get_db_session),
 ) -> booking_schemas.SignedUrlResponse:
@@ -337,7 +338,10 @@ async def client_photo_signed_url(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
     storage = resolve_storage_backend(request.app.state)
     org_id = entitlements.resolve_org_id(request)
-    return await build_signed_photo_response(photo, request, storage, org_id)
+    normalized_variant = normalize_variant(variant)
+    return await build_signed_photo_response(
+        photo, request, storage, org_id, variant=normalized_variant
+    )
 
 
 @router.get("/client/invoices/{invoice_id}")

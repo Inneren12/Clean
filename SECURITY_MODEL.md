@@ -33,4 +33,4 @@
 - Per-client limits default to `RATE_LIMIT_PER_MINUTE`; captcha available for `/v1/leads` when `captcha_mode=turnstile` to deter spam (`app/infra/captcha.py`, `app/api/routes_leads.py`).
 
 ## Photo access policy
-- Uploads validated for MIME and size; storage backend determines signed URL behavior. Local/S3/R2 use signed URLs with TTL; Cloudflare Images may use variant-based signed URLs. Do not expose permanent public URLs; honor `photo_url_ttl_seconds` and `order_photo_signed_url_ttl_seconds` settings.
+- Uploads are MIME/size validated and stored under org/order prefixes; minting download links always requires authenticated callers (worker/admin/client) hitting `/photos/{id}/signed_url`. Tokens encode org/order/photo (and optional UA hash or one-time Redis guard), expire after `photo_url_ttl_seconds` (60s default), and are validated by `/signed-download` before redirecting. Responses set `no-store`/`no-cache` headers and never return bare cloud object URLs. Local/S3/R2 use presigned GETs with TTL; Cloudflare Images redirects include signed exp/sig and optional variants (original/thumbnail) to block hotlinking.
