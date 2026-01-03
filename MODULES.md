@@ -3,6 +3,7 @@
 ## API layer (`app/api`)
 - **Routers** (`routes_*.py`): request/response schemas, validation, and wiring to domain services. Admin, worker, client, billing, chat, bookings, payments, metrics, orders, and photo token endpoints stay here.
 - **Auth & identity**: `saas_auth.py` handles SaaS JWT sessions and injects org/user into `request.state`; `admin_auth.py` enforces Basic Auth roles and auditing for admin/dispatcher/finance/viewer; `worker_auth.py` signs worker tokens and enforces worker access middleware; `org_context.py` resolves org_id for mixed legacy/basic flows; `entitlements.py` enforces per-plan limits.
+- **IAM console**: `routes_iam.py` exposes SaaS-admin user lifecycle endpoints (list/create/reset/deactivate/role changes/logout-all) scoped to the caller's organization.
 - **Boundary rule:** routers should depend on services in `app/domain/**` and infrastructure adapters in `app/infra/**`, never call storage/DB primitives directly.
 
 ## Domain layer (`app/domain`)
