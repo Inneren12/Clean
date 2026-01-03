@@ -443,3 +443,52 @@ async def record_audit_event(
     session.add(event)
     await session.flush()
     return event
+
+
+async def list_memberships_for_org(session: AsyncSession, org_id: uuid.UUID) -> list[tuple[Membership, User]]:
+    result = await session.execute(
+        sa.select(Membership, User)
+        .join(User, User.user_id == Membership.user_id)
+        .where(Membership.org_id == org_id)
+    )
+    rows = result.all()
+    return [(row[0], row[1]) for row in rows]
+
+
+async def revoke_user_sessions_for_org(
+    session: AsyncSession, user_id: uuid.UUID, org_id: uuid.UUID, *, reason: str
+) -> None:
+    now = datetime.now(timezone.utc)
+    await session.execute(
+        sa.update(SaaSSession)
+        .where(
+            SaaSSession.user_id == user_id,
+            SaaSSession.org_id == org_id,
+            SaaSSession.revoked_at.is_(None),
+        )
+        .values(revoked_at=now, revoked_reason=reason)
+    )
+
+
+async def deactivate_membership(
+    session: AsyncSession, membership: Membership, *, reason: str = "deactivated"
+) -> Membership:
+    membership.is_active = False
+    session.add(membership)
+    await revoke_user_sessions_for_org(
+        session, membership.user_id, membership.org_id, reason=reason
+    )
+    await session.flush()
+    return membership
+
+
+async def update_membership_role(
+    session: AsyncSession, membership: Membership, new_role: MembershipRole
+) -> Membership:
+    membership.role = new_role
+    session.add(membership)
+    await revoke_user_sessions_for_org(
+        session, membership.user_id, membership.org_id, reason="role_changed"
+    )
+    await session.flush()
+    return membership

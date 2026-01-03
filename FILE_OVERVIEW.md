@@ -12,6 +12,7 @@
 - `app/api/admin_auth.py` – Basic Auth roles (owner/admin/dispatcher/finance/viewer), admin auditing middleware, permission helpers.
 - `app/api/worker_auth.py` – Worker token issuance/verification, portal session TTLs, and worker access middleware.
 - `app/api/routes_auth.py` – SaaS login/refresh/logout/me/password change endpoints and session lifecycle.
+- `app/api/routes_iam.py` – Org-scoped IAM console: list/create/deactivate users, reset temp passwords, update roles, revoke sessions.
 
 ## Core flows (routers)
 - `app/api/routes_estimate.py` – Pricing estimator endpoint.
