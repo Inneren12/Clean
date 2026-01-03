@@ -96,6 +96,22 @@ jobs:
               raise SystemExit("Postgres not ready in time")
           PY
 
+      - name: Verify single Alembic head
+        run: |
+          python - <<'PY'
+          from alembic.config import Config
+          from alembic.script import ScriptDirectory
+
+          config = Config("alembic.ini")
+          script = ScriptDirectory.from_config(config)
+          heads = script.get_heads()
+
+          if len(heads) != 1:
+              raise SystemExit(f"Expected 1 Alembic head, found {heads}")
+
+          print(f"Single Alembic head: {heads[0]}")
+          PY
+
       - name: Run migrations
         run: alembic upgrade head
 
@@ -164,6 +180,22 @@ jobs:
                   time.sleep(1)
           else:
               raise SystemExit("Postgres not ready in time")
+          PY
+
+      - name: Verify single Alembic head
+        run: |
+          python - <<'PY'
+          from alembic.config import Config
+          from alembic.script import ScriptDirectory
+
+          config = Config("alembic.ini")
+          script = ScriptDirectory.from_config(config)
+          heads = script.get_heads()
+
+          if len(heads) != 1:
+              raise SystemExit(f"Expected 1 Alembic head, found {heads}")
+
+          print(f"Single Alembic head: {heads[0]}")
           PY
 
       - name: Run migration invariants

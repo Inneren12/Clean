@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
 import uuid
@@ -23,6 +24,7 @@ class PhotoTokenClaims:
     photo_id: str
     exp: int
     ua_hash: str | None = None
+    variant: str | None = None
 
 
 _redis_client: redis.Redis | None = None
@@ -42,6 +44,17 @@ def _now() -> datetime:
 
 def _hash_user_agent(user_agent: str | None) -> str:
     return hashlib.sha256((user_agent or "").encode()).hexdigest()
+
+
+def normalize_variant(value: str | None) -> str | None:
+    if value is None:
+        return None
+    candidate = value.strip()
+    if not candidate:
+        return None
+    if not re.match(r"^[A-Za-z0-9_.-]+$", candidate):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid variant")
+    return candidate
 
 
 def _encode_payload(payload: dict[str, Any]) -> str:
@@ -77,13 +90,21 @@ def _parse_claims(payload: dict[str, Any]) -> PhotoTokenClaims:
         photo_id = str(payload["photo_id"]).strip()
         exp = int(payload["exp"])
         ua_hash = payload.get("ua")
+        variant = payload.get("variant")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token") from exc
 
     if not order_id or not photo_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
-    return PhotoTokenClaims(org_id=org_id, order_id=order_id, photo_id=photo_id, exp=exp, ua_hash=ua_hash)
+    return PhotoTokenClaims(
+        org_id=org_id,
+        order_id=order_id,
+        photo_id=photo_id,
+        exp=exp,
+        ua_hash=ua_hash,
+        variant=variant,
+    )
 
 
 def _ttl_seconds(exp: int) -> int:
@@ -101,9 +122,11 @@ def build_photo_download_token(
     photo_id: str,
     user_agent: str | None = None,
     ttl_seconds: int | None = None,
+    variant: str | None = None,
 ) -> str:
     now = _now()
     ttl = ttl_seconds or settings.photo_url_ttl_seconds
+    normalized_variant = normalize_variant(variant)
     exp = int((now + timedelta(seconds=ttl)).timestamp())
     payload: dict[str, Any] = {
         "org_id": str(org_id),
@@ -113,6 +136,8 @@ def build_photo_download_token(
         "typ": "photo_download",
         "jti": secrets.token_hex(8),
     }
+    if normalized_variant:
+        payload["variant"] = normalized_variant
     if settings.photo_token_bind_ua:
         payload["ua"] = _hash_user_agent(user_agent)
     return _encode_payload(payload)
@@ -152,6 +177,7 @@ async def verify_photo_download_token(token: str, *, user_agent: str | None = No
         current_ua_hash = _hash_user_agent(user_agent)
         if not hmac.compare_digest(claims.ua_hash, current_ua_hash):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+    claims.variant = normalize_variant(claims.variant)
     ttl = _ttl_seconds(claims.exp)
     await _enforce_one_time(signature, ttl)
     return claims
@@ -162,6 +188,8 @@ async def build_signed_photo_response(
     request: Request,
     storage,
     org_id: uuid.UUID,
+    *,
+    variant: str | None = None,
 ) -> SignedUrlResponse:
     ttl = settings.photo_url_ttl_seconds
     expires_at = _now() + timedelta(seconds=ttl)
@@ -178,6 +206,7 @@ async def build_signed_photo_response(
         photo_id=photo.photo_id,
         user_agent=request.headers.get("user-agent"),
         ttl_seconds=ttl,
+        variant=variant,
     )
     download_url_with_token = f"{download_url}?token={token}"
 
@@ -188,4 +217,6 @@ async def build_signed_photo_response(
         except Exception:
             pass
 
-    return SignedUrlResponse(url=download_url_with_token, expires_at=expires_at, expires_in=ttl)
+    return SignedUrlResponse(
+        url=download_url_with_token, expires_at=expires_at, expires_in=ttl, variant=variant
+    )
