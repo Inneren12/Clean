@@ -101,7 +101,7 @@ class Settings(BaseSettings):
     client_portal_base_url: str | None = Field(None)
     deposit_percent: float = Field(0.25)
     deposit_currency: str = Field("cad")
-    order_upload_root: str = Field("var/uploads/orders")
+    order_upload_root: str = Field("tmp")
     order_photo_max_bytes: int = Field(10 * 1024 * 1024)
     order_photo_allowed_mimes_raw: str = Field("image/jpeg,image/png,image/webp")
     order_storage_backend: Literal[

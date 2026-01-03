@@ -1,9 +1,19 @@
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect
 import sqlalchemy as sa
 
 from app.settings import settings
+
+
+def test_alembic_has_single_head():
+    config = Config("alembic.ini")
+    script_directory = ScriptDirectory.from_config(config)
+
+    heads = script_directory.get_heads()
+
+    assert len(heads) == 1, f"Expected 1 Alembic head, found {heads}"
 
 
 def test_alembic_upgrade_head(tmp_path):

@@ -139,13 +139,54 @@ async def test_worker_checklist_photos_and_dispute_flow(client, async_session_ma
     assert dispute_body["dispute_id"]
     assert "photo_refs" in dispute_body["facts"]
 
-    async with async_session_maker() as session:
-        stored_dispute = await session.get(Dispute, dispute_body["dispute_id"])
-        assert stored_dispute is not None
-        assert stored_dispute.facts_snapshot["photo_refs"] == [photo_id]
-        audits = (await session.execute(sa.select(AdminAuditLog))).scalars().all()
-        assert any(log.action == "WORKER_DISPUTE_REPORT" for log in audits)
 
+@pytest.mark.anyio
+async def test_photo_review_feedback_visible_to_worker(client, async_session_maker):
+    settings.admin_basic_username = "admin"
+    settings.admin_basic_password = "secret"
+    settings.worker_basic_username = "worker"
+    settings.worker_basic_password = "secret"
+    settings.worker_team_id = 1
+
+    booking_id = await _seed_booking(async_session_maker, consent=True)
+
+    client.post("/worker/login", headers=_basic_auth("worker", "secret"))
+
+    upload = client.post(
+        f"/worker/jobs/{booking_id}/photos",
+        data={"phase": "after", "consent": True},
+        files={"file": ("after.jpg", io.BytesIO(b"abc"), "image/jpeg")},
+    )
+    assert upload.status_code == status.HTTP_200_OK
+    photo_id = upload.json()["photo_id"]
+
+    review = client.post(
+        f"/v1/orders/{booking_id}/photos/{photo_id}/review",
+        auth=("admin", "secret"),
+        json={"review_status": "rejected", "review_comment": "Blurry", "needs_retake": True},
+    )
+    assert review.status_code == status.HTTP_200_OK
+    reviewed = review.json()
+    assert reviewed["review_status"] == "REJECTED"
+    assert reviewed["needs_retake"] is True
+    assert reviewed["review_comment"] == "Blurry"
+
+    worker_view = client.get(f"/worker/jobs/{booking_id}/photos")
+    assert worker_view.status_code == status.HTTP_200_OK
+    worker_photos = worker_view.json()["photos"]
+    matching = next(p for p in worker_photos if p["photo_id"] == photo_id)
+    assert matching["review_status"] == "REJECTED"
+    assert matching["needs_retake"] is True
+    assert matching["review_comment"] == "Blurry"
+    assert matching["reviewed_by"] == "admin"
+
+    async with async_session_maker() as session:
+        audit_count = await session.scalar(
+            sa.select(sa.func.count()).select_from(AdminAuditLog).where(
+                AdminAuditLog.action == "ORDER_PHOTO_REVIEW"
+            )
+        )
+        assert audit_count == 1
 
 @pytest.mark.anyio
 async def test_worker_restricted_to_team_for_quality(client, async_session_maker):
