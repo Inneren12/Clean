@@ -63,6 +63,10 @@ from app.domain.leads.schemas import AdminLeadResponse, AdminLeadStatusUpdateReq
 from app.domain.leads.statuses import assert_valid_transition, is_valid_status
 from app.domain.config import schemas as config_schemas
 from app.domain.notifications import email_service
+from app.infra.email import resolve_app_email_adapter
+from app.domain.outbox.db_models import OutboxEvent
+from app.domain.outbox.schemas import OutboxEventResponse, OutboxReplayResponse
+from app.domain.outbox.service import replay_outbox_event
 from app.domain.nps import schemas as nps_schemas, service as nps_service
 from app.domain.pricing.config_loader import load_pricing_config
 from app.domain.reason_logs import schemas as reason_schemas
@@ -730,7 +734,7 @@ async def email_scan(
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_dispatch),
 ) -> dict[str, int]:
-    adapter = getattr(http_request.app.state, "email_adapter", None)
+    adapter = resolve_app_email_adapter(http_request.app)
     result = await email_service.scan_and_send_reminders(session, adapter)
     return result
 
@@ -750,7 +754,7 @@ async def resend_last_email(
     if booking is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
 
-    adapter = getattr(http_request.app.state, "email_adapter", None)
+    adapter = resolve_app_email_adapter(http_request.app)
     try:
         return await email_service.resend_last_email(session, adapter, booking_id)
     except LookupError as exc:
@@ -1127,6 +1131,66 @@ async def replay_export_dead_letter(
         last_error_code=event.last_error_code,
         last_replayed_at=event.last_replayed_at,
         last_replayed_by=event.last_replayed_by or identity.username,
+    )
+
+
+@router.get("/v1/admin/outbox/dead-letter", response_model=List[OutboxEventResponse])
+async def list_outbox_dead_letter(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=500),
+    session: AsyncSession = Depends(get_db_session),
+    _principal: AdminIdentity = Depends(require_viewer),
+) -> List[OutboxEventResponse]:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    org_uuid = uuid.UUID(str(org_id)) if org_id else None
+    result = await session.execute(
+        select(OutboxEvent)
+        .where(OutboxEvent.status == "dead", *_org_scope_filters(org_uuid, OutboxEvent))
+        .order_by(OutboxEvent.created_at.desc())
+        .limit(limit)
+    )
+    records = result.scalars().all()
+    return [
+        OutboxEventResponse(
+            event_id=record.event_id,
+            kind=record.kind,
+            status=record.status,
+            attempts=record.attempts,
+            last_error=record.last_error,
+            next_attempt_at=record.next_attempt_at,
+            created_at=record.created_at,
+            dedupe_key=record.dedupe_key,
+        )
+        for record in records
+    ]
+
+
+@router.post(
+    "/v1/admin/outbox/{event_id}/replay",
+    response_model=OutboxReplayResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def replay_outbox_dead_letter(
+    event_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    _admin: AdminIdentity = Depends(require_admin),
+) -> OutboxReplayResponse:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    org_uuid = uuid.UUID(str(org_id)) if org_id else None
+    result = await session.execute(
+        select(OutboxEvent).where(OutboxEvent.event_id == event_id, *_org_scope_filters(org_uuid, OutboxEvent))
+    )
+    event = result.scalar_one_or_none()
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Outbox event not found")
+    await replay_outbox_event(session, event)
+    return OutboxReplayResponse(
+        event_id=event.event_id,
+        status=event.status,
+        next_attempt_at=event.next_attempt_at,
+        attempts=event.attempts,
+        last_error=event.last_error,
     )
 
 

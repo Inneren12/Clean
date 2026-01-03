@@ -10,7 +10,7 @@ from app.infra.db import get_session_factory
 from app.infra.email import EmailAdapter, resolve_email_adapter
 from app.infra.metrics import configure_metrics, metrics
 from app.jobs.heartbeat import record_heartbeat
-from app.jobs import email_jobs, storage_janitor
+from app.jobs import email_jobs, outbox, storage_janitor
 from app.infra.storage import new_storage_backend
 from app.domain.ops.db_models import JobHeartbeat
 from app.settings import settings
@@ -87,6 +87,8 @@ def _job_runner(name: str, base_url: str | None = None) -> Callable:
         return lambda session: email_jobs.run_nps_sends(session, _ADAPTER, base_url=base_url)
     if name == "email-dlq":
         return lambda session: email_jobs.run_email_dlq(session, _ADAPTER)
+    if name == "outbox-delivery":
+        return lambda session: outbox.run_outbox_delivery(session, _ADAPTER)
     if name == "storage-janitor":
         return lambda session: storage_janitor.run_storage_janitor(session, _STORAGE)
     raise ValueError(f"unknown_job:{name}")
@@ -111,6 +113,7 @@ async def main(argv: list[str] | None = None) -> None:
         "invoice-reminders",
         "nps-send",
         "email-dlq",
+        "outbox-delivery",
         "storage-janitor",
     ]
     runners = [_job_runner(name, base_url=args.base_url) for name in job_names]

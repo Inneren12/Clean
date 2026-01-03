@@ -1,10 +1,10 @@
 import anyio
-from httpx import MockTransport, Request, Response
 import anyio
 from httpx import MockTransport, Request, Response
 from sqlalchemy import select
 
 from app.domain.export_events.db_models import ExportEvent
+from app.domain.outbox.service import OutboxAdapters, process_outbox
 from app.infra.export import export_lead_async
 from app.main import app
 from app.settings import settings
@@ -14,6 +14,8 @@ def test_export_dead_letter_recorded_on_failure(async_session_maker):
     original_mode = settings.export_mode
     original_url = settings.export_webhook_url
     original_retries = settings.export_webhook_max_retries
+    original_outbox_attempts = settings.outbox_max_attempts
+    original_outbox_attempts = settings.outbox_max_attempts
     original_allow_http = settings.export_webhook_allow_http
     original_block_private = settings.export_webhook_block_private_ips
     original_env = settings.app_env
@@ -21,6 +23,8 @@ def test_export_dead_letter_recorded_on_failure(async_session_maker):
     settings.export_mode = "webhook"
     settings.export_webhook_url = "http://example.com/webhook"
     settings.export_webhook_max_retries = 2
+    settings.outbox_max_attempts = 1
+    settings.outbox_max_attempts = 1
     settings.export_webhook_allow_http = True
     settings.export_webhook_block_private_ips = False
     settings.app_env = "dev"
@@ -37,6 +41,20 @@ def test_export_dead_letter_recorded_on_failure(async_session_maker):
             async_session_maker,
         )
 
+        async def _process():
+            async with async_session_maker() as session:
+                adapters = OutboxAdapters(export_transport=transport)
+                await process_outbox(session, adapters)
+
+        anyio.run(_process)
+
+        async def _process():
+            async with async_session_maker() as session:
+                adapters = OutboxAdapters(export_transport=transport)
+                await process_outbox(session, adapters)
+
+        anyio.run(_process)
+
         async def fetch_events():
             async with async_session_maker() as session:
                 result = await session.execute(select(ExportEvent))
@@ -46,7 +64,7 @@ def test_export_dead_letter_recorded_on_failure(async_session_maker):
         assert len(events) == 1
         event = events[0]
         assert event.lead_id == "lead-dead-letter"
-        assert event.attempts == settings.export_webhook_max_retries
+        assert event.attempts == settings.outbox_max_attempts
         assert event.last_error_code == "status_500"
         assert event.target_url_host == "example.com"
         assert event.target_url == settings.export_webhook_url
@@ -59,6 +77,7 @@ def test_export_dead_letter_recorded_on_failure(async_session_maker):
         settings.export_webhook_allow_http = original_allow_http
         settings.export_webhook_block_private_ips = original_block_private
         settings.app_env = original_env
+        settings.outbox_max_attempts = original_outbox_attempts
 
 
 def test_export_dead_letter_endpoint_allows_dispatcher(client, async_session_maker):
@@ -70,6 +89,7 @@ def test_export_dead_letter_endpoint_allows_dispatcher(client, async_session_mak
     original_allowed_hosts = settings.export_webhook_allowed_hosts
     original_dispatcher_username = settings.dispatcher_basic_username
     original_dispatcher_password = settings.dispatcher_basic_password
+    original_outbox_attempts = settings.outbox_max_attempts
 
     settings.export_mode = "webhook"
     settings.export_webhook_url = "https://example.com/webhook"
@@ -79,6 +99,7 @@ def test_export_dead_letter_endpoint_allows_dispatcher(client, async_session_mak
     settings.export_webhook_allowed_hosts = ["example.com"]
     settings.dispatcher_basic_username = "dispatcher"
     settings.dispatcher_basic_password = "password"
+    settings.outbox_max_attempts = 1
 
     transport = MockTransport(lambda request: Response(500, request=Request("POST", request.url)))
     payload = {"lead_id": "lead-dead-letter-api"}
@@ -91,6 +112,13 @@ def test_export_dead_letter_endpoint_allows_dispatcher(client, async_session_mak
             None,
             async_session_maker,
         )
+
+        async def _process():
+            async with async_session_maker() as session:
+                adapters = OutboxAdapters(export_transport=transport)
+                await process_outbox(session, adapters)
+
+        anyio.run(_process)
 
         response = client.get(
             "/v1/admin/export-dead-letter",
@@ -106,7 +134,7 @@ def test_export_dead_letter_endpoint_allows_dispatcher(client, async_session_mak
         assert event["lead_id"] == "lead-dead-letter-api"
         assert event["mode"] == "webhook"
         assert event["target_url_host"] == "example.com"
-        assert event["attempts"] == settings.export_webhook_max_retries
+        assert event["attempts"] == settings.outbox_max_attempts
         assert event["last_error_code"]
         assert event["event_id"]
         assert event["created_at"]
@@ -119,6 +147,7 @@ def test_export_dead_letter_endpoint_allows_dispatcher(client, async_session_mak
         settings.export_webhook_allowed_hosts = original_allowed_hosts
         settings.dispatcher_basic_username = original_dispatcher_username
         settings.dispatcher_basic_password = original_dispatcher_password
+        settings.outbox_max_attempts = original_outbox_attempts
 
 
 def test_export_dead_letter_replay(client, async_session_maker):
@@ -130,10 +159,12 @@ def test_export_dead_letter_replay(client, async_session_maker):
     original_admin_username = settings.admin_basic_username
     original_admin_password = settings.admin_basic_password
     original_transport = getattr(app.state, "export_transport", None)
+    original_outbox_attempts = settings.outbox_max_attempts
 
     settings.export_mode = "webhook"
     settings.export_webhook_url = "http://example.com/webhook"
     settings.export_webhook_max_retries = 2
+    settings.outbox_max_attempts = 1
     settings.export_webhook_allow_http = True
     settings.export_webhook_block_private_ips = False
     settings.admin_basic_username = "admin"
@@ -150,6 +181,13 @@ def test_export_dead_letter_replay(client, async_session_maker):
             None,
             async_session_maker,
         )
+
+        async def _process():
+            async with async_session_maker() as session:
+                adapters = OutboxAdapters(export_transport=fail_transport)
+                await process_outbox(session, adapters)
+
+        anyio.run(_process)
 
         async def fetch_event():
             async with async_session_maker() as session:
@@ -191,3 +229,4 @@ def test_export_dead_letter_replay(client, async_session_maker):
         settings.export_webhook_block_private_ips = original_block_private
         settings.admin_basic_username = original_admin_username
         settings.admin_basic_password = original_admin_password
+        settings.outbox_max_attempts = original_outbox_attempts

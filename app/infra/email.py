@@ -186,6 +186,19 @@ def resolve_email_adapter(app_settings) -> EmailAdapter | NoopEmailAdapter:
     return EmailAdapter()
 
 
+def resolve_app_email_adapter(app_like) -> EmailAdapter | NoopEmailAdapter | None:
+    state = getattr(app_like, "state", None)
+    if state is None:
+        return None
+    adapter = getattr(state, "email_adapter", None)
+    if adapter is not None:
+        return adapter
+    services = getattr(state, "services", None)
+    if services is not None:
+        return getattr(services, "email_adapter", None)
+    return None
+
+
 async def _post_with_retry(
     client: httpx.AsyncClient,
     *,

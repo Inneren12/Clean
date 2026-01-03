@@ -3,6 +3,7 @@
 ## Current stage
 - **Status:** Production-ready MVP with Conditional GO (see `release_assessment.md`).
 - **Done:** Estimator, lead intake with captcha/referrals/export, slot/booking creation with deposit policy, Stripe webhook, email reminders/resend, admin metrics CSV, retention cleanup endpoints, worker portal with checklists/time tracking, photo uploads + admin review/feedback with signed-download redirects (R2/CF Images), SaaS auth + billing plans, rate limiting and CORS controls.
+- **Done:** Estimator, lead intake with captcha/referrals/export, slot/booking creation with deposit policy, Stripe webhook, email reminders/resend, admin metrics CSV, retention cleanup endpoints, worker portal with checklists/time tracking, photo uploads + admin review/feedback with signed-download redirects (R2/CF Images), SaaS auth + billing plans, rate limiting and CORS controls, outbox-based delivery with retries/DLQ and admin replay.
 - **Blocked/Risks:** Operators must wire schedulers for cleanup/email/export/retention, configure Stripe/email/export credentials, and set CORS/proxy trust lists in production.
 - **Next milestones:** Harden SaaS billing/usage reporting, expand DLQ self-healing (after replay endpoint), and wire dashboarding for job error counters/storage janitor retries. Admin productivity Sprints 11–15 shipped (global search, scheduling controls, time tracking surface area, messaging previews/resend, safe CSV + bulk actions). Sprints 16–19 deliver client self-service (bookings/invoices/photos), subscription pause/resume with reasons, NPS ticket filters, guarded feature-flag/config viewers, and unified Problem+JSON error handling with consistent request IDs.
 - **Sprint 1 (Security baseline):** DONE – admin middleware reordered to isolate `/v1/admin/*`, org-scoped finance/report/export/payment endpoints, and regression tests for cross-org leakage.
@@ -18,6 +19,8 @@
 - ✅ Alerts/metrics: Prometheus alerting wired (`ops/prometheus/alerts.yml`), HTTP metrics enabled, error rates monitored.
 - ✅ Storage: delete retries running via `storage_janitor` job; upload size/MIME limits enforced.
 - ✅ CORS/proxy: `STRICT_CORS=true` with explicit origins; trusted proxy IPs/CIDRs set if behind proxy.
+- ✅ Email/export delivery: admin scans and jobs resolve adapters from `app.state`/services, send immediately while still
+  queuing outbox events for retries and DLQ replay.
 
 ## Known risks and mitigations
 - **Scheduler gaps:** If cleanup/reminder/export jobs are not scheduled, stale bookings/emails accumulate; mitigate by wiring cron/Scheduler and monitoring job heartbeat.

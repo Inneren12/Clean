@@ -11,6 +11,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.domain.export_events.db_models import ExportEvent
+from app.domain.outbox.service import enqueue_outbox_event
 from app.infra.db import get_session_factory
 from app.settings import settings
 
@@ -43,21 +44,11 @@ async def export_lead_async(
                 extra={"extra": {"lead_id": payload.get("lead_id"), "reason": reason}},
             )
             return
-        success, attempts, last_error_code = await send_export_with_retry(
-            url,
-            payload,
-            transport=transport,
+        ok, _attempts, _last_error = await send_export_with_retry(
+            url, payload, transport=transport
         )
-        if success:
-            return
-        await _record_export_dead_letter(
-            session_factory,
-            payload,
-            url,
-            attempts,
-            last_error_code,
-            settings.export_mode,
-        )
+        if not ok:
+            await _enqueue_export_outbox(session_factory, payload, url)
 
 
 async def send_export_with_retry(
@@ -109,6 +100,40 @@ async def send_export_with_retry(
         },
     )
     return False, retries, last_error_code
+
+
+async def _enqueue_export_outbox(
+    session_factory: async_sessionmaker[AsyncSession] | None,
+    payload: dict,
+    url: str,
+) -> None:
+    try:
+        factory = session_factory or get_session_factory()
+    except Exception:  # noqa: BLE001
+        logger.warning("export_outbox_session_unavailable")
+        return
+
+    try:
+        async with factory() as session:
+            org_id = (payload or {}).get("org_id") or settings.default_org_id
+            try:
+                org_uuid = uuid.UUID(str(org_id))
+            except Exception:
+                org_uuid = settings.default_org_id
+            dedupe_key = f"export:{org_uuid}:{url}:{payload.get('lead_id', 'unknown')}"
+            await enqueue_outbox_event(
+                session,
+                org_id=org_uuid,
+                kind="export",
+                payload={"payload": payload, "target_url": url},
+                dedupe_key=dedupe_key,
+            )
+            await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "export_outbox_enqueue_failed",
+            extra={"extra": {"lead_id": (payload or {}).get("lead_id"), "error": str(exc)}},
+        )
 
 
 async def _record_export_dead_letter(

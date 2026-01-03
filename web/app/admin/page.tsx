@@ -74,6 +74,17 @@ type ExportEvent = {
   created_at: string;
 };
 
+type OutboxEvent = {
+  event_id: string;
+  kind: string;
+  attempts: number;
+  status: string;
+  dedupe_key: string;
+  last_error?: string | null;
+  next_attempt_at?: string | null;
+  created_at: string;
+};
+
 function formatDateTime(value: string) {
   const dt = new Date(value);
   return new Intl.DateTimeFormat("en-CA", {
@@ -158,6 +169,7 @@ export default function AdminPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [exportEvents, setExportEvents] = useState<ExportEvent[]>([]);
+  const [outboxEvents, setOutboxEvents] = useState<OutboxEvent[]>([]);
   const [metrics, setMetrics] = useState<AdminMetricsResponse | null>(null);
   const [metricsLoading, setMetricsLoading] = useState(false);
   const [metricsError, setMetricsError] = useState<string | null>(null);
@@ -296,9 +308,34 @@ export default function AdminPage() {
     setExportEvents(data);
   };
 
+  const loadOutboxDeadLetter = async () => {
+    if (!username || !password) return;
+    const response = await fetch(`${API_BASE}/v1/admin/outbox/dead-letter?limit=50`, {
+      headers: authHeaders,
+      cache: "no-store",
+    });
+    if (!response.ok) return;
+    const data = (await response.json()) as OutboxEvent[];
+    setOutboxEvents(data);
+  };
+
+  const replayOutboxEvent = async (eventId: string) => {
+    if (!username || !password) return;
+    const response = await fetch(`${API_BASE}/v1/admin/outbox/${eventId}/replay`, {
+      method: "POST",
+      headers: authHeaders,
+      cache: "no-store",
+    });
+    if (response.ok) {
+      setMessage("Replay scheduled");
+      void loadOutboxDeadLetter();
+    }
+  };
+
   useEffect(() => {
     void loadLeads();
     void loadExportDeadLetter();
+    void loadOutboxDeadLetter();
   }, [authHeaders, leadStatusFilter]);
 
   useEffect(() => {
@@ -686,6 +723,39 @@ export default function AdminPage() {
                     Attempts: {event.attempts} · Lead: {event.lead_id ?? "unknown"} · Created: {formatDateTime(event.created_at)}
                   </div>
                   <div className="muted">Last error: {event.last_error_code || "unknown"}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="admin-card admin-section">
+          <div className="section-heading">
+            <h2>Outbox dead-letter</h2>
+            <p className="muted">Email/webhook/export retries that exhausted max attempts.</p>
+          </div>
+          <div className="admin-actions">
+            <button className="btn btn-ghost" type="button" onClick={() => void loadOutboxDeadLetter()}>
+              Refresh
+            </button>
+          </div>
+          {outboxEvents.length === 0 ? <div className="muted">No failed outbox events.</div> : null}
+          <div className="dead-letter-list">
+            {outboxEvents.map((event) => (
+              <div key={event.event_id} className="admin-card">
+                <div className="admin-section">
+                  <div className="admin-actions" style={{ justifyContent: "space-between" }}>
+                    <strong>{event.kind}</strong>
+                    <span className="muted">Attempts: {event.attempts}</span>
+                  </div>
+                  <div className="muted">Created: {formatDateTime(event.created_at)}</div>
+                  <div className="muted">Last error: {event.last_error || "unknown"}</div>
+                  <div className="muted">Dedupe: {event.dedupe_key}</div>
+                  <div className="admin-actions">
+                    <button className="btn btn-secondary" type="button" onClick={() => void replayOutboxEvent(event.event_id)}>
+                      Replay
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
