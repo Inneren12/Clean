@@ -19,7 +19,7 @@
 - `app/api/routes_bookings.py` – Slot search, booking creation with deposit policy, reschedule/cancel/confirm/complete, reminders.
 - `app/api/routes_payments.py` – Stripe invoice checkout/portal, invoice token validation, payment status updates.
 - `app/api/routes_billing.py` – SaaS subscription billing (plans, customer portal, metered usage) behind SaaS auth.
-- `app/api/routes_orders.py` – Order photo upload/list/delete with signed URLs and storage backend selection.
+- `app/api/routes_orders.py` – Order photo upload/list/delete/review with tokenized signed-download redirects and storage backend selection.
 - `app/api/routes_checklists.py` – Worker/admin checklist templates and completion state.
 - `app/api/routes_worker.py` – Worker portal endpoints (auth, jobs list, job detail, uploads, status updates).
 - `app/api/routes_time_tracking.py` – Time tracking for workers and admin reviews.
@@ -68,3 +68,6 @@
 - `web/app/page.tsx` – Chat UI entry.
 - `web/app/admin/page.tsx` – Minimal admin/booking UI.
 - `web/` `.env.example` – Frontend environment variables for API base URL.
+
+## Tests
+- `tests/test_photo_delivery.py` – Signed download redirect/no-store assertions for photo URLs.
