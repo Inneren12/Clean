@@ -31,6 +31,23 @@ def _new_backend() -> StorageBackend:
             max_attempts=settings.s3_max_attempts,
             max_payload_bytes=settings.order_photo_max_bytes,
         )
+    if backend in {"r2", "cloudflare_r2"}:
+        if not settings.r2_bucket:
+            raise RuntimeError("R2_BUCKET is required when ORDER_STORAGE_BACKEND=r2")
+        if not settings.r2_access_key or not settings.r2_secret_key:
+            raise RuntimeError("R2_ACCESS_KEY and R2_SECRET_KEY are required for R2 storage")
+        return S3StorageBackend(
+            bucket=settings.r2_bucket,
+            access_key=settings.r2_access_key,
+            secret_key=settings.r2_secret_key,
+            region=settings.r2_region,
+            endpoint=settings.r2_endpoint,
+            connect_timeout=settings.s3_connect_timeout_seconds,
+            read_timeout=settings.s3_read_timeout_seconds,
+            max_attempts=settings.s3_max_attempts,
+            max_payload_bytes=settings.order_photo_max_bytes,
+            public_base_url=settings.r2_public_base_url,
+        )
     if backend == "memory":
         return InMemoryStorageBackend()
     raise RuntimeError(f"Unsupported storage backend: {backend}")

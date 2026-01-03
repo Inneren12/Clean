@@ -178,12 +178,13 @@ class S3StorageBackend(StorageBackend):
         read_timeout: float = 10.0,
         max_attempts: int = 4,
         max_payload_bytes: int | None = None,
+        public_base_url: str | None = None,
         enable_circuit_breaker: bool = True,
         circuit_failure_threshold: int | None = None,
         circuit_recovery_seconds: float | None = None,
         circuit_window_seconds: float | None = None,
         client: Any | None = None,
-    ) -> None:
+        ) -> None:
         if client:
             self.client = client
         else:
@@ -203,6 +204,7 @@ class S3StorageBackend(StorageBackend):
             )
         self.bucket = bucket
         self.max_payload_bytes = max_payload_bytes
+        self.public_base_url = public_base_url.rstrip("/") if public_base_url else None
         self._breaker: CircuitBreaker | None = None
         if enable_circuit_breaker:
             self._breaker = CircuitBreaker(
@@ -253,6 +255,9 @@ class S3StorageBackend(StorageBackend):
     async def generate_signed_get_url(
         self, *, key: str, expires_in: int, resource_url: str | None = None
     ) -> str:
+        if self.public_base_url:
+            return f"{self.public_base_url}/{key.lstrip('/')}"
+
         def _sign() -> str:
             return self.client.generate_presigned_url(
                 "get_object",

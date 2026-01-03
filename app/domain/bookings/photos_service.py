@@ -69,16 +69,17 @@ def _safe_component(value: str, field: str) -> str:
     return value
 
 
-def _target_filename(original_name: str | None) -> str:
+def _target_filename(photo_id: str, original_name: str | None) -> str:
     suffix = _safe_suffix(original_name)
-    return f"{uuid.uuid4().hex}{suffix}"
+    return f"{photo_id}{suffix}"
 
 
-def _storage_key(org_id: uuid.UUID, order_id: str, filename: str) -> str:
+def _storage_key(org_id: uuid.UUID, order_id: str, photo_id: str, original_name: str | None) -> str:
     safe_order = _safe_component(str(order_id), "order_id")
     safe_org = _safe_component(str(org_id), "org_id")
-    safe_filename = _safe_component(filename, "filename")
-    return f"orders/{safe_org}/{safe_order}/{safe_filename}"
+    safe_photo = _safe_component(str(photo_id), "photo_id")
+    suffix = _safe_suffix(original_name)
+    return f"org/{safe_org}/bookings/{safe_order}/{safe_photo}{suffix}"
 
 
 def _validate_content_type(content_type: str | None) -> str:
@@ -99,8 +100,9 @@ async def save_photo(
     storage: StorageBackend,
 ) -> OrderPhoto:
     content_type = _validate_content_type(upload.content_type)
-    filename = _target_filename(upload.filename)
-    key = _storage_key(org_id, order.booking_id, filename)
+    photo_id = str(uuid.uuid4())
+    filename = _target_filename(photo_id, upload.filename)
+    key = _storage_key(org_id, order.booking_id, photo_id, upload.filename)
     hasher = hashlib.sha256()
     size = 0
 
@@ -122,6 +124,7 @@ async def save_photo(
         await storage.put(key=key, body=_stream(), content_type=content_type)
 
         photo = OrderPhoto(
+            photo_id=photo_id,
             order_id=order.booking_id,
             org_id=org_id,
             phase=phase.value,
@@ -131,6 +134,8 @@ async def save_photo(
             size_bytes=size,
             sha256=hasher.hexdigest(),
             uploaded_by=uploaded_by,
+            storage_provider=settings.order_storage_backend,
+            storage_key=key,
         )
         session.add(photo)
 
@@ -216,7 +221,7 @@ async def delete_photo(
     record_usage: bool = False,
 ) -> OrderPhoto:
     photo = await get_photo(session, order_id, photo_id, org_id)
-    key = _storage_key(org_id, order_id, photo.filename)
+    key = storage_key_for_photo(photo, org_id)
     tombstone = OrderPhotoTombstone(
         org_id=org_id,
         order_id=order_id,
@@ -273,7 +278,9 @@ def allowed_mime_types() -> Iterable[str]:
 
 
 def storage_key_for_photo(photo: OrderPhoto, org_id: uuid.UUID) -> str:
-    return _storage_key(org_id, photo.order_id, photo.filename)
+    if getattr(photo, "storage_key", None):
+        return photo.storage_key
+    return _storage_key(org_id, photo.order_id, photo.photo_id, photo.original_filename or photo.filename)
 
 
 async def _record_tombstone_failure(
