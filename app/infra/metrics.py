@@ -32,6 +32,7 @@ class Metrics:
             self.job_heartbeat = None
             self.job_last_success = None
             self.job_runner_up = None
+            self.job_errors = None
             self.circuit_state = None
             return
 
@@ -102,6 +103,12 @@ class Metrics:
             ["job"],
             registry=self.registry,
         )
+        self.job_errors = Counter(
+            "job_errors_total",
+            "Job execution errors by job and reason.",
+            ["job", "reason"],
+            registry=self.registry,
+        )
         self.circuit_state = Gauge(
             "circuit_state",
             "Circuit breaker state (0=closed, 0.5=half-open, 1=open).",
@@ -160,6 +167,12 @@ class Metrics:
             return
         ts = timestamp if timestamp is not None else time.time()
         self.job_last_success.labels(job=job).set(ts)
+
+    def record_job_error(self, job: str, reason: str) -> None:
+        if not self.enabled or self.job_errors is None:
+            return
+        safe_reason = reason or "unknown"
+        self.job_errors.labels(job=job, reason=safe_reason).inc()
 
     def record_email_notification(self, template: str, status: str, count: int = 1) -> None:
         if not self.enabled or self.email_notifications is None:

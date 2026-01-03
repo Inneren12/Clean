@@ -1,10 +1,11 @@
 # Prometheus alerting rules for the Clean API.
 # Replace job/service labels to match your scrape configuration before deploying.
 groups:
-  - name: clean-service-availability
+  - name: clean-availability
     rules:
-      - alert: ServiceNotReady
-        expr: max_over_time(probe_success{job="clean-readyz"}[2m]) == 0
+      - alert: ReadyzFailures
+        expr: increase(http_5xx_total{path="/readyz"}[5m]) >= 1
+          and increase(http_request_latency_seconds_count{path="/readyz"}[5m]) >= 1
         for: 5m
         labels:
           severity: page
@@ -12,14 +13,14 @@ groups:
         annotations:
           summary: "Clean API readiness probe failing"
           description: |
-            The readiness probe on /readyz has returned non-200 responses for 5+ minutes.
-            Verify the API process is healthy and dependencies (DB, queues) are reachable.
-            Adjust the `job` label selector to your readiness probe job name.
+            /readyz has returned 5xx for 5 minutes. Check database connectivity,
+            migration status, and job heartbeat. See /v1/admin/jobs/status for job liveness.
 
       - alert: HighErrorRate
         expr: |
-          (sum(rate(http_5xx_total[5m])) / clamp_min(sum(rate(http_request_latency_seconds_count[5m])), 1)) > 0.02
-          and sum(rate(http_request_latency_seconds_count[5m])) > 0.2
+          (sum(rate(http_5xx_total{path!="/healthz",path!="/readyz"}[5m])) /
+            clamp_min(sum(rate(http_request_latency_seconds_count{path!="/healthz",path!="/readyz"}[5m])), 1)) > 0.02
+          and sum(rate(http_request_latency_seconds_count{path!="/healthz",path!="/readyz"}[5m])) > 0.2
         for: 10m
         labels:
           severity: page
@@ -27,58 +28,86 @@ groups:
         annotations:
           summary: "Clean API 5xx rate above 2%"
           description: |
-            More than 2% of requests are returning 5xx responses over the last 10 minutes
-            with at least 0.2 req/s of traffic. Check recent deployments, upstream dependencies,
-            and application logs for the offending paths.
+            More than 2% of requests are returning 5xx over the last 10 minutes.
+            Slice http_5xx_total and http_request_latency_seconds by path to isolate
+            offenders; correlate with recent deploys.
+
+      - alert: HighLatencyP99
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le)(rate(http_request_latency_seconds_bucket{path!="/healthz",path!="/readyz"}[5m]))
+          ) > 2
+        for: 10m
+        labels:
+          severity: ticket
+          service: clean
+        annotations:
+          summary: "P99 latency above 2s"
+          description: |
+            The 99th percentile HTTP latency is above 2s for 10 minutes.
+            Check slow endpoints and database performance.
 
   - name: clean-jobs
     rules:
       - alert: JobsRunnerStale
         expr: time() - job_last_heartbeat_timestamp{job="jobs-runner"} > 300
-        for: 2m
+        for: 5m
         labels:
           severity: page
           service: clean
         annotations:
           summary: "Jobs runner heartbeat missing"
           description: |
-            The jobs runner heartbeat is older than 5 minutes. Inspect the jobs-runner process
-            or container, restart if needed, and validate job success timestamps.
+            The jobs runner heartbeat is older than 5 minutes.
+            Restart the runner and verify /v1/admin/jobs/status updates.
 
-      - alert: EmailJobFailures
-        expr: increase(email_jobs_total{status="error"}[10m]) > 0
+      - alert: JobLoopFailures
+        expr: increase(job_errors_total[10m]) > 0
         for: 5m
         labels:
           severity: ticket
           service: clean
         annotations:
-          summary: "Email job errors detected"
+          summary: "Background job errors detected"
           description: |
-            Email jobs reported errors in the last 10 minutes. Check job logs for failures
-            (credentials, template rendering, network) and clear any DLQ backlog once fixed.
+            Background jobs have reported errors in the last 10 minutes.
+            Use /v1/admin/jobs/status to see failing jobs and replay DLQ items if needed.
 
-  - name: clean-integrations
-    rules:
-      - alert: StripeWebhookErrors
-        expr: increase(webhook_errors_total{type=~"invalid_signature|processing_error|payload_mismatch"}[10m]) > 3
+      - alert: JobSuccessStalled
+        expr: time() - job_last_success_timestamp{job!=""} > 900
         for: 10m
         labels:
           severity: ticket
           service: clean
         annotations:
-          summary: "Stripe webhook errors are spiking"
+          summary: "Job last success timestamp stale"
           description: |
-            Stripe webhook processing is failing repeatedly (signature, payload, or processing errors).
-            Confirm Stripe signing secret, review recent deploys, and replay events after mitigation.
+            A job has not reported success in 15 minutes. Check job logs
+            and rerun with python -m app.jobs.run --job <name> --once after fixes.
+
+  - name: clean-integrations
+    rules:
+      - alert: EmailDLQBacklog
+        expr: max_over_time(email_dlq_messages{status="dead"}[15m]) > 0
+        for: 15m
+        labels:
+          severity: ticket
+          service: clean
+        annotations:
+          summary: "Email dead-letter backlog detected"
+          description: |
+            email_dlq_messages{status="dead"} is non-zero. Investigate email
+            provider credentials and replay DLQ items once fixed.
 
       - alert: StripeCircuitOpen
         expr: max_over_time(circuit_state{circuit="stripe"}[5m]) == 1
         for: 5m
         labels:
-          severity: page
+          severity: ticket
           service: clean
         annotations:
           summary: "Stripe circuit breaker held open"
           description: |
-            Stripe circuit breaker has been open for 5+ minutes. Investigate upstream Stripe outages
-            or credential/network issues; requests will fail fast until the dependency recovers.
+            Stripe circuit breaker has been open for 5+ minutes. Inspect upstream
+            errors and retry once the dependency recovers.
