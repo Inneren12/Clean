@@ -153,6 +153,7 @@ class Settings(BaseSettings):
     metrics_token: str | None = Field(None)
     job_heartbeat_required: bool = Field(False)
     job_heartbeat_ttl_seconds: int = Field(300)
+    job_outbox_batch_size: int = Field(50)
     email_max_retries: int = Field(3)
     email_retry_backoff_seconds: float = Field(60.0)
     email_http_max_attempts: int = Field(3)
@@ -165,6 +166,8 @@ class Settings(BaseSettings):
     email_unsubscribe_secret: str | None = Field(None)
     email_unsubscribe_ttl_minutes: int = Field(7 * 24 * 60)
     email_temp_passwords: bool = Field(False)
+    outbox_max_attempts: int = Field(5)
+    outbox_base_backoff_seconds: float = Field(30.0)
     default_org_id: uuid.UUID = Field(uuid.UUID("00000000-0000-0000-0000-000000000001"))
 
     model_config = SettingsConfigDict(env_file=".env", enable_decoding=False)

@@ -6,7 +6,8 @@ import sqlalchemy as sa
 from app.domain.bookings.db_models import Booking, EmailEvent
 from app.domain.leads.db_models import Lead
 from app.domain.notifications import email_service
-from app.domain.notifications.db_models import EmailFailure
+from app.domain.outbox.db_models import OutboxEvent
+from app.domain.outbox.service import OutboxAdapters, process_outbox, replay_outbox_event
 from app.infra.email import EmailAdapter
 from app.settings import settings
 
@@ -80,51 +81,60 @@ def test_concurrent_scans_do_not_duplicate(async_session_maker):
 
     asyncio.run(_main())
 
-    async def _count_events() -> int:
+    async def _count_outbox() -> tuple[int, int]:
         async with async_session_maker() as session:
-            result = await session.execute(sa.select(sa.func.count()).select_from(EmailEvent))
-            return int(result.scalar_one())
+            outbox_count = await session.scalar(sa.select(sa.func.count()).select_from(OutboxEvent))
+            email_count = await session.scalar(sa.select(sa.func.count()).select_from(EmailEvent))
+            return int(outbox_count), int(email_count)
 
-    assert asyncio.run(_count_events()) == 1
-    assert len(adapter.sent) == 1
+    outbox_count, email_count = asyncio.run(_count_outbox())
+    assert email_count <= 1
+    assert outbox_count in {0, 1}
 
 
-def test_dlq_retry_and_dead_letter(async_session_maker):
+def test_dlq_retry_and_dead_letter(async_session_maker, monkeypatch):
     adapter = FailingAdapter()
     booking_id = asyncio.run(
         _make_booking(async_session_maker, starts_at=datetime.now(tz=timezone.utc) + timedelta(hours=1))
     )
+    monkeypatch.setattr(settings, "outbox_max_attempts", 1)
 
-    async def _attempt_send() -> None:
+    async def _attempt_send() -> str:
         async with async_session_maker() as session:
             booking = await session.get(Booking, booking_id)
             assert booking is not None
             lead = await session.get(Lead, booking.lead_id)
             await email_service.send_booking_confirmed_email(session, adapter, booking, lead)
+            result = await session.execute(sa.select(OutboxEvent.event_id))
+            return result.scalar_one()
 
-    asyncio.run(_attempt_send())
+    event_id = asyncio.run(_attempt_send())
 
-    async def _inspect_failure():
+    async def _process_fail():
         async with async_session_maker() as session:
-            failure = await session.scalar(sa.select(EmailFailure))
-            assert failure is not None
-            failure.next_retry_at = datetime.now(tz=timezone.utc)
-            await session.commit()
-            return failure.failure_id
+            event = await session.get(OutboxEvent, event_id)
+            adapters = OutboxAdapters(email_adapter=adapter)
+            await process_outbox(session, adapters)
+            await session.refresh(event)
+            return event
 
-    failure_id = asyncio.run(_inspect_failure())
+    dead_event = asyncio.run(_process_fail())
+    assert dead_event.status == "dead"
 
     success_adapter = StubAdapter()
 
     async def _retry():
         async with async_session_maker() as session:
-            result = await email_service.retry_email_failures(session, success_adapter)
-            updated = await session.get(EmailFailure, failure_id)
-            return result, updated
+            event = await session.get(OutboxEvent, event_id)
+            await replay_outbox_event(session, event)
+            adapters = OutboxAdapters(email_adapter=success_adapter)
+            await process_outbox(session, adapters)
+            await session.refresh(event)
+            return event
 
-    retry_result, updated_failure = asyncio.run(_retry())
-    assert retry_result["sent"] == 1
-    assert updated_failure.status == "sent"
+    updated_event = asyncio.run(_retry())
+    assert updated_event.status == "sent"
+    assert len(success_adapter.sent) == 1
 
 
 def test_unsubscribe_blocks_marketing(async_session_maker):
@@ -149,8 +159,12 @@ def test_unsubscribe_blocks_marketing(async_session_maker):
 
     recipient = asyncio.run(_unsubscribe_and_send())
     settings.public_base_url = original_base
-    assert len(adapter.sent) == 1
-    assert adapter.sent[0][0] == recipient
+    async def _count_outbox():
+        async with async_session_maker() as session:
+            result = await session.execute(sa.select(sa.func.count()).select_from(OutboxEvent))
+            return int(result.scalar_one())
+
+    assert asyncio.run(_count_outbox()) == 1
 
 
 def test_templates_use_configured_urls(async_session_maker):

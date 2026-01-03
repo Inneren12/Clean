@@ -18,6 +18,7 @@ from app.domain.invoices import service as invoice_service
 from app.domain.invoices.db_models import Invoice
 from app.domain.leads.db_models import Lead
 from app.domain.notifications.db_models import EmailFailure, Unsubscribe
+from app.domain.outbox.service import enqueue_outbox_event
 from app.infra.email import EmailAdapter
 from app.infra.metrics import metrics
 from app.settings import settings
@@ -432,34 +433,24 @@ async def _send_with_record(
         _record_email_metric(email_type, "skipped")
         return False
 
-    await session.commit()
-
-    delivered = await _try_send_email(
-        adapter,
-        lead.email,
-        subject,
-        body,
-        context={"booking_id": booking.booking_id, "email_type": email_type},
-        headers=headers,
-    )
-    if delivered:
-        return True
-
-    await _record_failure(
+    payload = {
+        "email_event_id": event_id,
+        "recipient": lead.email,
+        "subject": subject,
+        "body": body,
+        "headers": headers,
+        "context": {"booking_id": booking.booking_id, "email_type": email_type},
+    }
+    await enqueue_outbox_event(
         session,
-        event_id=event_id,
-        dedupe_key=dedupe_key,
-        email_type=email_type,
-        recipient=lead.email,
-        subject=subject,
-        body=body,
-        booking_id=booking.booking_id,
-        invoice_id=invoice_id,
         org_id=org_id,
-        error="send_failed",
+        kind="email",
+        payload=payload,
+        dedupe_key=dedupe_key,
     )
     await session.commit()
-    return False
+    _record_email_metric(email_type, "queued")
+    return True
 
 
 async def send_booking_pending_email(

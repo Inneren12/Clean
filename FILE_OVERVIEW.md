@@ -37,6 +37,7 @@
 - `app/domain/orders/service.py` – Order photo metadata, signed URLs, storage delete retries.
 - `app/domain/invoices/service.py` – Invoice creation, totals, and Stripe invoice linking.
 - `app/domain/notifications/service.py` – Email templates and dispatch orchestration.
+- `app/domain/outbox/service.py` – Org-scoped outbox enqueue + delivery with retries/backoff for email/webhook/export payloads.
 - `app/domain/analytics/service.py` – Event log recording and metrics aggregation.
 - `app/domain/saas/service.py` – SaaS user/org lifecycle, sessions, password reset, membership roles.
 - `app/domain/saas/billing_service.py` – Plan usage tracking, metered billing records, entitlements.
@@ -53,14 +54,16 @@
 - `app/infra/stripe_client.py` and `app/infra/stripe_resilience.py` – Stripe client with circuit breaker and retry policies.
 - `app/infra/storage/__init__.py` & `app/infra/storage/backends.py` – Storage backend factory for local/S3/R2/Cloudflare Images and signed URL helpers.
 - `app/infra/export.py` – Webhook/SaaS export transport with allowlist enforcement and retries.
+- `app/domain/outbox/db_models.py` – Outbox persistence for async delivery attempts.
 - `app/infra/captcha.py` – Cloudflare Turnstile verification helper.
 - `app/infra/metrics.py` – Metrics client and recording helpers for HTTP and jobs; used by middleware and jobs.
 - `app/infra/logging.py` – Structured logging setup for request/job logs.
 - `app/domain/ops/schemas.py` – Pydantic responses for ops-facing endpoints (job status, monitoring).
 
 ## Background jobs and ops
-- `app/jobs/run.py` – Entry to invoke scheduled jobs (email scan, retention cleanup, storage delete retries).
+- `app/jobs/run.py` – Entry to invoke scheduled jobs (email scan, retention cleanup, storage delete retries, outbox delivery).
 - `app/jobs/email_jobs.py` – Email reminder/scan logic for bookings.
+- `app/jobs/outbox.py` – Batch processor for due outbox events.
 - `app/jobs/storage_janitor.py` – Retry deletions for storage backends.
 - `app/jobs/heartbeat.py` – Record job heartbeat into DB and metrics.
 - `docker-compose.yml` – Dev stack for API + Postgres + Redis.
