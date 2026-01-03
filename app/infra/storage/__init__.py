@@ -58,9 +58,23 @@ def new_storage_backend() -> StorageBackend:
 
 
 def resolve_storage_backend(state: Any) -> StorageBackend:
+    config_signature = (
+        settings.order_storage_backend.lower(),
+        Path(settings.order_upload_root).resolve(),
+        settings.s3_bucket,
+        settings.s3_endpoint,
+        settings.r2_bucket,
+        settings.r2_endpoint,
+    )
     backend: StorageBackend | None = getattr(state, "storage_backend", None)
+    cached_signature = getattr(state, "storage_backend_config", None)
     if backend:
-        return backend
+        if cached_signature is None:
+            state.storage_backend_config = config_signature
+            return backend
+        if cached_signature == config_signature:
+            return backend
     backend = _new_backend()
     state.storage_backend = backend
+    state.storage_backend_config = config_signature
     return backend

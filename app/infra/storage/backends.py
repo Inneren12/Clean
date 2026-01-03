@@ -79,19 +79,58 @@ class LocalStorageBackend(StorageBackend):
         self.root = root
         self.signing_secret = signing_secret or "local-storage-secret"
 
-    def _resolve(self, key: str) -> Path:
+    def _fallback_keys(self, cleaned: str) -> list[str]:
+        fallbacks: list[str] = []
+        parts = cleaned.split("/")
+
+        if parts and parts[0] == "orders":
+            without_prefix = "/".join(parts[1:])
+            if without_prefix:
+                fallbacks.append(without_prefix)
+            if len(parts) >= 4:
+                org_part, order_part = parts[1], parts[2]
+                remaining = "/".join(parts[3:])
+                fallbacks.append(f"org/{org_part}/bookings/{order_part}/{remaining}")
+            if len(parts) >= 3:
+                fallbacks.append("orders/" + "/".join(parts[2:]))
+        elif parts and parts[0] == "org" and len(parts) >= 4 and parts[2] == "bookings":
+            org_part, order_part = parts[1], parts[3]
+            remaining = "/".join(parts[4:])
+            fallbacks.append(f"orders/{org_part}/{order_part}/{remaining}")
+        elif parts and parts[0] == "bookings" and len(parts) >= 2:
+            order_part = parts[1]
+            remaining = "/".join(parts[2:])
+            fallbacks.append(f"orders/{order_part}/{remaining}")
+
+        return [f for f in fallbacks if f]
+
+    def _resolve(self, key: str, *, create_parents: bool) -> Path:
         cleaned = key.lstrip("/")
-        candidate = (self.root / cleaned).resolve()
         root_resolved = self.root.resolve()
-        if not str(candidate).startswith(str(root_resolved)):
+        primary = (self.root / cleaned).resolve()
+        if not str(primary).startswith(str(root_resolved)):
             raise ValueError("Invalid storage key")
-        candidate.parent.mkdir(parents=True, exist_ok=True)
-        return candidate
+
+        if create_parents:
+            primary.parent.mkdir(parents=True, exist_ok=True)
+            return primary
+
+        if primary.exists():
+            return primary
+
+        for fallback in self._fallback_keys(cleaned):
+            candidate = (self.root / fallback).resolve()
+            if not str(candidate).startswith(str(root_resolved)):
+                continue
+            if candidate.exists():
+                return candidate
+
+        return primary
 
     async def put(
         self, *, key: str, body: AsyncIterator[bytes], content_type: str
     ) -> StoredObject:
-        path = self._resolve(key)
+        path = self._resolve(key, create_parents=True)
         size = 0
 
         async def _write() -> None:
@@ -105,7 +144,7 @@ class LocalStorageBackend(StorageBackend):
         return StoredObject(key=key, size=size, content_type=content_type)
 
     async def read(self, *, key: str) -> bytes:
-        path = self._resolve(key)
+        path = self._resolve(key, create_parents=False)
 
         def _read() -> bytes:
             return path.read_bytes()
@@ -113,7 +152,7 @@ class LocalStorageBackend(StorageBackend):
         return await asyncio.to_thread(_read)
 
     async def delete(self, *, key: str) -> None:
-        path = self._resolve(key)
+        path = self._resolve(key, create_parents=False)
         path.unlink(missing_ok=True)
 
     async def list(self, *, prefix: str = "") -> list[str]:
@@ -162,7 +201,7 @@ class LocalStorageBackend(StorageBackend):
         return hmac.compare_digest(expected, signature)
 
     def path_for(self, key: str) -> Path:
-        return self._resolve(key)
+        return self._resolve(key, create_parents=False)
 
 
 class S3StorageBackend(StorageBackend):

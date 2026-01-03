@@ -212,9 +212,61 @@ def test_upload_with_consent_and_download_auth(client, async_session_maker, uplo
     assert signed_fetch.content == b"hello-image"
 
     stored_files = list(
-        Path(upload_root / "org" / str(settings.default_org_id) / "bookings" / booking_id).glob("*")
+        Path(upload_root / "orders" / str(settings.default_org_id) / booking_id).glob("*")
     )
     assert stored_files, "uploaded file should be written to disk"
+
+
+def test_local_storage_writes_under_orders_prefix(client, async_session_maker, tmp_path, admin_headers):
+    original_backend = settings.order_storage_backend
+    original_root = settings.order_upload_root
+    original_storage = getattr(app.state, "storage_backend", None)
+    original_signature = getattr(app.state, "storage_backend_config", None)
+
+    try:
+        settings.order_storage_backend = "local"
+        stale_root = tmp_path / "stale"
+        fresh_root = tmp_path / "fresh"
+        settings.order_upload_root = str(stale_root)
+        app.state.storage_backend = LocalStorageBackend(root=stale_root)
+        app.state.storage_backend_config = (
+            settings.order_storage_backend,
+            stale_root.resolve(),
+            None,
+            None,
+            None,
+            None,
+        )
+
+        settings.order_upload_root = str(fresh_root)
+
+        booking_id = asyncio.run(_create_booking(async_session_maker, consent=True))
+        files = {"file": ("after.jpg", b"hello-image", "image/jpeg")}
+        response = client.post(
+            f"/v1/orders/{booking_id}/photos",
+            data={"phase": "AFTER"},
+            files=files,
+            headers=admin_headers,
+        )
+
+        assert response.status_code == 201
+        photo_id = response.json()["photo_id"]
+
+        stored_files = list(
+            Path(fresh_root / "orders" / str(settings.default_org_id) / booking_id).glob("*")
+        )
+        assert stored_files, "uploaded file should be persisted in org/order scoped folder"
+
+        download = client.get(
+            f"/v1/orders/{booking_id}/photos/{photo_id}/download", headers=admin_headers
+        )
+        assert download.status_code == 200
+        assert download.content == b"hello-image"
+    finally:
+        settings.order_storage_backend = original_backend
+        settings.order_upload_root = original_root
+        app.state.storage_backend = original_storage
+        app.state.storage_backend_config = original_signature
 
 
 def test_signed_download_requires_token(client, async_session_maker, upload_root, admin_headers):
@@ -272,7 +324,12 @@ def test_r2_backend_redirects_with_public_base(
 ):
     original_backend = settings.order_storage_backend
     original_storage = getattr(app.state, "storage_backend", None)
+    original_signature = getattr(app.state, "storage_backend_config", None)
     settings.order_storage_backend = "r2"
+    settings.r2_bucket = "test-bucket"
+    settings.r2_access_key = "ak"
+    settings.r2_secret_key = "sk"
+    settings.r2_endpoint = "https://example.invalid"
     app.state.storage_backend = S3StorageBackend(
         bucket="test-bucket",
         access_key="ak",
@@ -282,6 +339,7 @@ def test_r2_backend_redirects_with_public_base(
         public_base_url="https://cdn.example.com",
         client=FakeR2Client(),
     )
+    app.state.storage_backend_config = None
 
     try:
         booking_id = asyncio.run(_create_booking(async_session_maker, consent=True))
@@ -302,7 +360,7 @@ def test_r2_backend_redirects_with_public_base(
         photo = asyncio.run(_fetch_photo())
         assert photo is not None
         assert photo.storage_provider == "r2"
-        assert photo.storage_key.startswith("org/")
+        assert photo.storage_key.startswith("orders/")
 
         download = client.get(
             f"/v1/orders/{booking_id}/photos/{photo_id}/download",
@@ -317,6 +375,7 @@ def test_r2_backend_redirects_with_public_base(
     finally:
         settings.order_storage_backend = original_backend
         app.state.storage_backend = original_storage
+        app.state.storage_backend_config = original_signature
 
 
 def test_local_signed_url_validation_roundtrip(tmp_path):
@@ -480,6 +539,7 @@ def test_delete_failure_creates_tombstone_and_janitor_cleans(client, async_sessi
 
     storage = FailingDeleteStorage(upload_root)
     app.state.storage_backend = storage
+    app.state.storage_backend_config = None
 
     booking_id, photo_id, _ = _create_photo_with_signed_url(
         client, async_session_maker, upload_root, admin_headers

@@ -79,7 +79,7 @@ def _storage_key(org_id: uuid.UUID, order_id: str, photo_id: str, original_name:
     safe_org = _safe_component(str(org_id), "org_id")
     safe_photo = _safe_component(str(photo_id), "photo_id")
     suffix = _safe_suffix(original_name)
-    return f"org/{safe_org}/bookings/{safe_order}/{safe_photo}{suffix}"
+    return f"orders/{safe_org}/{safe_order}/{safe_photo}{suffix}"
 
 
 def _validate_content_type(content_type: str | None) -> str:
