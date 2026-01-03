@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, func
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infra.db import UUID_TYPE
@@ -26,7 +26,9 @@ class ExportEvent(Base):
     )
     lead_id: Mapped[str | None] = mapped_column(String(36))
     mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    target_url: Mapped[str | None] = mapped_column(String(512))
     target_url_host: Mapped[str | None] = mapped_column(String(255))
+    payload: Mapped[dict | None] = mapped_column(JSON)
     attempts: Mapped[int] = mapped_column(default=0, nullable=False)
     last_error_code: Mapped[str | None] = mapped_column(String(64))
     org_id: Mapped[uuid.UUID] = mapped_column(
@@ -35,6 +37,9 @@ class ExportEvent(Base):
         nullable=False,
         default=lambda: settings.default_org_id,
     )
+    replay_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    last_replayed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_replayed_by: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

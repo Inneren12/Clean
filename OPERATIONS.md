@@ -5,7 +5,7 @@
 2. Configure environment (`.env`) with DB URL, auth/portal secrets, Stripe/email keys, storage backend config, CORS/proxy settings.
 3. Build and start API (`docker-compose up -d` or `make up`); ensure volumes for uploads (`order_upload_root`).
 4. Run migrations inside the API container: `make migrate` (uses `alembic/` and `alembic.ini`).
-5. Start scheduled jobs (cron/Scheduler) calling: `/v1/admin/cleanup`, `/v1/admin/email-scan`, `/v1/admin/retention/cleanup`, `/v1/admin/export-dead-letter`, optional `storage_janitor` from `app/jobs/run.py`.
+5. Start scheduled jobs (cron/Scheduler) calling: `/v1/admin/cleanup`, `/v1/admin/email-scan`, `/v1/admin/retention/cleanup`, `/v1/admin/export-dead-letter`, optional `storage_janitor` from `app/jobs/run.py`. Monitor loop health via `/v1/admin/jobs/status` (heartbeats, last success, consecutive failures).
 6. Verify health endpoints and Stripe webhook secret; set `JOB_HEARTBEAT_REQUIRED=true` if monitoring job heartbeat.
 
 ## Environment variable groups
@@ -23,11 +23,11 @@
 - `GET /healthz` – liveness.
 - `GET /readyz` – checks DB connectivity, migration head vs `alembic/`, and job heartbeat when enabled (`app/api/routes_health.py`). Returns 503 on failure.
 - Metrics middleware records HTTP latency/5xx counts (`app/main.py`, `app/infra/metrics.py`). When metrics are enabled, `/v1/metrics` router exposes admin-protected metrics export.
+- Job metrics: `job_last_heartbeat_timestamp`, `job_last_success_timestamp`, and `job_errors_total` track scheduler health. View aggregated status via `/v1/admin/jobs/status`.
 
 ## Alerts and monitoring
-- Prometheus alert examples in `ops/prometheus/alerts.yml` (latency, error rate, readyz failures).
-- Track job heartbeat freshness and storage delete retry queues; alert on repeated Stripe/email circuit breaker opens (`app/infra/stripe_resilience.py`, `app/infra/email.py`).
+- Prometheus alert examples in `ops/prometheus/alerts.yml` (readyz 5xx, error rate, P99 latency, job failures, DLQ backlog, Stripe circuit breaker). See `docs/runbook_monitoring.md` and `docs/runbook_incidents.md` for response steps.
+- Track job heartbeat freshness and storage delete retry queues; alert on repeated Stripe/email circuit breaker opens (`app/infra/stripe_resilience.py`, `app/infra/email.py`). Use `/v1/admin/export-dead-letter` and `/v1/admin/export-dead-letter/{id}/replay` for DLQ backlog.
 
-## Backups and restores
-- Postgres backups should capture tenant-scoped tables (`org_id` columns). Validate restore before releases; ensure `alembic_version` matches after restore.
+- Postgres backups should capture tenant-scoped tables (`org_id` columns). Use `scripts/backup_pg.sh` (custom format, no `--create`) and `scripts/restore_pg.sh` (supports `ALLOW_CREATE_IN_DUMP=1` when the dump was made with `--create`). Validate restore before releases; ensure `alembic_version` matches after restore.
 - Storage backends: verify bucket access and signed URL keys; for local storage, include `order_upload_root` volume in backups.
