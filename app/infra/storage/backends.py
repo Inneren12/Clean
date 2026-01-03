@@ -11,6 +11,8 @@ from urllib.parse import parse_qsl, urlparse
 
 import boto3
 from botocore.client import Config
+import httpx
+from fastapi import HTTPException, status
 
 from app.settings import settings
 from app.shared.circuit_breaker import CircuitBreaker
@@ -60,7 +62,12 @@ class StorageBackend(ABC):
 
     @abstractmethod
     async def generate_signed_get_url(
-        self, *, key: str, expires_in: int, resource_url: str | None = None
+        self,
+        *,
+        key: str,
+        expires_in: int,
+        resource_url: str | None = None,
+        variant: str | None = None,
     ) -> str:
         """Generate a signed URL to fetch an object."""
 
@@ -192,7 +199,12 @@ class LocalStorageBackend(StorageBackend):
         return keys
 
     async def generate_signed_get_url(
-        self, *, key: str, expires_in: int, resource_url: str | None = None
+        self,
+        *,
+        key: str,
+        expires_in: int,
+        resource_url: str | None = None,
+        variant: str | None = None,
     ) -> str:
         if not resource_url:
             raise ValueError("resource_url required for local storage signed URLs")
@@ -318,7 +330,12 @@ class S3StorageBackend(StorageBackend):
         return keys
 
     async def generate_signed_get_url(
-        self, *, key: str, expires_in: int, resource_url: str | None = None
+        self,
+        *,
+        key: str,
+        expires_in: int,
+        resource_url: str | None = None,
+        variant: str | None = None,
     ) -> str:
         if self.public_base_url:
             return f"{self.public_base_url}/{key.lstrip('/')}"
@@ -366,7 +383,144 @@ class InMemoryStorageBackend(StorageBackend):
         return [k for k in self._objects if k.startswith(prefix)]
 
     async def generate_signed_get_url(
-        self, *, key: str, expires_in: int, resource_url: str | None = None
+        self,
+        *,
+        key: str,
+        expires_in: int,
+        resource_url: str | None = None,
+        variant: str | None = None,
     ) -> str:
         expires_at = int(time.time()) + expires_in
         return resource_url or f"https://example.invalid/{key}?exp={expires_at}"
+
+
+class CloudflareImagesStorageBackend(StorageBackend):
+    def __init__(
+        self,
+        *,
+        account_id: str,
+        api_token: str,
+        account_hash: str,
+        default_variant: str,
+        signing_key: str | None = None,
+        max_payload_bytes: int | None = None,
+        api_base_url: str = "https://api.cloudflare.com",
+        delivery_base_url: str = "https://imagedelivery.net",
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self.account_id = account_id
+        self.account_hash = account_hash
+        self.default_variant = default_variant
+        self.signing_key = signing_key
+        self.max_payload_bytes = max_payload_bytes
+        self.delivery_base_url = delivery_base_url.rstrip("/")
+        self.api_base_url = api_base_url.rstrip("/")
+        self.client = client or httpx.AsyncClient(
+            base_url=self.api_base_url,
+            headers={"Authorization": f"Bearer {api_token}"},
+            timeout=httpx.Timeout(10.0, connect=5.0),
+        )
+
+    async def put(
+        self, *, key: str, body: AsyncIterator[bytes], content_type: str
+    ) -> StoredObject:
+        buffer = bytearray()
+        async for chunk in body:
+            buffer.extend(chunk)
+            if self.max_payload_bytes and len(buffer) > self.max_payload_bytes:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail="File too large",
+                )
+        payload = bytes(buffer)
+
+        try:
+            response = await self.client.post(
+                f"/client/v4/accounts/{self.account_id}/images/v1",
+                files={"file": (Path(key).name or "upload", payload, content_type)},
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Cloudflare Images upload failed",
+            ) from exc
+
+        data: dict[str, Any]
+        try:
+            data = response.json()
+        except Exception:  # noqa: BLE001
+            data = {}
+
+        if response.status_code >= 500:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Cloudflare Images unavailable",
+            )
+
+        if not data.get("success"):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Cloudflare Images upload failed",
+            )
+
+        image_id = (data.get("result") or {}).get("id")
+        if not image_id:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Cloudflare Images upload failed",
+            )
+
+        return StoredObject(key=str(image_id), size=len(payload), content_type=content_type)
+
+    async def read(self, *, key: str) -> bytes:
+        raise HTTPException(
+            status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+            detail="Direct reads are not supported for Cloudflare Images",
+        )
+
+    async def delete(self, *, key: str) -> None:
+        try:
+            response = await self.client.delete(
+                f"/client/v4/accounts/{self.account_id}/images/v1/{key}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Cloudflare Images delete failed",
+            ) from exc
+
+        if response.status_code == 404:
+            return
+
+        data: dict[str, Any]
+        try:
+            data = response.json()
+        except Exception:  # noqa: BLE001
+            data = {}
+
+        if response.status_code >= 500 or not data.get("success", True):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Cloudflare Images delete failed",
+            )
+
+    async def list(self, *, prefix: str = "") -> list[str]:  # pragma: no cover - unused
+        return []
+
+    def _delivery_url(self, key: str, variant: str | None = None) -> str:
+        effective_variant = (variant or self.default_variant).strip("/") or self.default_variant
+        return f"{self.delivery_base_url}/{self.account_hash}/{key}/{effective_variant}"
+
+    async def generate_signed_get_url(
+        self,
+        *,
+        key: str,
+        expires_in: int,
+        resource_url: str | None = None,
+        variant: str | None = None,
+    ) -> str:
+        _ = expires_in, resource_url
+        return self._delivery_url(key, variant)
+
+    def supports_direct_io(self) -> bool:
+        return False
