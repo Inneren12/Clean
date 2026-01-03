@@ -13,6 +13,7 @@ from fastapi.security.utils import get_authorization_scheme_param
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.settings import settings
+from app.infra.logging import update_log_context
 from app.infra.org_context import set_current_org_id
 
 logger = logging.getLogger(__name__)
@@ -178,11 +179,21 @@ async def get_admin_identity(
     if cached:
         request.state.current_org_id = getattr(request.state, "current_org_id", None) or cached.org_id
         set_current_org_id(request.state.current_org_id)
+        org_for_log = request.state.current_org_id
+        payload: dict[str, str] = {"role": getattr(cached.role, "value", str(cached.role))}
+        if org_for_log:
+            payload["org_id"] = str(org_for_log)
+        update_log_context(**payload)
         return cached
     identity = _authenticate_credentials(credentials)
     request.state.admin_identity = identity
     request.state.current_org_id = getattr(request.state, "current_org_id", None) or identity.org_id
     set_current_org_id(request.state.current_org_id)
+    org_for_log = request.state.current_org_id
+    payload = {"role": getattr(identity.role, "value", str(identity.role))}
+    if org_for_log:
+        payload["org_id"] = str(org_for_log)
+    update_log_context(**payload)
     return identity
 
 

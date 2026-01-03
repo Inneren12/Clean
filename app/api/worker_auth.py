@@ -14,6 +14,7 @@ from fastapi.security.utils import get_authorization_scheme_param
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.settings import settings
+from app.infra.logging import update_log_context
 from app.infra.org_context import set_current_org_id
 
 logger = logging.getLogger(__name__)
@@ -176,6 +177,7 @@ async def get_worker_identity(
     request.state.worker_identity = identity
     request.state.current_org_id = getattr(request.state, "current_org_id", None) or identity.org_id
     set_current_org_id(request.state.current_org_id)
+    update_log_context(org_id=str(request.state.current_org_id), user_id=str(identity.username), role=identity.role)
     return identity
 
 
@@ -198,6 +200,9 @@ class WorkerAccessMiddleware(BaseHTTPMiddleware):
             request.state.worker_identity = identity
             request.state.current_org_id = getattr(request.state, "current_org_id", None) or identity.org_id
             set_current_org_id(request.state.current_org_id)
+            update_log_context(
+                org_id=str(request.state.current_org_id), user_id=str(identity.username), role=identity.role
+            )
             return await call_next(request)
         except HTTPException as exc:
             return await http_exception_handler(request, exc)

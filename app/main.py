@@ -42,12 +42,55 @@ from app.api.saas_auth import PasswordChangeGateMiddleware, TenantSessionMiddlew
 from app.domain.errors import DomainError
 from app.infra.db import get_session_factory
 from app.infra.email import EmailAdapter, resolve_email_adapter
-from app.infra.logging import configure_logging
+from app.infra.logging import clear_log_context, configure_logging, update_log_context
 from app.infra.metrics import configure_metrics, metrics
 from app.infra.security import RateLimiter, create_rate_limiter, resolve_client_key
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_log_identity(request: Request) -> dict[str, str]:
+    context: dict[str, str] = {}
+    org_id = getattr(request.state, "current_org_id", None)
+    user_id = getattr(request.state, "current_user_id", None)
+    saas_identity = getattr(request.state, "saas_identity", None)
+    worker_identity = getattr(request.state, "worker_identity", None)
+    admin_identity = getattr(request.state, "admin_identity", None)
+
+    if saas_identity:
+        role = getattr(saas_identity, "role", None)
+        role_value = getattr(role, "value", role)
+        if role_value:
+            context["role"] = str(role_value)
+        resolved_org = org_id or getattr(saas_identity, "org_id", None)
+        resolved_user = user_id or getattr(saas_identity, "user_id", None)
+        if resolved_org:
+            context["org_id"] = str(resolved_org)
+        if resolved_user:
+            context["user_id"] = str(resolved_user)
+    elif admin_identity:
+        admin_role = getattr(admin_identity, "role", None)
+        admin_role_value = getattr(admin_role, "value", admin_role)
+        if admin_role_value:
+            context["role"] = str(admin_role_value)
+        admin_org = org_id or getattr(admin_identity, "org_id", None)
+        if admin_org:
+            context["org_id"] = str(admin_org)
+    elif worker_identity:
+        context["role"] = "worker"
+        worker_org = org_id or getattr(worker_identity, "org_id", None)
+        if worker_org:
+            context["org_id"] = str(worker_org)
+        worker_id = user_id or getattr(worker_identity, "worker_id", None)
+        if worker_id:
+            context["user_id"] = str(worker_id)
+    else:
+        if org_id:
+            context["org_id"] = str(org_id)
+        if user_id:
+            context["user_id"] = str(user_id)
+    return context
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
@@ -63,21 +106,26 @@ class LoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable):
         logger = logging.getLogger("app.request")
         start = time.time()
-        response = await call_next(request)
-        latency_ms = int((time.time() - start) * 1000)
-        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request_id = getattr(request.state, "request_id", None) or request.headers.get("X-Request-ID")
+        if not request_id:
+            request_id = str(uuid.uuid4())
         request.state.request_id = request_id
-        logger.info(
-            "request",
-            extra={
-                "request_id": request_id,
-                "method": request.method,
-                "path": request.url.path,
-                "status_code": response.status_code,
-                "latency_ms": latency_ms,
-            },
-        )
-        return response
+        update_log_context(request_id=request_id, method=request.method, path=request.url.path)
+
+        response = None
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        finally:
+            identity_context = _resolve_log_identity(request)
+            update_log_context(status_code=status_code, **identity_context)
+            latency_ms = int((time.time() - start) * 1000)
+            logger.info("request", extra={"latency_ms": latency_ms})
+            if response is not None:
+                response.headers.setdefault("X-Request-ID", request_id)
+            clear_log_context()
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

@@ -3,7 +3,7 @@
 ## Coding patterns
 - **Keep logic in domain services** (`app/domain/**`) and surface via routers; avoid DB writes directly in routers.
 - **Typing**: use explicit types and dataclasses/Pydantic models where present; mirror existing function signatures.
-- **Logging**: prefer structured logging via `logging.getLogger` with `extra` payloads (see `app/main.py` and `app/infra/logging.py`). Do not log secrets or tokens.
+- **Logging**: prefer structured logging via `logging.getLogger` with `extra` payloads (see `app/main.py` and `app/infra/logging.py`). Do not log secrets or tokens. Logging is JSON-formatted with automatic redaction of emails, phone numbers, street addresses, bearer/Authorization values, signed URLs, and `token`/`signature` query parameters; always log identifiers (request_id/org_id/user_id/role) instead of payloads.
 - **Errors**: raise `DomainError` for business failures; HTTP errors use the shared `problem_details` factory (`app/api/problem_details.py`) so every error includes `type`, `title`, `status`, `detail`, `request_id`, and `errors`.
 - **Status codes**: follow existing patterns—422 for validation, 400/409 for business conflicts, 401/403 for auth/permission, 402 for plan limits, 404 for missing resources.
 - **No broad refactors**: preserve router/service boundaries and existing public schemas; prefer additive, minimal diffs.
@@ -48,3 +48,4 @@
 - Do not hardcode secrets, API keys, or Stripe/email credentials.
 - Do not remove health/readyz checks or metrics middleware.
 - Do not delete retention/cleanup/export/email cron endpoints; schedulers depend on them.
+- Do not log Authorization headers, signed URLs, raw tokens (JWTs, refresh, photo, export/webhook), or unredacted emails/phone numbers/addresses.

@@ -13,6 +13,7 @@ from app.api.problem_details import problem_details
 from app.domain.saas import service as saas_service
 from app.domain.saas.db_models import Membership, MembershipRole, User
 from app.infra.auth import decode_access_token
+from app.infra.logging import update_log_context
 from app.infra.org_context import set_current_org_id
 
 logger = logging.getLogger(__name__)
@@ -146,6 +147,7 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
             request.state.current_user_id = identity.user_id
             request.state.current_org_id = identity.org_id
             set_current_org_id(identity.org_id)
+            update_log_context(org_id=str(identity.org_id), user_id=str(identity.user_id), role=str(identity.role))
             admin_role = ROLE_TO_ADMIN_ROLE.get(identity.role)
             if admin_role:
                 request.state.admin_identity = AdminIdentity(

@@ -37,7 +37,7 @@
 - **Photos/files**: access via signed URLs or tokenized download endpoints; TTL and MIME/size limits enforced (`app/api/photo_tokens.py`, `app/infra/storage/backends.py`).
 - **Invoices and payments**: invoice tokens HMAC-signed and scoped to invoice ID/org (`app/api/routes_payments.py`).
 - **Exports**: outbound webhooks restricted by allowlist and optional HTTPS enforcement (`app/infra/export.py`).
-- **PII**: avoid logging PII; request logging uses request_id/paths without body dumps by default.
+- **PII**: avoid logging PII; request logging uses request_id/paths without body dumps by default. Structured logs automatically redact emails, phone numbers, street addresses, Authorization headers, bearer tokens, and signed URL/query tokens.
 
 ## Rate limiting and abuse protection
 - Per-client limits default to `RATE_LIMIT_PER_MINUTE`; captcha available for `/v1/leads` when `captcha_mode=turnstile` to deter spam (`app/infra/captcha.py`, `app/api/routes_leads.py`).
