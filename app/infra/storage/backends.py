@@ -437,6 +437,7 @@ class CloudflareImagesStorageBackend(StorageBackend):
         try:
             response = await self.client.post(
                 f"/client/v4/accounts/{self.account_id}/images/v1",
+                data={"requireSignedURLs": "true"},
                 files={"file": (Path(key).name or "upload", payload, content_type)},
             )
         except Exception as exc:  # noqa: BLE001
@@ -519,8 +520,20 @@ class CloudflareImagesStorageBackend(StorageBackend):
         resource_url: str | None = None,
         variant: str | None = None,
     ) -> str:
-        _ = expires_in, resource_url
-        return self._delivery_url(key, variant)
+        if not self.signing_key:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Cloudflare Images signing key not configured",
+            )
+
+        base = self._delivery_url(key, variant)
+        exp = int(time.time()) + expires_in
+        parsed = urlparse(base)
+        query = f"exp={exp}"
+        to_sign = f"{parsed.path}?{query}"
+        sig = hmac.new(self.signing_key.encode(), to_sign.encode(), hashlib.sha256).hexdigest()
+        final_query = f"{query}&sig={sig}"
+        return parsed._replace(query=final_query).geturl()
 
     def supports_direct_io(self) -> bool:
         return False

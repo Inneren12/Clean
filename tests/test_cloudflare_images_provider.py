@@ -3,6 +3,10 @@ import base64
 import uuid
 from datetime import datetime, timezone
 
+import hashlib
+import hmac
+from urllib.parse import parse_qsl, urlparse
+
 import httpx
 import pytest
 from sqlalchemy import select
@@ -27,6 +31,7 @@ def _configure_cf_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "cf_images_api_token", "secret-token")
     monkeypatch.setattr(settings, "cf_images_default_variant", "public")
     monkeypatch.setattr(settings, "cf_images_thumbnail_variant", "thumbnail")
+    monkeypatch.setattr(settings, "cf_images_signing_key", "cf-signing-key")
     monkeypatch.setattr(settings, "auth_secret_key", "cf-photo-secret")
     monkeypatch.setattr(settings, "admin_basic_username", "admin")
     monkeypatch.setattr(settings, "admin_basic_password", "secret")
@@ -122,10 +127,17 @@ def test_cloudflare_images_upload_and_redirect(
         f"/v1/orders/{booking_id}/photos/{photo_id}/download", headers=headers, allow_redirects=False
     )
     assert download.status_code == 307, download.text
-    assert (
-        download.headers["location"]
-        == "https://imagedelivery.net/hash-abc/img-123/public"
-    )
+    location = download.headers["location"]
+    parsed = urlparse(location)
+    assert parsed.path == "/hash-abc/img-123/public"
+    params = dict(parse_qsl(parsed.query))
+    assert "exp" in params and "sig" in params
+    expected_sig = hmac.new(
+        settings.cf_images_signing_key.encode(),
+        f"{parsed.path}?exp={params['exp']}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    assert params["sig"] == expected_sig
 
     asyncio.run(backend.client.aclose())
 

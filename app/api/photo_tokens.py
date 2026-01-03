@@ -1,71 +1,170 @@
+import base64
+import hashlib
+import hmac
+import json
 import secrets
+import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Tuple
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from typing import Any
 
-import jwt
-from fastapi import HTTPException, status
+import redis.asyncio as redis
+from fastapi import HTTPException, Request, status
 
-from app.domain.bookings import photos_service
 from app.domain.bookings.schemas import SignedUrlResponse
 from app.settings import settings
 
 
-def _append_query(url: str, **params: str) -> str:
-    parsed = urlparse(url)
-    existing_query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-    merged = {**existing_query, **params}
-    new_query = urlencode(merged, doseq=True)
-    return urlunparse(parsed._replace(query=new_query))
+@dataclass
+class PhotoTokenClaims:
+    org_id: uuid.UUID
+    order_id: str
+    photo_id: str
+    exp: int
+    ua_hash: str | None = None
 
 
-def build_photo_download_token(*, org_id: uuid.UUID, order_id: str, photo_id: str) -> str:
-    now = datetime.now(tz=timezone.utc)
-    payload = {
-        "org_id": str(org_id),
-        "order_id": order_id,
-        "photo_id": photo_id,
-        "typ": "photo_download",
-        "jti": secrets.token_hex(8),
-        "iat": now,
-        "exp": now + timedelta(seconds=settings.order_photo_signed_url_ttl_seconds),
-    }
-    return jwt.encode(payload, settings.auth_secret_key, algorithm="HS256")
+_redis_client: redis.Redis | None = None
 
 
-def verify_photo_download_token(token: str) -> Tuple[uuid.UUID, str, str]:
+def _photo_signing_secret() -> str:
+    return (
+        settings.photo_token_secret
+        or settings.order_photo_signing_secret
+        or settings.auth_secret_key
+    )
+
+
+def _now() -> datetime:
+    return datetime.now(tz=timezone.utc)
+
+
+def _hash_user_agent(user_agent: str | None) -> str:
+    return hashlib.sha256((user_agent or "").encode()).hexdigest()
+
+
+def _encode_payload(payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    b64 = base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+    sig = hmac.new(_photo_signing_secret().encode(), raw, hashlib.sha256).hexdigest()
+    return f"{b64}.{sig}"
+
+
+def _decode_payload(token: str) -> tuple[dict[str, Any], str]:
+    if "." not in token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+    encoded, provided_sig = token.rsplit(".", 1)
+    padding = "=" * (-len(encoded) % 4)
     try:
-        payload = jwt.decode(token, settings.auth_secret_key, algorithms=["HS256"])
-    except jwt.ExpiredSignatureError as exc:  # pragma: no cover - defensive
+        raw = base64.urlsafe_b64decode(encoded + padding)
+    except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token") from exc
-    except jwt.InvalidTokenError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token") from exc
-
+    expected = hmac.new(_photo_signing_secret().encode(), raw, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, provided_sig):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
     try:
-        typ = payload["typ"]
-        if typ != "photo_download":
-            raise KeyError("Invalid token type")
+        payload = json.loads(raw.decode())
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token") from exc
+    return payload, provided_sig
 
+
+def _parse_claims(payload: dict[str, Any]) -> PhotoTokenClaims:
+    try:
         org_id = uuid.UUID(payload["org_id"])
-        order_id = payload["order_id"]
-        photo_id = payload["photo_id"]
-        if not isinstance(order_id, str) or not isinstance(photo_id, str):
-            raise TypeError("Invalid token payload")
-        order_id = order_id.strip()
-        photo_id = photo_id.strip()
+        order_id = str(payload["order_id"]).strip()
+        photo_id = str(payload["photo_id"]).strip()
+        exp = int(payload["exp"])
+        ua_hash = payload.get("ua")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token") from exc
 
     if not order_id or not photo_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
-    return org_id, order_id, photo_id
+    return PhotoTokenClaims(org_id=org_id, order_id=order_id, photo_id=photo_id, exp=exp, ua_hash=ua_hash)
 
 
-async def build_signed_photo_response(photo, request, storage, org_id: uuid.UUID) -> SignedUrlResponse:
-    ttl = settings.order_photo_signed_url_ttl_seconds
-    expires_at = datetime.now(tz=timezone.utc) + timedelta(seconds=ttl)
+def _ttl_seconds(exp: int) -> int:
+    now_ts = int(time.time())
+    remaining = exp - now_ts
+    if remaining <= 0:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+    return remaining
+
+
+def build_photo_download_token(
+    *,
+    org_id: uuid.UUID,
+    order_id: str,
+    photo_id: str,
+    user_agent: str | None = None,
+    ttl_seconds: int | None = None,
+) -> str:
+    now = _now()
+    ttl = ttl_seconds or settings.photo_url_ttl_seconds
+    exp = int((now + timedelta(seconds=ttl)).timestamp())
+    payload: dict[str, Any] = {
+        "org_id": str(org_id),
+        "order_id": order_id,
+        "photo_id": photo_id,
+        "exp": exp,
+        "typ": "photo_download",
+        "jti": secrets.token_hex(8),
+    }
+    if settings.photo_token_bind_ua:
+        payload["ua"] = _hash_user_agent(user_agent)
+    return _encode_payload(payload)
+
+
+async def _redis() -> redis.Redis | None:
+    global _redis_client
+    if _redis_client is not None:
+        return _redis_client
+    if not settings.redis_url:
+        return None
+    _redis_client = redis.from_url(settings.redis_url, encoding="utf-8", decode_responses=False)
+    return _redis_client
+
+
+async def _enforce_one_time(signature: str, ttl: int) -> None:
+    if not settings.photo_token_one_time:
+        return
+    client = await _redis()
+    if client is None:
+        return
+    key = f"photo-token:{signature}"
+    try:
+        created = await client.set(key, b"1", ex=max(ttl, 1), nx=True)
+    except Exception:  # noqa: BLE001
+        return
+    if not created:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Download link already used")
+
+
+async def verify_photo_download_token(token: str, *, user_agent: str | None = None) -> PhotoTokenClaims:
+    payload, signature = _decode_payload(token)
+    if payload.get("typ") != "photo_download":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+    claims = _parse_claims(payload)
+    if claims.ua_hash is not None:
+        current_ua_hash = _hash_user_agent(user_agent)
+        if not hmac.compare_digest(claims.ua_hash, current_ua_hash):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+    ttl = _ttl_seconds(claims.exp)
+    await _enforce_one_time(signature, ttl)
+    return claims
+
+
+async def build_signed_photo_response(
+    photo,
+    request: Request,
+    storage,
+    org_id: uuid.UUID,
+) -> SignedUrlResponse:
+    ttl = settings.photo_url_ttl_seconds
+    expires_at = _now() + timedelta(seconds=ttl)
     download_url = str(
         request.url_for(
             "signed_download_order_photo",
@@ -73,14 +172,20 @@ async def build_signed_photo_response(photo, request, storage, org_id: uuid.UUID
             photo_id=photo.photo_id,
         )
     )
-    token = build_photo_download_token(org_id=org_id, order_id=photo.order_id, photo_id=photo.photo_id)
-    download_url_with_token = _append_query(download_url, token=token)
-
-    key = photos_service.storage_key_for_photo(photo, org_id)
-    signed_url = await storage.generate_signed_get_url(
-        key=key,
-        expires_in=ttl,
-        resource_url=download_url_with_token,
+    token = build_photo_download_token(
+        org_id=org_id,
+        order_id=photo.order_id,
+        photo_id=photo.photo_id,
+        user_agent=request.headers.get("user-agent"),
+        ttl_seconds=ttl,
     )
+    download_url_with_token = f"{download_url}?token={token}"
 
-    return SignedUrlResponse(url=signed_url, expires_at=expires_at)
+    # Maintain compatibility with backends that need resource hints for downstream signing
+    if hasattr(storage, "prepare_signed_download"):
+        try:
+            await storage.prepare_signed_download(key=photo.storage_key, resource_url=download_url_with_token)
+        except Exception:
+            pass
+
+    return SignedUrlResponse(url=download_url_with_token, expires_at=expires_at, expires_in=ttl)

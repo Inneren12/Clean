@@ -93,6 +93,7 @@ def resolve_storage_backend(state: Any) -> StorageBackend:
         settings.cf_images_account_hash,
         settings.cf_images_default_variant,
         settings.cf_images_api_token,
+        settings.cf_images_signing_key,
     )
     backend: StorageBackend | None = getattr(state, "storage_backend", None)
     cached_signature = getattr(state, "storage_backend_config", None)
