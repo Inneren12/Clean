@@ -5,6 +5,8 @@
 - Smoke subset: `pytest -m "smoke"` (DB-backed flows such as bookings/deposits).
 - Migration invariants: `pytest -m "migrations"`.
 - Targeted modules: `pytest tests/test_estimate_api.py`, etc. Use `PYTEST_ADDOPTS` to pass `-k` selectors.
+- Org-scope regressions: `pytest tests/test_org_scope_regression_suite.py` to assert org isolation for finance/payments, IAM resets, exports, and signed photo URLs.
+- Metrics contracts: `pytest tests/test_metrics_endpoint.py -k metrics_path_label` to ensure HTTP metrics use templated route labels.
 
 ## Markers
 Defined in `pytest.ini`:
@@ -25,6 +27,7 @@ Defined in `pytest.ini`:
 ## CI expectations
 - `.github/workflows/ci.yml` runs lint/unit/integration and migration checks; ensure new tests are deterministic.
 - `load-smoke.yml` provides load/smoke guidance; avoid adding long-running benchmarks.
+- Migration guardrails: `pytest -m "migrations"` enforces a single Alembic head (`test_alembic_has_single_head`) and upgradeability.
 
 ## Troubleshooting
 - If rate limiter blocks tests, set `RATE_LIMIT_PER_MINUTE` high or disable Redis to use in-memory limiter (`app/infra/security.py`).

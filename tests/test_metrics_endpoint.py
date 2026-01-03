@@ -37,3 +37,18 @@ def test_metrics_path_label_uses_route_template(client_no_raise):
     assert any(sample.labels.get("path") == "/boom/{item_id}" for sample in samples)
 
     app.router.routes = [route for route in app.router.routes if getattr(route, "path", None) != "/boom/{item_id}"]
+
+
+def test_metrics_unmatched_path_uses_placeholder(client_no_raise):
+    settings.metrics_token = None
+    settings.app_env = "dev"
+    configure_metrics(True)
+
+    response = client_no_raise.get("/does-not-exist/12345/abc")
+    assert response.status_code == 404
+
+    samples = []
+    for metric in app.state.metrics.http_latency.collect():
+        samples.extend(metric.samples)
+
+    assert any(sample.labels.get("path") == "unmatched" for sample in samples)
