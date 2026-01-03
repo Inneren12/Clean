@@ -20,6 +20,7 @@ from app.domain.invoices import schemas as invoice_schemas, service as invoice_s
 from app.domain.invoices.db_models import Invoice, StripeEvent
 from app.domain.saas import billing_service
 from app.domain.saas.plans import get_plan
+from app.infra.email import resolve_app_email_adapter
 from app.infra import stripe_client as stripe_infra
 from app.infra.db import get_db_session
 from app.infra.metrics import metrics
@@ -28,6 +29,15 @@ from app.settings import settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _stripe_client(request: Request):
+    if getattr(request.app.state, "stripe_client", None):
+        return request.app.state.stripe_client
+    services = getattr(request.app.state, "services", None)
+    if services and getattr(services, "stripe_client", None):
+        return services.stripe_client
+    return stripe_infra.resolve_client(request.app.state)
 
 
 class StripeOrgResolutionError(Exception):
@@ -475,7 +485,7 @@ async def create_deposit_checkout(
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Stripe not configured")
 
-    stripe_client = stripe_infra.resolve_client(http_request.app.state)
+    stripe_client = _stripe_client(http_request)
     metadata = {"booking_id": booking.booking_id}
     try:
         checkout_session = await stripe_infra.call_stripe_client_method(
@@ -555,7 +565,7 @@ async def create_invoice_payment_checkout(
     if outstanding <= 0:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invoice already paid")
 
-    stripe_client = stripe_infra.resolve_client(http_request.app.state)
+    stripe_client = _stripe_client(http_request)
     try:
         checkout_session = await stripe_infra.call_stripe_client_method(
             stripe_client,
@@ -625,7 +635,7 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
     if not settings.stripe_webhook_secret:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Stripe webhook disabled")
 
-    stripe_client = stripe_infra.resolve_client(http_request.app.state)
+    stripe_client = _stripe_client(http_request)
     try:
         event = await stripe_infra.call_stripe_client_method(
             stripe_client, "verify_webhook", payload=payload, signature=sig_header
@@ -728,7 +738,7 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
 
         try:
             processed = await _handle_webhook_event(
-                session, event, getattr(http_request.app.state, "email_adapter", None), ctx
+                session, event, resolve_app_email_adapter(http_request), ctx
             )
             record.status = "succeeded" if processed else "ignored"
         except Exception as exc:  # noqa: BLE001

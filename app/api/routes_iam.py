@@ -11,6 +11,7 @@ from app.api.saas_auth import SaaSIdentity, require_permissions
 from app.domain.saas import service as saas_service
 from app.domain.saas.db_models import Membership, MembershipRole, Organization, PasswordResetEvent, User
 from app.infra.db import get_db_session
+from app.infra.email import resolve_app_email_adapter
 from app.settings import settings
 
 router = APIRouter(prefix="/v1/iam", tags=["iam"])
@@ -163,7 +164,7 @@ async def reset_temp_password(
     )
     session.add(event)
 
-    adapter = getattr(request.app.state, "email_adapter", None)
+    adapter = resolve_app_email_adapter(request)
     if adapter:
         subject = "Your account password was reset"
         if settings.email_temp_passwords:

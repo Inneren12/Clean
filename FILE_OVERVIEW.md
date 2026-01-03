@@ -2,6 +2,7 @@
 
 ## Application wiring
 - `app/main.py` – FastAPI app factory, middleware stack (request id → rate limit → metrics → logging → security headers → tenant/password gates → admin/worker middleware), router registration, error handlers.
+- `app/services.py` – Typed `AppServices` container for storage, email, Stripe, rate limiter, and metrics attached to `app.state.services` during FastAPI lifespan startup.
 - `app/dependencies.py` – Common FastAPI dependencies (settings, rate limiter, metrics, export/email resolvers).
 - `app/settings.py` – Pydantic settings for envs, auth, storage, Stripe, email, rate limiting, retention, metrics, and default org.
 

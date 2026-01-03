@@ -14,11 +14,21 @@ from app.domain.invoices import schemas as invoice_schemas, service as invoice_s
 from app.domain.nps import service as nps_service
 from app.domain.notifications import email_service
 from app.infra.db import get_db_session
+from app.infra.email import resolve_app_email_adapter
 from app.infra import stripe as stripe_infra
 from app.settings import settings
 
 router = APIRouter(include_in_schema=False)
 logger = logging.getLogger(__name__)
+
+
+def _stripe_client(request: Request):
+    if getattr(request.app.state, "stripe_client", None):
+        return request.app.state.stripe_client
+    services = getattr(request.app.state, "services", None)
+    if services and getattr(services, "stripe_client", None):
+        return services.stripe_client
+    return stripe_infra.resolve_client(request.app.state)
 
 
 def _format_currency(cents: int, currency: str) -> str:
@@ -218,7 +228,7 @@ async def submit_nps(
             comment=comment,
             client=client,
         )
-        adapter = getattr(request.app.state, "email_adapter", None) if request else None
+        adapter = resolve_app_email_adapter(request) if request else None
         recipient = settings.admin_notification_email
         if adapter and recipient:
             subject = f"Support ticket created for order {booking.booking_id}"
@@ -396,7 +406,7 @@ async def create_invoice_payment(
         raise HTTPException(status_code=409, detail="Invoice already paid")
 
     lead = await invoice_service.fetch_customer(session, invoice)
-    stripe_client = stripe_infra.resolve_client(http_request.app.state)
+    stripe_client = _stripe_client(http_request)
     checkout_session = await stripe_infra.create_checkout_session(
         stripe_client=stripe_client,
         secret_key=settings.stripe_secret_key,

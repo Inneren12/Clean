@@ -24,10 +24,20 @@ from app.domain.leads.db_models import Lead
 from app.domain.clients import service as client_service
 from app.domain.notifications import email_service
 from app.infra import stripe as stripe_infra
+from app.infra.email import resolve_app_email_adapter
 from app.settings import settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _stripe_client(request: Request):
+    if getattr(request.app.state, "stripe_client", None):
+        return request.app.state.stripe_client
+    services = getattr(request.app.state, "services", None)
+    if services and getattr(services, "stripe_client", None):
+        return services.stripe_client
+    return stripe_infra.resolve_client(request.app.state)
 
 
 @router.get("/v1/slots", response_model=booking_schemas.SlotAvailabilityResponse)
@@ -271,7 +281,7 @@ async def create_booking(
         )
 
     checkout_url: str | None = None
-    email_adapter = getattr(http_request.app.state, "email_adapter", None)
+    email_adapter = resolve_app_email_adapter(http_request)
     booking: Booking | None = None
 
     try:
@@ -323,7 +333,7 @@ async def create_booking(
                 )
 
             if deposit_decision.required and deposit_decision.deposit_cents:
-                stripe_client = stripe_infra.resolve_client(http_request.app.state)
+                stripe_client = _stripe_client(http_request)
                 metadata = {"booking_id": booking.booking_id}
                 if booking.lead_id:
                     metadata["lead_id"] = booking.lead_id

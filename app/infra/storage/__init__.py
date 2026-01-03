@@ -82,6 +82,8 @@ def new_storage_backend() -> StorageBackend:
 
 
 def resolve_storage_backend(state: Any) -> StorageBackend:
+    container_state = getattr(state, "state", state)
+    services = getattr(container_state, "services", None)
     config_signature = (
         settings.order_storage_backend.lower(),
         Path(settings.order_upload_root).resolve(),
@@ -95,15 +97,24 @@ def resolve_storage_backend(state: Any) -> StorageBackend:
         settings.cf_images_api_token,
         settings.cf_images_signing_key,
     )
-    backend: StorageBackend | None = getattr(state, "storage_backend", None)
-    cached_signature = getattr(state, "storage_backend_config", None)
-    if backend:
-        if cached_signature is None:
-            state.storage_backend_config = config_signature
-            return backend
-        if cached_signature == config_signature:
-            return backend
+    service_storage = getattr(services, "storage", None)
+    backend: StorageBackend | None = getattr(container_state, "storage_backend", None) or service_storage
+    cached_signature = getattr(container_state, "storage_backend_config", None)
+    is_override = backend is not None and backend is not service_storage
+
+    if backend is not None and cached_signature == config_signature:
+        if services is not None:
+            services.storage = backend
+        return backend
+    if backend is not None and cached_signature is None and is_override:
+        container_state.storage_backend_config = config_signature
+        if services is not None:
+            services.storage = backend
+        return backend
+
     backend = _new_backend()
-    state.storage_backend = backend
-    state.storage_backend_config = config_signature
+    container_state.storage_backend = backend
+    container_state.storage_backend_config = config_signature
+    if services is not None:
+        services.storage = backend
     return backend

@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import uuid
+from contextlib import asynccontextmanager
 from typing import Callable, Iterable
 
 from fastapi import FastAPI, HTTPException, Request
@@ -41,11 +42,12 @@ from app.api.problem_details import (
 from app.api.saas_auth import PasswordChangeGateMiddleware, TenantSessionMiddleware
 from app.domain.errors import DomainError
 from app.infra.db import get_session_factory
-from app.infra.email import EmailAdapter, resolve_email_adapter
+from app.infra.email import EmailAdapter
 from app.infra.logging import clear_log_context, configure_logging, update_log_context
 from app.infra.metrics import configure_metrics, metrics
-from app.infra.security import RateLimiter, create_rate_limiter, resolve_client_key
+from app.infra.security import RateLimiter, resolve_client_key
 from app.settings import settings
+from app.services import build_app_services
 
 logger = logging.getLogger(__name__)
 
@@ -261,23 +263,29 @@ def create_app(app_settings) -> FastAPI:
     configure_logging()
     metrics_client = configure_metrics(app_settings.metrics_enabled)
     _validate_prod_config(app_settings)
-    app = FastAPI(title="Cleaning Economy Bot", version="1.0.0")
+
+    services = build_app_services(app_settings, metrics=metrics_client)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        state_services = getattr(app.state, "services", None) or services
+        app.state.services = state_services
+
+        app.state.rate_limiter = getattr(app.state, "rate_limiter", None) or state_services.rate_limiter
+        app.state.metrics = getattr(app.state, "metrics", None) or state_services.metrics
+        app.state.storage_backend = getattr(app.state, "storage_backend", None) or state_services.storage
+        app.state.app_settings = getattr(app.state, "app_settings", app_settings)
+        app.state.db_session_factory = getattr(app.state, "db_session_factory", None) or get_session_factory()
+        app.state.export_transport = getattr(app.state, "export_transport", None)
+        app.state.export_resolver = getattr(app.state, "export_resolver", None)
+        app.state.email_adapter = getattr(app.state, "email_adapter", None) or state_services.email_adapter
+        app.state.stripe_client = getattr(app.state, "stripe_client", None) or state_services.stripe_client
+        yield
+        await app.state.rate_limiter.close()
+
+    app = FastAPI(title="Cleaning Economy Bot", version="1.0.0", lifespan=lifespan)
 
     app.mount("/static", StaticFiles(directory="app/static"), name="static")
-
-    rate_limiter = create_rate_limiter(app_settings)
-    app.state.rate_limiter = rate_limiter
-    app.state.metrics = metrics_client
-    app.state.app_settings = app_settings
-    app.state.db_session_factory = get_session_factory()
-    app.state.export_transport = None
-    app.state.export_resolver = None
-    app.state.email_adapter = resolve_email_adapter(app_settings)
-    app.state.stripe_client = None
-
-    @app.on_event("shutdown")
-    async def shutdown_limiter() -> None:
-        await rate_limiter.close()
 
     app.add_middleware(WorkerAccessMiddleware)
     app.add_middleware(AdminAuditMiddleware)
@@ -287,7 +295,7 @@ def create_app(app_settings) -> FastAPI:
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(LoggingMiddleware)
     app.add_middleware(MetricsMiddleware, metrics_client=metrics_client)
-    app.add_middleware(RateLimitMiddleware, limiter=rate_limiter, app_settings=app_settings)
+    app.add_middleware(RateLimitMiddleware, limiter=services.rate_limiter, app_settings=app_settings)
     app.add_middleware(RequestIdMiddleware)
 
     app.add_middleware(

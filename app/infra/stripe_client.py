@@ -136,6 +136,11 @@ class StripeClient:
 
 
 def resolve_client(app_state: Any) -> StripeClient:
+    services = getattr(getattr(app_state, "state", app_state), "services", None)
+    if services is not None:
+        client = getattr(services, "stripe_client", None)
+        if client is not None:
+            return client
     client = getattr(app_state, "stripe_client", None)
     if client is None:
         client = StripeClient(
