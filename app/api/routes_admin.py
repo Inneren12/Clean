@@ -7,12 +7,13 @@ import math
 from datetime import date, datetime, time, timezone, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 import uuid
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Literal, Optional
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
+import sqlalchemy as sa
 from sqlalchemy import and_, func, select, or_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,6 +48,7 @@ from app.dependencies import get_db_session
 from app.domain.bookings.db_models import Booking, Team
 from app.domain.bookings import schemas as booking_schemas
 from app.domain.bookings import service as booking_service
+from app.domain.bookings.service import DEFAULT_TEAM_NAME
 from app.domain.export_events.db_models import ExportEvent
 from app.domain.export_events.schemas import ExportEventResponse
 from app.domain.invoices import schemas as invoice_schemas
@@ -64,7 +66,8 @@ from app.domain.nps import schemas as nps_schemas, service as nps_service
 from app.domain.pricing.config_loader import load_pricing_config
 from app.domain.reason_logs import schemas as reason_schemas
 from app.domain.reason_logs import service as reason_service
-from app.domain.saas import billing_service
+from app.domain.saas import billing_service, service as saas_service
+from app.domain.saas.db_models import Membership, MembershipRole, Organization, PasswordResetEvent, User
 from app.domain.retention import cleanup_retention
 from app.domain.subscriptions import schemas as subscription_schemas
 from app.domain.subscriptions import service as subscription_service
@@ -98,6 +101,27 @@ async def get_admin_profile(identity: AdminIdentity = Depends(require_viewer)) -
     )
 
 
+class AdminUserCreateRequest(BaseModel):
+    email: EmailStr
+    target_type: Literal["client", "worker"]
+    name: str | None = None
+    phone: str | None = None
+    role: MembershipRole | None = None
+    team_id: int | None = None
+
+
+class AdminUserResponse(BaseModel):
+    user_id: uuid.UUID
+    email: str
+    target_type: str
+    must_change_password: bool
+    temp_password: str
+
+
+class ResetPasswordRequest(BaseModel):
+    reason: str | None = None
+
+
 def _format_dt(value: datetime | None) -> str:
     if value is None:
         return "-"
@@ -109,6 +133,149 @@ def _format_ts(value: float | None) -> str:
         return "-"
     dt = datetime.fromtimestamp(value, tz=timezone.utc)
     return _format_dt(dt)
+
+
+def _resolve_admin_org(request: Request, identity: AdminIdentity) -> uuid.UUID:
+    requested_org_header = request.headers.get("X-Test-Org")
+    if requested_org_header:
+        try:
+            requested_org = uuid.UUID(requested_org_header)
+        except Exception:  # noqa: BLE001
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid organization header")
+        if identity.org_id and requested_org != identity.org_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    org_id = entitlements.resolve_org_id(request)
+    if identity.org_id and identity.org_id != org_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    return org_id
+
+
+def _resolve_membership_role(target_type: str, explicit: MembershipRole | None) -> MembershipRole:
+    if explicit:
+        return explicit
+    if target_type == "worker":
+        return MembershipRole.WORKER
+    return MembershipRole.VIEWER
+
+
+@router.post("/v1/admin/users", response_model=AdminUserResponse)
+async def admin_create_user(
+    payload: AdminUserCreateRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_db_session),
+    identity: AdminIdentity = Depends(require_admin),
+) -> AdminUserResponse:
+    org_id = _resolve_admin_org(request, identity)
+    org = await session.get(Organization, org_id)
+    if not org:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+
+    normalized_email = saas_service.normalize_email(payload.email)
+    existing_user = await session.scalar(sa.select(User).where(User.email == normalized_email))
+    if existing_user:
+        membership = await session.scalar(
+            sa.select(Membership).where(Membership.user_id == existing_user.user_id, Membership.org_id == org_id)
+        )
+        if membership:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists in organization")
+        user = existing_user
+    else:
+        user = await saas_service.create_user(session, normalized_email)
+
+    role = _resolve_membership_role(payload.target_type, payload.role)
+    await saas_service.create_membership(session, org, user, role)
+
+    if payload.target_type == "worker":
+        team: Team | None = None
+        if payload.team_id:
+            team = await session.get(Team, payload.team_id)
+            if not team or team.org_id != org_id:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid team")
+        else:
+            team = await session.scalar(sa.select(Team).where(Team.org_id == org_id).limit(1))
+            if not team:
+                team = Team(org_id=org_id, name=DEFAULT_TEAM_NAME)
+                session.add(team)
+                await session.flush()
+
+        worker = Worker(
+            org_id=org_id,
+            team_id=team.team_id,
+            name=payload.name or payload.email,
+            phone=payload.phone or "unknown",
+            email=normalized_email,
+            role=role.value,
+        )
+        session.add(worker)
+
+    temp_password = await saas_service.issue_temp_password(session, user)
+    response.headers["Cache-Control"] = "no-store"
+    await session.commit()
+    return AdminUserResponse(
+        user_id=user.user_id,
+        email=user.email,
+        target_type=payload.target_type,
+        must_change_password=user.must_change_password,
+        temp_password=temp_password,
+    )
+
+
+@router.post("/v1/admin/users/{user_id}/reset-temp-password", response_model=AdminUserResponse)
+async def reset_temp_password(
+    user_id: uuid.UUID,
+    payload: ResetPasswordRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_db_session),
+    identity: AdminIdentity = Depends(require_admin),
+) -> AdminUserResponse:
+    org_id = _resolve_admin_org(request, identity)
+    user = await session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    membership = await session.scalar(
+        sa.select(Membership).where(Membership.user_id == user.user_id, Membership.org_id == org_id)
+    )
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    temp_password = await saas_service.issue_temp_password(session, user)
+    await saas_service.revoke_user_sessions(session, user.user_id, reason="password_reset")
+    event = PasswordResetEvent(
+        org_id=org_id,
+        user_id=user.user_id,
+        actor_admin=identity.username,
+        reason=payload.reason,
+    )
+    session.add(event)
+
+    adapter = getattr(request.app.state, "email_adapter", None)
+    if adapter:
+        subject = "Your account password was reset"
+        if settings.email_temp_passwords:
+            body = (
+                "A new temporary password was issued. Log in and change it immediately.\n\n"
+                f"Temporary password: {temp_password}\n"
+                "This password will only work until you change it."
+            )
+        else:
+            body = "A new temporary password was issued. Please log in and change it immediately."
+        try:
+            await adapter.send_email(recipient=user.email, subject=subject, body=body)
+        except Exception:
+            logger.warning("password_reset_email_failed", extra={"extra": {"user_id": str(user.user_id)}})
+
+    response.headers["Cache-Control"] = "no-store"
+    await session.commit()
+    target_type = "worker" if membership.role == MembershipRole.WORKER else "client"
+    return AdminUserResponse(
+        user_id=user.user_id,
+        email=user.email,
+        target_type=target_type,
+        must_change_password=user.must_change_password,
+        temp_password=temp_password,
+    )
 
 
 def _icon(name: str) -> str:

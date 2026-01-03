@@ -31,7 +31,7 @@ from app.api.worker_auth import WorkerAccessMiddleware
 from app.api.routes_public import router as public_router
 from app.api.routes_leads import router as leads_router
 from app.api.routes_billing import router as billing_router
-from app.api.saas_auth import TenantSessionMiddleware
+from app.api.saas_auth import PasswordChangeGateMiddleware, TenantSessionMiddleware
 from app.domain.errors import DomainError
 from app.infra.db import get_session_factory
 from app.infra.email import EmailAdapter, resolve_email_adapter
@@ -253,6 +253,7 @@ def create_app(app_settings) -> FastAPI:
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(AdminAccessMiddleware)
+    app.add_middleware(PasswordChangeGateMiddleware)
     app.add_middleware(TenantSessionMiddleware)
     app.add_middleware(AdminAuditMiddleware)
     app.add_middleware(WorkerAccessMiddleware)
