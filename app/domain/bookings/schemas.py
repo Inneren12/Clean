@@ -126,6 +126,21 @@ class PhotoPhase(str, Enum):
             raise ValueError("phase must be BEFORE or AFTER") from exc
 
 
+class PhotoReviewStatus(str, Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+    @classmethod
+    def from_any_case(cls, value: str | None) -> "PhotoReviewStatus":
+        if value is None:
+            return cls.PENDING
+        try:
+            return cls(value.upper())
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError("review_status must be PENDING, APPROVED, or REJECTED") from exc
+
+
 class OrderPhotoResponse(BaseModel):
     photo_id: str
     order_id: str
@@ -137,6 +152,11 @@ class OrderPhotoResponse(BaseModel):
     sha256: str
     uploaded_by: str
     created_at: datetime
+    review_status: PhotoReviewStatus = PhotoReviewStatus.PENDING
+    review_comment: str | None = None
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+    needs_retake: bool = False
 
 
 class OrderPhotoListResponse(BaseModel):
@@ -147,6 +167,19 @@ class SignedUrlResponse(BaseModel):
     url: str
     expires_at: datetime
     expires_in: int
+    variant: str | None = None
+
+
+class PhotoReviewUpdateRequest(BaseModel):
+    review_status: PhotoReviewStatus
+    review_comment: str | None = None
+    needs_retake: bool = False
+
+    @model_validator(mode="before")
+    def normalize_status(cls, values: dict[str, object]) -> dict[str, object]:
+        if isinstance(values, dict) and "review_status" in values:
+            values["review_status"] = PhotoReviewStatus.from_any_case(values["review_status"])
+        return values
 
 
 class ConsentPhotosUpdateRequest(BaseModel):

@@ -7,7 +7,18 @@ from datetime import datetime, timezone
 from math import ceil
 from typing import Iterable
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import select
@@ -41,7 +52,7 @@ from app.domain.invoices.db_models import Invoice, InvoiceItem
 from app.domain.leads.db_models import Lead
 from app.domain.nps import service as nps_service
 from app.domain.nps.db_models import NpsResponse, SupportTicket
-from app.api.photo_tokens import build_signed_photo_response
+from app.api.photo_tokens import build_signed_photo_response, normalize_variant
 from app.domain.notifications import email_service
 from app.domain.reason_logs import schemas as reason_schemas
 from app.domain.reason_logs import service as reason_service
@@ -1243,6 +1254,11 @@ async def worker_upload_photo(
         sha256=photo.sha256,
         uploaded_by=photo.uploaded_by,
         created_at=photo.created_at,
+        review_status=booking_schemas.PhotoReviewStatus.from_any_case(photo.review_status),
+        review_comment=photo.review_comment,
+        reviewed_by=photo.reviewed_by,
+        reviewed_at=photo.reviewed_at,
+        needs_retake=bool(photo.needs_retake),
     )
 
 
@@ -1271,6 +1287,13 @@ async def worker_list_photos(
                 sha256=p.sha256,
                 uploaded_by=p.uploaded_by,
                 created_at=p.created_at,
+                review_status=booking_schemas.PhotoReviewStatus.from_any_case(
+                    p.review_status
+                ),
+                review_comment=p.review_comment,
+                reviewed_by=p.reviewed_by,
+                reviewed_at=p.reviewed_at,
+                needs_retake=bool(p.needs_retake),
             )
             for p in photos
         ]
@@ -1285,6 +1308,7 @@ async def worker_signed_photo_url(
     job_id: str,
     photo_id: str,
     request: Request,
+    variant: str | None = Query(None),
     identity: WorkerIdentity = Depends(require_worker),
     session: AsyncSession = Depends(get_db_session),
 ) -> booking_schemas.SignedUrlResponse:
@@ -1294,7 +1318,10 @@ async def worker_signed_photo_url(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
     storage = resolve_storage_backend(request.app.state)
     org_id = entitlements.resolve_org_id(request)
-    return await build_signed_photo_response(photo, request, storage, org_id)
+    normalized_variant = normalize_variant(variant)
+    return await build_signed_photo_response(
+        photo, request, storage, org_id, variant=normalized_variant
+    )
 
 
 @router.delete(
