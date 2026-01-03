@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -11,6 +12,7 @@ from app.infra.metrics import configure_metrics, metrics
 from app.jobs.heartbeat import record_heartbeat
 from app.jobs import email_jobs, storage_janitor
 from app.infra.storage import new_storage_backend
+from app.domain.ops.db_models import JobHeartbeat
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -29,6 +31,7 @@ async def _run_job(
         result = await runner(session)
     logger.info("job_complete", extra={"extra": {"job": name, **result}})
     _record_email_job_metrics(name, result)
+    await _record_job_result(session_factory, name, success=True)
 
 
 def _record_email_job_metrics(job: str, result: dict[str, int]) -> None:
@@ -38,6 +41,41 @@ def _record_email_job_metrics(job: str, result: dict[str, int]) -> None:
         metrics.record_email_job(job, "sent", sent_total)
     if skipped_total:
         metrics.record_email_job(job, "skipped", skipped_total)
+
+
+async def _record_job_result(
+    session_factory: async_sessionmaker, job: str, *, success: bool, error_reason: str | None = None
+) -> None:
+    now = datetime.now(tz=timezone.utc)
+    async with session_factory() as session:
+        record = await session.get(JobHeartbeat, job)
+        if record is None:
+            record = JobHeartbeat(
+                name=job,
+                last_heartbeat=now,
+                last_success_at=now if success else None,
+                consecutive_failures=0,
+                last_error=None,
+                last_error_at=None,
+                updated_at=now,
+            )
+            session.add(record)
+        else:
+            record.last_heartbeat = now
+            if success:
+                record.last_success_at = now
+                record.consecutive_failures = 0
+                record.last_error = None
+                record.last_error_at = None
+            else:
+                record.consecutive_failures = (record.consecutive_failures or 0) + 1
+                record.last_error = error_reason or record.last_error
+                record.last_error_at = now
+        await session.commit()
+    if success:
+        metrics.record_job_success(job, now.timestamp())
+    else:
+        metrics.record_job_error(job, error_reason or "unknown")
 
 
 def _job_runner(name: str, base_url: str | None = None) -> Callable:
@@ -84,6 +122,9 @@ async def main(argv: list[str] | None = None) -> None:
             except Exception as exc:  # noqa: BLE001
                 metrics.record_email_job(name, "error")
                 logger.warning("job_failed", extra={"extra": {"job": name, "reason": type(exc).__name__}})
+                await _record_job_result(
+                    session_factory, name, success=False, error_reason=type(exc).__name__
+                )
         await record_heartbeat(session_factory, name="jobs-runner")
         if args.once:
             break

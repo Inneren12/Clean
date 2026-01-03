@@ -54,6 +54,27 @@ fi
 PORT="${POSTGRES_PORT:-5432}"
 export PGPASSWORD="$POSTGRES_PASSWORD"
 
+DATABASE_DIRECTIVE=$(pg_restore --list "$DUMP_FILE" | grep -E "^;\s*Database" || true)
+USE_CREATE=${ALLOW_CREATE_IN_DUMP:-0}
+if [[ -n "$DATABASE_DIRECTIVE" && "$USE_CREATE" != "1" ]]; then
+  echo "[restore] Dump contains CREATE DATABASE; rerun backup without --create or set ALLOW_CREATE_IN_DUMP=1" >&2
+  exit 1
+fi
+
+CONNECT_DB="$TARGET_DB"
+RESTORE_ARGS=(
+  --verbose
+  --clean
+  --if-exists
+  --no-owner
+  --no-privileges
+  --exit-on-error
+)
+if [[ -n "$DATABASE_DIRECTIVE" && "$USE_CREATE" == "1" ]]; then
+  CONNECT_DB="postgres"
+  RESTORE_ARGS+=(--create)
+fi
+
 # Create database if missing
 DB_EXISTS=$(psql \
   --host="$POSTGRES_HOST" \
@@ -64,7 +85,7 @@ DB_EXISTS=$(psql \
   --no-align \
   --command "SELECT 1 FROM pg_database WHERE datname='${TARGET_DB}'" || true)
 
-if [[ "$DB_EXISTS" != "1" ]]; then
+if [[ "$DB_EXISTS" != "1" && "$CONNECT_DB" == "$TARGET_DB" ]]; then
   echo "[restore] Creating database $TARGET_DB"
   createdb \
     --host="$POSTGRES_HOST" \
@@ -75,11 +96,8 @@ fi
 
 echo "[restore] Restoring $DUMP_FILE into $TARGET_DB"
 pg_restore \
-  --verbose \
-  --clean \
-  --if-exists \
-  --no-owner \
-  --dbname="$TARGET_DB" \
+  "${RESTORE_ARGS[@]}" \
+  --dbname="$CONNECT_DB" \
   --host="$POSTGRES_HOST" \
   --port="$PORT" \
   --username="$POSTGRES_USER" \

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import socket
 from ipaddress import ip_address
+import uuid
 from typing import Any, Callable, Dict, Iterable
 from urllib.parse import urlparse
 
@@ -42,22 +43,28 @@ async def export_lead_async(
                 extra={"extra": {"lead_id": payload.get("lead_id"), "reason": reason}},
             )
             return
-        await _post_with_retry_async(
+        success, attempts, last_error_code = await send_export_with_retry(
             url,
             payload,
             transport=transport,
-            session_factory=session_factory,
-            mode=settings.export_mode,
+        )
+        if success:
+            return
+        await _record_export_dead_letter(
+            session_factory,
+            payload,
+            url,
+            attempts,
+            last_error_code,
+            settings.export_mode,
         )
 
 
-async def _post_with_retry_async(
+async def send_export_with_retry(
     url: str,
     payload: Dict[str, Any],
     transport: httpx.AsyncBaseTransport | None = None,
-    session_factory: async_sessionmaker[AsyncSession] | None = None,
-    mode: str = "webhook",
-) -> None:
+) -> tuple[bool, int, str]:
     timeout = settings.export_webhook_timeout_seconds
     retries = settings.export_webhook_max_retries
     backoff = settings.export_webhook_backoff_seconds
@@ -71,7 +78,7 @@ async def _post_with_retry_async(
                     "export_webhook_success",
                     extra={"extra": {"lead_id": payload.get("lead_id"), "status_code": response.status_code}},
                 )
-                return
+                return True, attempt, ""
             last_error_code = f"status_{response.status_code}"
             logger.warning(
                 "export_webhook_non_200",
@@ -101,19 +108,12 @@ async def _post_with_retry_async(
             }
         },
     )
-    await _record_export_dead_letter(
-        session_factory,
-        payload.get("lead_id"),
-        url,
-        retries,
-        last_error_code,
-        mode,
-    )
+    return False, retries, last_error_code
 
 
 async def _record_export_dead_letter(
     session_factory: async_sessionmaker[AsyncSession] | None,
-    lead_id: str | None,
+    payload: dict | None,
     url: str,
     attempts: int,
     last_error_code: str,
@@ -132,19 +132,27 @@ async def _record_export_dead_letter(
 
     try:
         async with factory() as session:
+            org_id = (payload or {}).get("org_id") or settings.default_org_id
+            try:
+                org_uuid = uuid.UUID(str(org_id))
+            except Exception:
+                org_uuid = settings.default_org_id
             event = ExportEvent(
-                lead_id=lead_id,
+                lead_id=(payload or {}).get("lead_id"),
                 mode=mode,
+                payload=payload,
                 target_url_host=host,
+                target_url=url,
                 attempts=attempts,
                 last_error_code=last_error_code,
+                org_id=org_uuid,
             )
             session.add(event)
             await session.commit()
     except Exception as exc:  # noqa: BLE001
         logger.debug(
             "export_dead_letter_record_failed",
-            extra={"extra": {"lead_id": lead_id, "error": str(exc)}},
+            extra={"extra": {"lead_id": (payload or {}).get("lead_id"), "error": str(exc)}},
         )
 
 
