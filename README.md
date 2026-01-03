@@ -6,6 +6,7 @@ FastAPI backend for the Economy MVP pricing and chat system.
 
 - [Учебное пособие по порталам Worker/Admin](docs/user_manual.md)
 - [Текущее состояние проекта (что уже сделано)](docs/current_state.md)
+- **Read first:** [`PROJECT_OVERVIEW.md`](PROJECT_OVERVIEW.md), [`MODULES.md`](MODULES.md), [`FILE_OVERVIEW.md`](FILE_OVERVIEW.md), [`CONTENT_GUIDE.md`](CONTENT_GUIDE.md), [`stage.md`](stage.md)
 
 ## Setup (Docker-first, Sprint 2 canonical flow)
 
