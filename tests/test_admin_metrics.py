@@ -1,9 +1,15 @@
 import asyncio
+import uuid
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from app.settings import settings
 from app.domain.bookings.db_models import Booking
+from app.domain.analytics.db_models import EventLog
+from app.domain.analytics.service import EventType
+from app.domain.leads.db_models import Lead
+from app.domain.saas.db_models import Organization
+from app.domain.bookings.db_models import Team
 
 
 def _auth() -> tuple[str, str]:
@@ -118,12 +124,101 @@ def test_admin_metrics_reports_conversions_and_accuracy(client, async_session_ma
     assert metrics["accuracy"]["average_actual_duration_minutes"] == 150.0
     assert metrics["accuracy"]["average_estimated_duration_minutes"] == 120.0
 
-    csv_response = client.get("/v1/admin/metrics?format=csv", auth=auth)
+
+def test_admin_metrics_are_org_scoped(client, async_session_maker):
+    settings.admin_basic_username = "admin"
+    settings.admin_basic_password = "secret"
+    org_a, org_b = uuid.uuid4(), uuid.uuid4()
+
+    async def _seed_events() -> None:
+        async with async_session_maker() as session:
+            session.add_all([Organization(org_id=org_a, name="Org A"), Organization(org_id=org_b, name="Org B")])
+            team_a = Team(org_id=org_a, name="Team A")
+            team_b = Team(org_id=org_b, name="Team B")
+            session.add_all([team_a, team_b])
+            await session.flush()
+
+            lead_a = Lead(
+                org_id=org_a,
+                name="Lead A",
+                phone="780-555-0001",
+                email="lead-a@example.com",
+                postal_code="T5A",
+                preferred_dates=["Mon"],
+                structured_inputs={"beds": 1, "baths": 1, "cleaning_type": "standard"},
+                estimate_snapshot={"total_before_tax": 100.0},
+                pricing_config_version="v1",
+                config_hash="hash",
+                status="NEW",
+            )
+            lead_b = Lead(
+                org_id=org_b,
+                name="Lead B",
+                phone="780-555-0002",
+                email="lead-b@example.com",
+                postal_code="T5B",
+                preferred_dates=["Tue"],
+                structured_inputs={"beds": 2, "baths": 1, "cleaning_type": "standard"},
+                estimate_snapshot={"total_before_tax": 200.0},
+                pricing_config_version="v1",
+                config_hash="hash",
+                status="NEW",
+            )
+            session.add_all([lead_a, lead_b])
+            await session.flush()
+
+            booking_a = Booking(
+                org_id=org_a,
+                team_id=team_a.team_id,
+                lead_id=lead_a.lead_id,
+                starts_at=datetime.now(tz=timezone.utc),
+                duration_minutes=90,
+                actual_duration_minutes=80,
+                status="DONE",
+                deposit_required=False,
+                deposit_policy=[],
+            )
+            booking_b = Booking(
+                org_id=org_b,
+                team_id=team_b.team_id,
+                lead_id=lead_b.lead_id,
+                starts_at=datetime.now(tz=timezone.utc),
+                duration_minutes=45,
+                actual_duration_minutes=40,
+                status="DONE",
+                deposit_required=False,
+                deposit_policy=[],
+            )
+            session.add_all([booking_a, booking_b])
+            await session.flush()
+
+            now = datetime.now(tz=timezone.utc)
+            session.add_all(
+                [
+                    EventLog(event_type=EventType.lead_created.value, lead_id=lead_a.lead_id, occurred_at=now),
+                    EventLog(event_type=EventType.booking_created.value, booking_id=booking_a.booking_id, occurred_at=now),
+                    EventLog(event_type=EventType.lead_created.value, lead_id=lead_b.lead_id, occurred_at=now),
+                ]
+            )
+
+            await session.commit()
+
+    asyncio.run(_seed_events())
+    headers = {"X-Test-Org": str(org_a)}
+
+    metrics_response = client.get("/v1/admin/metrics", auth=("admin", "secret"), headers=headers)
+    assert metrics_response.status_code == 200
+    metrics = metrics_response.json()
+
+    assert metrics["conversions"]["lead_created"] == 1
+    assert metrics["conversions"]["booking_created"] == 1
+
+    csv_response = client.get("/v1/admin/metrics?format=csv", auth=("admin", "secret"), headers=headers)
     assert csv_response.status_code == 200
     assert "text/csv" in csv_response.headers.get("content-type", "")
     csv_body = csv_response.text
     assert "lead_created,1" in csv_body
-    assert "booking_confirmed,1" in csv_body
+    assert "booking_created,1" in csv_body
 
 
 def test_admin_metrics_reports_kpi_aggregates(client, async_session_maker):

@@ -10,7 +10,7 @@
 ## Authorization & RBAC
 - **Admin roles**: OWNER/ADMIN/DISPATCHER/FINANCE/VIEWER map to permissions in `admin_auth.py` and SaaS membership roles in `saas_auth.py`.
 - **SaaS entitlements**: per-plan limits for workers/bookings/storage enforced via dependencies in `app/api/entitlements.py` backed by `app/domain/saas/billing_service.py`.
-- **Org scoping**: `request.state.current_org_id` populated by SaaS tokens or `default_org_id`; DB queries should filter by `org_id` where applicable (SaaS users/memberships/billing usage).
+- **Org scoping**: `request.state.current_org_id` populated by SaaS tokens or `default_org_id`; DB queries filter by `org_id` on every joined table. Admin finance/report/export endpoints (`/v1/admin/reports/*`, `/v1/admin/exports/*`, `/v1/admin/export-dead-letter`) and payments are constrained to the caller's org via `_org_scope_filters` and `resolve_org_id`.
 
 ## Session and token handling
 - **Access/refresh**: access JWTs carry `org_id`, `role`, `sid`; refresh tokens rotate sessions and revoke prior ones (`saas_auth.py`, `app/infra/auth.py`).
@@ -21,7 +21,7 @@
 ## Transport and rate limits
 - **Rate limiting**: middleware using Redis or in-memory limiter with proxy-aware client key resolution (`app/main.py`, `app/infra/security.py`).
 - **CORS**: origins enforced via settings; `STRICT_CORS` recommended for prod (`app/main.py`, `app/settings.py`).
-- **Metrics/headers**: security headers middleware sets X-Content-Type-Options, X-Frame-Options, CSP, Referrer-Policy (`app/main.py`).
+- **Metrics/headers**: security headers middleware sets X-Content-Type-Options, X-Frame-Options, CSP, Referrer-Policy (`app/main.py`). Admin Basic Auth middleware only applies to `/v1/admin/*`; `/healthz`, `/readyz`, and `/metrics` are allowlisted from admin credentials.
 
 ## Data access and privacy
 - **Photos/files**: access via signed URLs or tokenized download endpoints; TTL and MIME/size limits enforced (`app/api/photo_tokens.py`, `app/infra/storage/backends.py`).

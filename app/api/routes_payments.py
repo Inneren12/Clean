@@ -466,8 +466,9 @@ async def create_deposit_checkout(
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, str]:
+    org_id = entitlements.resolve_org_id(http_request)
     booking = await session.get(Booking, booking_id)
-    if booking is None:
+    if booking is None or booking.org_id != org_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
     if not booking.deposit_required or not booking.deposit_cents:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Deposit not required")
