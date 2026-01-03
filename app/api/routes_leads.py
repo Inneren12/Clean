@@ -21,7 +21,7 @@ from app.domain.leads.schemas import LeadCreateRequest, LeadResponse
 from app.domain.leads.statuses import LEAD_STATUS_NEW
 from app.infra.captcha import verify_turnstile
 from app.infra.export import export_lead_async
-from app.infra.email import EmailAdapter
+from app.infra.email import EmailAdapter, resolve_app_email_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +166,7 @@ async def create_lead(
     export_transport = getattr(http_request.app.state, "export_transport", None)
     export_resolver = getattr(http_request.app.state, "export_resolver", None)
     export_session_factory = getattr(http_request.app.state, "db_session_factory", None)
-    email_adapter: EmailAdapter | None = getattr(http_request.app.state, "email_adapter", None)
+    email_adapter: EmailAdapter | None = resolve_app_email_adapter(http_request)
     export_payload = export_payload_from_lead(lead)
     background_tasks.add_task(
         schedule_export,

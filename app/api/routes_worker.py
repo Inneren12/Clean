@@ -68,6 +68,10 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _storage_backend(request: Request):
+    return resolve_storage_backend(request.app.state)
+
+
 class WorkerDisputeRequest(BaseModel):
     reason: str | None = None
 
@@ -1214,7 +1218,7 @@ async def worker_upload_photo(
     size_bytes = len(contents or b"")
     await entitlements.enforce_storage_entitlement(request, size_bytes, session=session)
     await file.seek(0)
-    storage = resolve_storage_backend(request.app.state)
+    storage = _storage_backend(request)
     org_id = entitlements.resolve_org_id(request)
     photo = await photos_service.save_photo(
         session,
@@ -1316,7 +1320,7 @@ async def worker_signed_photo_url(
     photo = await photos_service.get_photo(session, job_id, photo_id)
     if photo.order_id != booking.booking_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
-    storage = resolve_storage_backend(request.app.state)
+    storage = _storage_backend(request)
     org_id = entitlements.resolve_org_id(request)
     normalized_variant = normalize_variant(variant)
     return await build_signed_photo_response(
@@ -1341,7 +1345,7 @@ async def worker_delete_photo(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
     if photo.uploaded_by != identity.username:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot delete another worker's upload")
-    storage = resolve_storage_backend(request.app.state)
+    storage = _storage_backend(request)
     org_id = entitlements.resolve_org_id(request)
     await photos_service.delete_photo(
         session,

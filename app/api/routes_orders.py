@@ -48,6 +48,10 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _storage_backend(request: Request):
+    return resolve_storage_backend(request.app.state)
+
+
 def _order_org_id(identity: AdminIdentity, request: Request) -> uuid.UUID:
     saas_identity = getattr(request.state, "saas_identity", None)
     candidates = [
@@ -230,7 +234,7 @@ async def upload_order_photo(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Photo consent not granted")
 
     uploaded_by = identity.role.value or identity.username
-    storage = resolve_storage_backend(request.app.state)
+    storage = _storage_backend(request)
     photo = await photos_service.save_photo(
         session, order, file, parsed_phase, uploaded_by, org_id, storage
     )
@@ -313,7 +317,7 @@ async def signed_order_photo_url(
     _ = identity
     org_id = _order_org_id(identity, request)
     photo = await photos_service.get_photo(session, order_id, photo_id, org_id)
-    storage = resolve_storage_backend(request.app.state)
+    storage = _storage_backend(request)
     normalized_variant = normalize_variant(variant)
     return await build_signed_photo_response(
         photo, request, storage, org_id, variant=normalized_variant
@@ -401,7 +405,7 @@ async def signed_download_order_photo(
     if photo.order_id != claims.order_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
 
-    storage = resolve_storage_backend(request.app.state)
+    storage = _storage_backend(request)
     key = photos_service.storage_key_for_photo(photo, claims.org_id)
     ttl = min(settings.photo_url_ttl_seconds, max(claims.exp - int(time.time()), 1))
 
@@ -450,7 +454,7 @@ async def download_order_photo(
     _ = identity
     org_id = _order_org_id(identity, request)
     photo = await photos_service.get_photo(session, order_id, photo_id, org_id)
-    storage = resolve_storage_backend(request.app.state)
+    storage = _storage_backend(request)
     key = photos_service.storage_key_for_photo(photo, org_id)
     ttl = settings.photo_url_ttl_seconds
 
@@ -504,7 +508,7 @@ async def delete_order_photo(
     session: AsyncSession = Depends(get_db_session),
     _admin: AdminIdentity = Depends(require_admin),
 ) -> None:
-    storage = resolve_storage_backend(request.app.state)
+    storage = _storage_backend(request)
     org_id = _order_org_id(_admin, request)
     photo = await photos_service.delete_photo(
         session,
@@ -529,7 +533,7 @@ async def admin_order_gallery(
 ) -> HTMLResponse:
     org_id = _order_org_id(_admin, request)
     photos = await photos_service.list_photos(session, order_id, org_id)
-    storage = resolve_storage_backend(request.app.state)
+    storage = _storage_backend(request)
     items: list[str] = []
     for photo in photos:
         signed = await build_signed_photo_response(photo, request, storage, org_id)

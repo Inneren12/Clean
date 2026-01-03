@@ -28,11 +28,16 @@ from app.domain.subscriptions.db_models import Subscription
 from app.settings import settings
 from app.infra.storage import resolve_storage_backend
 from app.infra.org_context import set_current_org_id
+from app.infra.email import resolve_app_email_adapter
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 SESSION_COOKIE_NAME = "client_session"
+
+
+def _storage_backend(request: Request):
+    return resolve_storage_backend(request.app.state)
 
 
 async def _get_identity_from_token(token: str | None) -> client_schemas.ClientIdentity:
@@ -113,7 +118,7 @@ async def request_login(
         f"{callback_url}\n\n"
         "If you did not request this link, you can ignore this email."
     )
-    email_adapter = getattr(request.app.state, "email_adapter", None)
+    email_adapter = resolve_app_email_adapter(request)
     if email_adapter:
         try:
             await email_adapter.send_email(
@@ -410,7 +415,7 @@ async def client_photo_signed_url(
     photo = await photos_service.get_photo(session, order_id, photo_id)
     if photo.order_id != booking.booking_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
-    storage = resolve_storage_backend(request.app.state)
+    storage = _storage_backend(request)
     org_id = entitlements.resolve_org_id(request)
     normalized_variant = normalize_variant(variant)
     return await build_signed_photo_response(

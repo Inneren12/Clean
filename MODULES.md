@@ -20,6 +20,7 @@
 - **Stripe**: resilient client and circuit breaker wrappers (`stripe_client.py`, `stripe_resilience.py`, `stripe.py`).
 - **Storage**: backends/factory for photos (`storage/__init__.py`, `storage/backends.py`) covering local, S3/R2 presigned GETs, and Cloudflare Images signed delivery variants.
 - **Metrics & logging**: `metrics.py` instruments middleware and jobs; `logging.py` configures structured logging; `i18n.py` handles localized strings.
+- **Service container**: `app/services.py` builds the `AppServices` dataclass (storage, email adapter, Stripe client, rate limiter, metrics) that FastAPI attaches to `app.state.services` during lifespan startup.
 
 ## Shared utilities (`app/shared`)
 - Lightweight helpers that are environment-agnostic (e.g., `circuit_breaker.py`, `naming.py`). Keep this free of domain-specific logic.

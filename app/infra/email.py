@@ -190,10 +190,11 @@ def resolve_app_email_adapter(app_like) -> EmailAdapter | NoopEmailAdapter | Non
     state = getattr(app_like, "state", None)
     if state is None:
         return None
-    adapter = getattr(state, "email_adapter", None)
+    app_state = getattr(getattr(app_like, "app", None), "state", None) or state
+    adapter = getattr(app_state, "email_adapter", None)
     if adapter is not None:
         return adapter
-    services = getattr(state, "services", None)
+    services = getattr(app_state, "services", None)
     if services is not None:
         return getattr(services, "email_adapter", None)
     return None

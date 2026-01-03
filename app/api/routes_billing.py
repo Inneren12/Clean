@@ -17,6 +17,15 @@ from app.settings import settings
 router = APIRouter()
 
 
+def _stripe_client(request: Request):
+    if getattr(request.app.state, "stripe_client", None):
+        return request.app.state.stripe_client
+    services = getattr(request.app.state, "services", None)
+    if services and getattr(services, "stripe_client", None):
+        return services.stripe_client
+    return stripe_infra.resolve_client(request.app.state)
+
+
 class CheckoutRequest(BaseModel):
     plan_id: str
 
@@ -43,7 +52,7 @@ async def create_billing_checkout(
     identity: SaaSIdentity = Depends(require_saas_user),
 ) -> CheckoutResponse:
     plan = get_plan(payload.plan_id)
-    stripe_client = stripe_infra.resolve_client(http_request.app.state)
+    stripe_client = _stripe_client(http_request)
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Stripe not configured")
 
@@ -93,7 +102,7 @@ async def billing_portal(
     if not billing.stripe_customer_id:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Billing not initialized")
 
-    stripe_client = stripe_infra.resolve_client(http_request.app.state)
+    stripe_client = _stripe_client(http_request)
     try:
         portal = await stripe_infra.call_stripe_client_method(
             stripe_client,

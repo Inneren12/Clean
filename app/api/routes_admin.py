@@ -105,6 +105,12 @@ router = APIRouter(dependencies=[Depends(require_viewer)])
 logger = logging.getLogger(__name__)
 
 
+def _email_adapter(request: Request | None):
+    if request is None:
+        return None
+    return resolve_app_email_adapter(request)
+
+
 class AdminProfileResponse(BaseModel):
     username: str
     role: str
@@ -272,7 +278,7 @@ async def reset_temp_password(
     )
     session.add(event)
 
-    adapter = getattr(request.app.state, "email_adapter", None)
+    adapter = _email_adapter(request)
     if adapter:
         subject = "Your account password was reset"
         if settings.email_temp_passwords:
@@ -869,7 +875,7 @@ async def bulk_update_bookings(
     _identity: AdminIdentity = Depends(require_dispatch),
 ) -> BulkBookingsResponse:
     org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
-    adapter = getattr(request.app.state, "email_adapter", None)
+    adapter = _email_adapter(request)
     result = await ops_service.bulk_update_bookings(
         session,
         org_id,
@@ -997,7 +1003,7 @@ async def resend_email_event(
     _identity: AdminIdentity = Depends(require_dispatch),
 ) -> dict[str, str]:
     org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
-    adapter = getattr(request.app.state, "email_adapter", None)
+    adapter = _email_adapter(request)
     try:
         return await ops_service.resend_email_event(session, adapter, org_id, event_id)
     except LookupError:
@@ -1319,7 +1325,7 @@ async def run_subscriptions(
     identity: AdminIdentity = Depends(require_admin),
     session: AsyncSession = Depends(get_db_session),
 ) -> subscription_schemas.SubscriptionRunResult:
-    adapter = getattr(http_request.app.state, "email_adapter", None)
+    adapter = _email_adapter(http_request)
     org_id = getattr(http_request.state, "org_id", None) or entitlements.resolve_org_id(http_request)
     result = await subscription_service.generate_due_orders(
         session, email_adapter=adapter, org_id=org_id
@@ -2401,7 +2407,7 @@ async def complete_booking(
 
     try:
         lead = await session.get(Lead, booking.lead_id) if booking.lead_id else None
-        adapter = getattr(http_request.app.state, "email_adapter", None) if http_request else None
+        adapter = _email_adapter(http_request)
         if lead and lead.email:
             token = nps_service.issue_nps_token(
                 booking.booking_id,
@@ -3336,7 +3342,7 @@ async def send_invoice(
         public_link = str(http_request.url_for("public_invoice_view", token=token))
         public_link_pdf = str(http_request.url_for("public_invoice_pdf", token=token))
 
-    adapter = getattr(http_request.app.state, "email_adapter", None)
+    adapter = _email_adapter(http_request)
     if adapter is None:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Email adapter unavailable")
 
