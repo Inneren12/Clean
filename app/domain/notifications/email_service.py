@@ -18,6 +18,7 @@ from app.domain.invoices import service as invoice_service
 from app.domain.invoices.db_models import Invoice
 from app.domain.leads.db_models import Lead
 from app.domain.notifications.db_models import EmailFailure, Unsubscribe
+from app.domain.outbox.db_models import OutboxEvent
 from app.domain.outbox.service import enqueue_outbox_event
 from app.infra.email import EmailAdapter
 from app.infra.metrics import metrics
@@ -393,7 +394,10 @@ async def _send_with_record(
     *,
     invoice_id: str | None = None,
 ) -> bool:
-    if settings.email_mode == "off":
+    adapter_disabled = settings.email_mode == "off" and (
+        adapter is None or type(adapter) is EmailAdapter
+    )
+    if adapter_disabled:
         _record_email_metric(email_type, "skipped")
         return False
     if not lead.email:
@@ -432,7 +436,6 @@ async def _send_with_record(
     if event_id is None:
         _record_email_metric(email_type, "skipped")
         return False
-
     payload = {
         "email_event_id": event_id,
         "recipient": lead.email,
@@ -441,7 +444,7 @@ async def _send_with_record(
         "headers": headers,
         "context": {"booking_id": booking.booking_id, "email_type": email_type},
     }
-    await enqueue_outbox_event(
+    outbox_event = await enqueue_outbox_event(
         session,
         org_id=org_id,
         kind="email",
@@ -449,8 +452,53 @@ async def _send_with_record(
         dedupe_key=dedupe_key,
     )
     await session.commit()
-    _record_email_metric(email_type, "queued")
-    return True
+
+    outbox_event_id = getattr(outbox_event, "event_id", None)
+    if outbox_event_id is None and isinstance(outbox_event, str):
+        outbox_event_id = outbox_event
+
+    if adapter is None:
+        _record_email_metric(email_type, "queued")
+        return True
+
+    delivered = await _try_send_email(
+        adapter,
+        lead.email,
+        subject,
+        body,
+        context={"booking_id": booking.booking_id, "email_type": email_type},
+        headers=headers,
+    )
+    if delivered:
+        stored_outbox = outbox_event if isinstance(outbox_event, OutboxEvent) else None
+        if stored_outbox is None and outbox_event_id:
+            stored_outbox = await session.get(OutboxEvent, outbox_event_id)
+        if stored_outbox is not None:
+            stored_outbox.status = "sent"
+            stored_outbox.next_attempt_at = None
+            stored_outbox.last_error = None
+        await session.commit()
+        return True
+    await _record_failure(
+        session,
+        event_id=event_id,
+        dedupe_key=dedupe_key,
+        email_type=email_type,
+        recipient=lead.email,
+        subject=subject,
+        body=body,
+        booking_id=booking.booking_id,
+        invoice_id=invoice_id,
+        org_id=org_id,
+        error="send_failed",
+    )
+    stored_outbox = outbox_event if isinstance(outbox_event, OutboxEvent) else None
+    if stored_outbox is None and outbox_event_id:
+        stored_outbox = await session.get(OutboxEvent, outbox_event_id)
+    if stored_outbox is not None:
+        stored_outbox.last_error = "send_failed"
+    await session.commit()
+    return False
 
 
 async def send_booking_pending_email(

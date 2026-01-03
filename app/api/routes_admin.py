@@ -63,6 +63,7 @@ from app.domain.leads.schemas import AdminLeadResponse, AdminLeadStatusUpdateReq
 from app.domain.leads.statuses import assert_valid_transition, is_valid_status
 from app.domain.config import schemas as config_schemas
 from app.domain.notifications import email_service
+from app.infra.email import resolve_app_email_adapter
 from app.domain.outbox.db_models import OutboxEvent
 from app.domain.outbox.schemas import OutboxEventResponse, OutboxReplayResponse
 from app.domain.outbox.service import replay_outbox_event
@@ -733,7 +734,7 @@ async def email_scan(
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_dispatch),
 ) -> dict[str, int]:
-    adapter = getattr(http_request.app.state, "email_adapter", None)
+    adapter = resolve_app_email_adapter(http_request.app)
     result = await email_service.scan_and_send_reminders(session, adapter)
     return result
 
@@ -753,7 +754,7 @@ async def resend_last_email(
     if booking is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
 
-    adapter = getattr(http_request.app.state, "email_adapter", None)
+    adapter = resolve_app_email_adapter(http_request.app)
     try:
         return await email_service.resend_last_email(session, adapter, booking_id)
     except LookupError as exc:

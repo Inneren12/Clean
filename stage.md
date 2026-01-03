@@ -19,6 +19,8 @@
 - ✅ Alerts/metrics: Prometheus alerting wired (`ops/prometheus/alerts.yml`), HTTP metrics enabled, error rates monitored.
 - ✅ Storage: delete retries running via `storage_janitor` job; upload size/MIME limits enforced.
 - ✅ CORS/proxy: `STRICT_CORS=true` with explicit origins; trusted proxy IPs/CIDRs set if behind proxy.
+- ✅ Email/export delivery: admin scans and jobs resolve adapters from `app.state`/services, send immediately while still
+  queuing outbox events for retries and DLQ replay.
 
 ## Known risks and mitigations
 - **Scheduler gaps:** If cleanup/reminder/export jobs are not scheduled, stale bookings/emails accumulate; mitigate by wiring cron/Scheduler and monitoring job heartbeat.

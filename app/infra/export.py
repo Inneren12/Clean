@@ -44,7 +44,11 @@ async def export_lead_async(
                 extra={"extra": {"lead_id": payload.get("lead_id"), "reason": reason}},
             )
             return
-        await _enqueue_export_outbox(session_factory, payload, url)
+        ok, _attempts, _last_error = await send_export_with_retry(
+            url, payload, transport=transport
+        )
+        if not ok:
+            await _enqueue_export_outbox(session_factory, payload, url)
 
 
 async def send_export_with_retry(

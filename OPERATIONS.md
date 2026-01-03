@@ -19,6 +19,7 @@
 - **Rate limiting:** `RATE_LIMIT_PER_MINUTE`, `REDIS_URL`, proxy trust lists (`TRUST_PROXY_HEADERS`, `TRUSTED_PROXY_IPS`, `TRUSTED_PROXY_CIDRS`).
 - **Stripe:** `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, success/cancel URLs, billing portal return URL, circuit breaker settings.
 - **Email:** `EMAIL_MODE`, `SENDGRID_API_KEY` or `SMTP_*` values, retry/backoff settings, `EMAIL_FROM`/`EMAIL_FROM_NAME`. `EMAIL_TEMP_PASSWORDS=true` will deliver temp passwords in reset emails; leave false to send notification-only messages.
+  Email adapters are resolved at runtime from `app.state.email_adapter` (or `app.state.services.email_adapter` for legacy service containers) via `resolve_app_email_adapter`; admin email scans and scheduled jobs share this helper so tests can inject a stub adapter while production loads the configured SendGrid/SMTP adapter.
 - **Storage/photos:** `ORDER_STORAGE_BACKEND`, `ORDER_UPLOAD_ROOT`, `ORDER_PHOTO_MAX_BYTES`, MIME allowlist, S3/R2/Cloudflare credentials, signing secrets/TTLs.
 - **Feature flags:** `DEPOSITS_ENABLED`, `EXPORT_MODE` (`off`/`webhook`/`sheets`), and `STRICT_POLICY_MODE` for stricter portal/config behaviors. Operators can inspect runtime flags via `GET /v1/admin/feature-flags` (Basic Auth protected).
 - **Captcha/abuse:** `CAPTCHA_MODE`, `TURNSTILE_SECRET_KEY`.

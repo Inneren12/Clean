@@ -50,7 +50,8 @@
 - `app/infra/db.py` – Async engine/session factory, base model registration, pool settings.
 - `alembic/env.py` – Migration context setup and metadata registration; `alembic/versions/` for schema history.
 - `app/infra/security.py` – Rate limiter (Redis or in-memory) and client key extraction with proxy trust options.
-- `app/infra/email.py` – SendGrid/SMTP/no-op adapter factory with retries and circuit breaker configuration.
+- `app/infra/email.py` – SendGrid/SMTP/no-op adapter factory with retries, circuit breaker configuration, and helpers to
+  resolve the runtime adapter from `app.state` or injected services.
 - `app/infra/stripe_client.py` and `app/infra/stripe_resilience.py` – Stripe client with circuit breaker and retry policies.
 - `app/infra/storage/__init__.py` & `app/infra/storage/backends.py` – Storage backend factory for local/S3/R2/Cloudflare Images and signed URL helpers.
 - `app/infra/export.py` – Webhook/SaaS export transport with allowlist enforcement and retries.
