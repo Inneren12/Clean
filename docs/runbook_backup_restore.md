@@ -13,7 +13,7 @@ Use the provided scripts from a trusted bastion host, CI runner, or ops VM that 
 required for compliance with this runbook.
 
 ### Backup script
-`scripts/backup_pg.sh` creates a compressed custom-format dump (schema + data + blobs) and prunes backups older than the retention window. The dump is schema + data only (no `--create`), so restores can target any database name.
+`scripts/backup_pg.sh` creates a compressed custom-format dump (schema + data + blobs) and prunes backups older than the retention window. The dump is schema + data only (no `--create`, `--no-owner`, `--no-privileges`), so restores can target any database name without clashing on database creation or ACL ownership.
 
 ```bash
 # Example (self-hosted VM or bastion): nightly cron at 02:00 UTC
@@ -60,7 +60,7 @@ POSTGRES_PASSWORD=$(pass show staging/db/password) \
 Step-by-step:
 1. Ensure the target database server is reachable and has enough disk space for the decompressed dump + indexes.
 2. Copy the `.dump` file (and optional `.sha256`) to the restore host; verify checksum if available: `sha256sum -c pg_...dump.sha256`.
-3. Run `scripts/restore_pg.sh <dump_file> [target_db]`. The script creates the target database if it does not exist and restores with `--clean` and `--if-exists`, so you can restore into a differently named database without conflicts.
+3. Run `scripts/restore_pg.sh <dump_file> [target_db]`. The script creates the target database if it does not exist and restores with `--clean`, `--if-exists`, `--no-owner`, and `--no-privileges`, so you can restore into a differently named database without conflicts. If the dump contains a `CREATE DATABASE` entry (from `pg_dump --create`), set `ALLOW_CREATE_IN_DUMP=1` to let `pg_restore` drop/create the database; otherwise the script will abort to avoid accidental clobbering.
 4. Run Alembic migrations to head if needed: `alembic upgrade head` using the restored database URL.
 5. Functional validation (staging/local):
    - `pytest -q` (or a fast smoke subset) against the restored DB URL.
