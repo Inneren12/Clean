@@ -205,6 +205,16 @@ class InvoiceReconcileListResponse(BaseModel):
     items: list[InvoiceReconcileItem]
 
 
+class InvoiceReconcileResponse(BaseModel):
+    invoice_id: str
+    invoice_number: str
+    status: str
+    total_cents: int
+    paid_cents: int
+    outstanding_cents: int
+    succeeded_payments_count: int
+
+
 class StripeEventView(BaseModel):
     event_id: str
     type: str | None = None
@@ -221,3 +231,4 @@ class StripeEventListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
