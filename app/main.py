@@ -14,6 +14,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.admin_auth import AdminAccessMiddleware, AdminAuditMiddleware
 from app.api.routes_admin import router as admin_router
+from app.api.routes_queues import router as queues_router
+from app.api.routes_timeline import router as timeline_router
 from app.api.routes_bookings import router as bookings_router
 from app.api.routes_chat import router as chat_router
 from app.api.routes_estimate import router as estimate_router
@@ -382,6 +384,8 @@ def create_app(app_settings) -> FastAPI:
     app.include_router(bookings_router)
     app.include_router(leads_router)
     app.include_router(admin_router)
+    app.include_router(queues_router)
+    app.include_router(timeline_router)
     if app_settings.metrics_enabled:
         from app.api.routes_metrics import router as metrics_router
 

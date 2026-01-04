@@ -9,7 +9,8 @@
 ## Domain layer (`app/domain`)
 - **Business services**: pricing (`pricing/service.py`), leads (`leads/service.py`), bookings and deposits (`bookings/service.py`), orders/photos (`orders/service.py`), invoices (`invoices/service.py`), notifications (`notifications/service.py`), referrals (`referrals` logic in `leads`/`bookings` services), analytics (`analytics/service.py`), time tracking (`time_tracking/service.py`), and bot/chat (`chat/service.py`, `bot/service.py`).
 - **SaaS & billing**: org membership, plans, usage, and session handling (`saas/service.py`, `saas/billing_service.py`, `saas/plans.py`).
-- **Operational tooling**: org-scoped search/scheduling/bulk/messaging helpers (`ops/service.py`, `ops/schemas.py`).
+- **Operational tooling**: org-scoped search with weighted results and worker coverage, scheduling/bulk/messaging helpers (`ops/service.py`, `ops/schemas.py`).
+- **Operator productivity**: work queue queries for photos/invoices/assignments/DLQ (`queues/service.py`, `queues/schemas.py`), unified timeline aggregation for bookings/invoices combining audit logs, outbox events, payments, photo reviews, NPS, support tickets (`timeline/service.py`, `timeline/schemas.py`).
 - **Boundaries:** domain code should be storage-agnostic, use repository/data-access helpers in `app/infra/models.py` and DB sessions injected via dependencies.
 
 ## Infrastructure layer (`app/infra`)
