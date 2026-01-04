@@ -15,4 +15,5 @@ from app.domain.notifications import db_models as notifications_db_models  # noq
 from app.domain.outbox import db_models as outbox_db_models  # noqa: F401
 from app.domain.admin_idempotency import db_models as idempotency_db_models  # noqa: F401
 from app.domain.break_glass import db_models as break_glass_db_models  # noqa: F401
+from app.domain.data_rights import db_models as data_rights_db_models  # noqa: F401
 

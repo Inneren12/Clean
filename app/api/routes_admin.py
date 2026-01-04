@@ -65,6 +65,7 @@ from app.domain.leads.schemas import AdminLeadResponse, AdminLeadStatusUpdateReq
 from app.domain.leads.statuses import assert_valid_transition, is_valid_status
 from app.domain.config import schemas as config_schemas
 from app.domain.notifications import email_service
+from app.domain.data_rights import schemas as data_rights_schemas, service as data_rights_service
 from app.infra.email import resolve_app_email_adapter
 from app.domain.outbox.db_models import OutboxEvent
 from app.domain.outbox.schemas import OutboxEventResponse, OutboxReplayResponse
@@ -91,6 +92,7 @@ from app.domain.ops.schemas import (
     TemplatePreviewRequest,
     TemplatePreviewResponse,
 )
+from app.domain.errors import DomainError
 from app.domain.retention import cleanup_retention
 from app.domain.subscriptions import schemas as subscription_schemas
 from app.domain.subscriptions import service as subscription_service
@@ -98,6 +100,7 @@ from app.domain.subscriptions.db_models import Subscription
 from app.domain.admin_audit import service as audit_service
 from app.domain.workers.db_models import Worker
 from app.infra.export import send_export_with_retry, validate_webhook_url
+from app.infra.storage import new_storage_backend
 from app.infra.csrf import get_csrf_token, issue_csrf_token, render_csrf_input, require_csrf
 from app.infra.bot_store import BotStore
 from app.infra.i18n import render_lang_toggle, resolve_lang, tr
@@ -1338,12 +1341,94 @@ async def replay_outbox_dead_letter(
     return response_body
 
 
+@router.post(
+    "/v1/admin/data/export", response_model=data_rights_schemas.DataExportResponse
+)
+async def export_client_bundle(
+    payload: data_rights_schemas.DataExportRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    admin: AdminIdentity = Depends(require_admin),
+) -> data_rights_schemas.DataExportResponse:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    try:
+        bundle = await data_rights_service.export_client_data(
+            session, org_id, lead_id=payload.lead_id, email=payload.email
+        )
+    except DomainError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=exc.detail) from exc
+    request.state.explicit_admin_audit = True
+    await audit_service.record_action(
+        session,
+        identity=admin,
+        action="data_export",
+        resource_type="lead",
+        resource_id=payload.lead_id or payload.email or "unknown",
+        before=None,
+        after={
+            "counts": {
+                "leads": len(bundle.get("leads", [])),
+                "bookings": len(bundle.get("bookings", [])),
+                "invoices": len(bundle.get("invoices", [])),
+                "payments": len(bundle.get("payments", [])),
+                "photos": len(bundle.get("photos", [])),
+            }
+        },
+    )
+    await session.commit()
+    return data_rights_schemas.DataExportResponse(**bundle)
+
+
+@router.post(
+    "/v1/admin/data-deletion/requests",
+    response_model=data_rights_schemas.DataDeletionResponse,
+)
+async def request_data_deletion(
+    payload: data_rights_schemas.DataDeletionRequestPayload,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    admin: AdminIdentity = Depends(require_admin),
+) -> data_rights_schemas.DataDeletionResponse:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    try:
+        deletion_request, matched = await data_rights_service.request_data_deletion(
+            session,
+            org_id,
+            lead_id=payload.lead_id,
+            email=payload.email,
+            reason=payload.reason,
+            requested_by=admin.username,
+        )
+    except DomainError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=exc.detail) from exc
+    request.state.explicit_admin_audit = True
+    await audit_service.record_action(
+        session,
+        identity=admin,
+        action="data_deletion_requested",
+        resource_type="lead",
+        resource_id=payload.lead_id or payload.email or "unknown",
+        before=None,
+        after={"request_id": str(deletion_request.request_id), "matched": matched},
+    )
+    await session.commit()
+    return data_rights_schemas.DataDeletionResponse(
+        request_id=str(deletion_request.request_id),
+        status=deletion_request.status,
+        matched_leads=matched,
+        pending_deletions=matched,
+        requested_at=deletion_request.requested_at,
+    )
+
+
 @router.post("/v1/admin/retention/cleanup")
 async def run_retention_cleanup(
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
     _admin: AdminIdentity = Depends(require_admin),
 ) -> dict[str, int]:
-    return await cleanup_retention(session)
+    storage = getattr(request.app.state, "storage_backend", None) or new_storage_backend()
+    return await cleanup_retention(session, storage_backend=storage)
 
 
 def _admin_subscription_response(model: Subscription) -> subscription_schemas.AdminSubscriptionListItem:

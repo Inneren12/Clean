@@ -5,12 +5,18 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.data_rights.service import process_pending_deletions
 from app.domain.leads.db_models import ChatSession, Lead
 from app.domain.leads.statuses import LEAD_STATUS_BOOKED, LEAD_STATUS_DONE
 from app.settings import settings
 
 
-async def cleanup_retention(session: AsyncSession, now: datetime | None = None) -> dict[str, int]:
+async def cleanup_retention(
+    session: AsyncSession,
+    now: datetime | None = None,
+    *,
+    storage_backend=None,
+) -> dict[str, int]:
     reference_time = now or datetime.now(timezone.utc)
     chat_cutoff = reference_time - timedelta(days=settings.retention_chat_days)
     leads_cutoff = reference_time - timedelta(days=settings.retention_lead_days)
@@ -28,5 +34,13 @@ async def cleanup_retention(session: AsyncSession, now: datetime | None = None) 
         )
         leads_deleted = leads_result.rowcount or 0
 
+    deletion_result = await process_pending_deletions(
+        session, storage_backend=storage_backend
+    )
+
     await session.commit()
-    return {"chat_sessions_deleted": chat_deleted, "leads_deleted": leads_deleted}
+    return {
+        "chat_sessions_deleted": chat_deleted,
+        "leads_deleted": leads_deleted,
+        **deletion_result,
+    }

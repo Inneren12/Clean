@@ -7,7 +7,7 @@ from datetime import datetime
 
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
@@ -92,6 +92,11 @@ class Lead(Base):
         onupdate=func.now(),
         nullable=False,
     )
+    pending_deletion: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    deletion_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     referral_credits: Mapped[list["ReferralCredit"]] = relationship(
         "ReferralCredit",
