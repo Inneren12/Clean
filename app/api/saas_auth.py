@@ -35,6 +35,7 @@ class SaaSIdentity:
     email: str
     must_change_password: bool = False
     session_id: uuid.UUID | None = None
+    mfa_verified: bool = False
 
 
 ROLE_TO_ADMIN_ROLE: dict[MembershipRole, AdminRole] = {
@@ -77,6 +78,7 @@ async def _load_identity(request: Request, token: str | None, *, strict: bool = 
         role = MembershipRole(role_raw)
         session_id_raw = payload.get("sid")
         session_id = uuid.UUID(str(session_id_raw)) if session_id_raw else None
+        mfa_verified = bool(payload.get("mfa", False))
     except Exception:  # noqa: BLE001
         logger.info("saas_token_payload_invalid")
         if strict:
@@ -94,6 +96,7 @@ async def _load_identity(request: Request, token: str | None, *, strict: bool = 
                 if strict:
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
                 return None
+            mfa_verified = bool(session_record.mfa_verified)
         result = await session.execute(
             sa.select(
                 User.email,
@@ -125,6 +128,7 @@ async def _load_identity(request: Request, token: str | None, *, strict: bool = 
             email=email,
             must_change_password=bool(must_change_password),
             session_id=session_id,
+            mfa_verified=mfa_verified,
         )
 
 

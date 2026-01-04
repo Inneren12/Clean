@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     worker_basic_password: str | None = Field(None)
     worker_team_id: int = Field(1)
     legacy_basic_auth_enabled: bool = Field(True)
+    admin_mfa_required: bool = Field(False)
+    admin_mfa_required_roles_raw: str | None = Field(None, validation_alias="admin_mfa_required_roles")
     auth_secret_key: str = Field("dev-auth-secret")
     auth_token_ttl_minutes: int = Field(60 * 24)
     auth_access_token_ttl_minutes: int = Field(
@@ -242,6 +244,15 @@ class Settings(BaseSettings):
     @admin_ip_allowlist_cidrs.setter
     def admin_ip_allowlist_cidrs(self, value: list[str] | str | None) -> None:
         self.admin_ip_allowlist_cidrs_raw = self._normalize_raw_list(value)
+
+    @property
+    def admin_mfa_required_roles(self) -> list[str]:
+        parsed = self._parse_list(self.admin_mfa_required_roles_raw)
+        return parsed or ["owner", "admin"]
+
+    @admin_mfa_required_roles.setter
+    def admin_mfa_required_roles(self, value: list[str] | str | None) -> None:
+        self.admin_mfa_required_roles_raw = self._normalize_raw_list(value)
 
     @property
     def email_sender(self) -> str | None:

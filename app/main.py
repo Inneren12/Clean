@@ -43,6 +43,7 @@ from app.api.problem_details import (
     PROBLEM_TYPE_VALIDATION,
     problem_details,
 )
+from app.api.mfa import AdminMfaMiddleware
 from app.api.saas_auth import PasswordChangeGateMiddleware, TenantSessionMiddleware
 from app.domain.errors import DomainError
 from app.infra.db import get_session_factory
@@ -301,6 +302,7 @@ def create_app(app_settings) -> FastAPI:
     app.add_middleware(AdminSafetyMiddleware, app_settings=app_settings)
     app.add_middleware(PasswordChangeGateMiddleware)
     app.add_middleware(TenantSessionMiddleware)
+    app.add_middleware(AdminMfaMiddleware, app_settings=app_settings)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(LoggingMiddleware)
     app.add_middleware(MetricsMiddleware, metrics_client=metrics_client)
