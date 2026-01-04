@@ -26,6 +26,8 @@
 - `app/api/routes_worker.py` – Worker portal endpoints (auth, jobs list, job detail, uploads, status updates).
 - `app/api/routes_time_tracking.py` – Time tracking for workers and admin reviews.
 - `app/api/routes_admin.py` – Admin utilities: pricing reload, email scan/resend, cleanup, retention, export dead-letter, global search, scheduling actions, messaging previews, and bulk booking updates.
+- `app/api/routes_queues.py` – Operator work queues: pending/retake photos, overdue/unpaid invoices, unassigned bookings, dead letter queue (outbox + export events).
+- `app/api/routes_timeline.py` – Unified timeline endpoints for bookings and invoices combining audit logs, email events, payments, photo reviews, NPS responses, support tickets, and outbox events.
 - `app/api/routes_metrics.py` – Metrics CSV/API for admin basic auth.
 - `app/api/routes_public.py` – Public landing/docs endpoints.
 - `app/api/routes_health.py` – `/healthz` and `/readyz` checks (DB/migrations/job heartbeat).
@@ -43,7 +45,9 @@
 - `app/domain/saas/service.py` – SaaS user/org lifecycle, sessions, password reset, membership roles.
 - `app/domain/saas/billing_service.py` – Plan usage tracking, metered billing records, entitlements.
 - `app/domain/time_tracking/service.py` – Worker check-in/out and admin overrides.
-- `app/domain/ops/service.py` – Org-scoped search, scheduling conflict checks, messaging previews, and bulk booking helpers.
+- `app/domain/ops/service.py` – Org-scoped search with weighted results and worker coverage, scheduling conflict checks, messaging previews, and bulk booking helpers.
+- `app/domain/queues/service.py` – Operator work queue queries (photos pending review/retake, overdue/unpaid invoices, unassigned bookings, dead letter queue).
+- `app/domain/timeline/service.py` – Unified timeline aggregation for bookings and invoices (audit logs, outbox events, payments, photo reviews, NPS, support tickets).
 - `app/domain/ops/db_models.py` – Operational tables (job heartbeat, email events, exports, retention).
 - `app/infra/models.py` – SQLAlchemy models for core entities (users, orgs, leads, bookings, orders, invoices, workers, referrals, billing usage).
 
