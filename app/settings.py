@@ -176,6 +176,19 @@ class Settings(BaseSettings):
     email_temp_passwords: bool = Field(False)
     outbox_max_attempts: int = Field(5)
     outbox_base_backoff_seconds: float = Field(30.0)
+    dlq_auto_replay_enabled: bool = Field(False)
+    dlq_auto_replay_allow_outbox_kinds_raw: str | None = Field(
+        None, validation_alias="dlq_auto_replay_allow_outbox_kinds"
+    )
+    dlq_auto_replay_allow_export_modes_raw: str | None = Field(
+        None, validation_alias="dlq_auto_replay_allow_export_modes"
+    )
+    dlq_auto_replay_min_age_minutes: int = Field(60)
+    dlq_auto_replay_max_per_org: int = Field(5)
+    dlq_auto_replay_failure_streak_limit: int = Field(3)
+    dlq_auto_replay_outbox_attempt_ceiling: int = Field(7)
+    dlq_auto_replay_export_replay_limit: int = Field(2)
+    dlq_auto_replay_export_cooldown_minutes: int = Field(120)
     default_org_id: uuid.UUID = Field(uuid.UUID("00000000-0000-0000-0000-000000000001"))
 
     model_config = SettingsConfigDict(env_file=".env", enable_decoding=False)
@@ -301,6 +314,22 @@ class Settings(BaseSettings):
     @admin_mfa_required_roles.setter
     def admin_mfa_required_roles(self, value: list[str] | str | None) -> None:
         self.admin_mfa_required_roles_raw = self._normalize_raw_list(value)
+
+    @property
+    def dlq_auto_replay_allow_outbox_kinds(self) -> list[str]:
+        return self._parse_list(self.dlq_auto_replay_allow_outbox_kinds_raw)
+
+    @dlq_auto_replay_allow_outbox_kinds.setter
+    def dlq_auto_replay_allow_outbox_kinds(self, value: list[str] | str | None) -> None:
+        self.dlq_auto_replay_allow_outbox_kinds_raw = self._normalize_raw_list(value)
+
+    @property
+    def dlq_auto_replay_allow_export_modes(self) -> list[str]:
+        return self._parse_list(self.dlq_auto_replay_allow_export_modes_raw)
+
+    @dlq_auto_replay_allow_export_modes.setter
+    def dlq_auto_replay_allow_export_modes(self, value: list[str] | str | None) -> None:
+        self.dlq_auto_replay_allow_export_modes_raw = self._normalize_raw_list(value)
 
     @property
     def email_sender(self) -> str | None:
