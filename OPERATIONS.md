@@ -14,6 +14,7 @@
 ## Lifecycle and services container
 - FastAPI lifespan startup builds an `AppServices` bundle (storage, email adapter, Stripe client, rate limiter, metrics) on `app.state.services`; shutdown closes the rate limiter. Legacy aliases (`app.state.email_adapter`, `app.state.rate_limiter`, etc.) remain for compatibility during migration.
 - Tenant resolution honors `X-Test-Org` only when running in testing mode or `APP_ENV=dev`; in prod the header is ignored.
+- Production config validation fails fast when `APP_ENV=prod`: default/placeholder auth and portal secrets are rejected, `STRICT_CORS=true` requires explicit CORS origins (no `*`), metrics require `METRICS_TOKEN`, admin IP CIDRs must parse, and testing overrides (including `X-Test-Org`) stay disabled.
 
 ## Postgres row-level security
 - Migration `0044_postgres_rls_org_isolation` enables and forces RLS on org-owned tables (leads, bookings, invoices, invoice_payments, workers, teams, order_photos, export_events, email_events). The migration is a no-op on SQLite but must be applied in Postgres before rollout.
