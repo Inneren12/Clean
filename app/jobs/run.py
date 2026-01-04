@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.infra.db import get_session_factory
 from app.infra.email import EmailAdapter, resolve_email_adapter
+from app.infra.logging import clear_log_context
 from app.infra.metrics import configure_metrics, metrics
 from app.jobs.heartbeat import record_heartbeat
 from app.jobs import email_jobs, outbox, storage_janitor
@@ -27,11 +28,14 @@ async def _run_job(
     session_factory: async_sessionmaker,
     runner: Callable[[object], Awaitable[dict[str, int]]],
 ) -> None:
-    async with session_factory() as session:
-        result = await runner(session)
-    logger.info("job_complete", extra={"extra": {"job": name, **result}})
-    _record_email_job_metrics(name, result)
-    await _record_job_result(session_factory, name, success=True)
+    try:
+        async with session_factory() as session:
+            result = await runner(session)
+        logger.info("job_complete", extra={"extra": {"job": name, **result}})
+        _record_email_job_metrics(name, result)
+        await _record_job_result(session_factory, name, success=True)
+    finally:
+        clear_log_context()
 
 
 def _record_email_job_metrics(job: str, result: dict[str, int]) -> None:

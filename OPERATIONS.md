@@ -10,6 +10,7 @@
 
 ## Lifecycle and services container
 - FastAPI lifespan startup builds an `AppServices` bundle (storage, email adapter, Stripe client, rate limiter, metrics) on `app.state.services`; shutdown closes the rate limiter. Legacy aliases (`app.state.email_adapter`, `app.state.rate_limiter`, etc.) remain for compatibility during migration.
+- Tenant resolution honors `X-Test-Org` only when running in testing mode or `APP_ENV=dev`; in prod the header is ignored.
 
 ## Postgres row-level security
 - Migration `0044_postgres_rls_org_isolation` enables and forces RLS on org-owned tables (leads, bookings, invoices, invoice_payments, workers, teams, order_photos, export_events, email_events). The migration is a no-op on SQLite but must be applied in Postgres before rollout.
@@ -23,7 +24,7 @@
 - **Stripe:** `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, success/cancel URLs, billing portal return URL, circuit breaker settings.
 - **Email:** `EMAIL_MODE`, `SENDGRID_API_KEY` or `SMTP_*` values, retry/backoff settings, `EMAIL_FROM`/`EMAIL_FROM_NAME`. `EMAIL_TEMP_PASSWORDS=true` will deliver temp passwords in reset emails; leave false to send notification-only messages.
   Email adapters are resolved at runtime from `app.state.services.email_adapter` (with `app.state.email_adapter` as a backward-compatible alias) via `resolve_app_email_adapter`; admin email scans and scheduled jobs share this helper so tests can inject a stub adapter while production loads the configured SendGrid/SMTP adapter.
-- **Storage/photos:** `ORDER_STORAGE_BACKEND`, `ORDER_UPLOAD_ROOT`, `ORDER_PHOTO_MAX_BYTES`, MIME allowlist, S3/R2/Cloudflare credentials, signing secrets/TTLs.
+- **Storage/photos:** `ORDER_STORAGE_BACKEND`, `ORDER_UPLOAD_ROOT`, `ORDER_PHOTO_MAX_BYTES`, MIME allowlist, S3/R2/Cloudflare credentials, signing secrets/TTLs. Canonical storage keys follow `orders/{org_id}/{booking_id}/{photo_id}[.ext]` (legacy aliases still resolve for reads).
 - **Feature flags:** `DEPOSITS_ENABLED`, `EXPORT_MODE` (`off`/`webhook`/`sheets`), and `STRICT_POLICY_MODE` for stricter portal/config behaviors. Operators can inspect runtime flags via `GET /v1/admin/feature-flags` (Basic Auth protected).
 - **Captcha/abuse:** `CAPTCHA_MODE`, `TURNSTILE_SECRET_KEY`.
 - **Metrics/observability:** `METRICS_ENABLED`, `METRICS_TOKEN`, `JOB_HEARTBEAT_REQUIRED`, `JOB_HEARTBEAT_TTL_SECONDS`.

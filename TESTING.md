@@ -34,3 +34,5 @@ Defined in `pytest.ini`:
 - If migrations drift, run `alembic upgrade head` and re-run `pytest -m "migrations"`.
 - If `alembic heads` returns more than one revision, create a merge migration (`alembic merge -m "merge alembic heads" heads`) before opening a PR so CI can upgrade cleanly.
 - For Stripe/email tests, stub settings are used; ensure secrets are set only when running against real services.
+- Storage keys for local photo uploads are canonicalized to `orders/{org_id}/{booking_id}/{photo_id}[.ext]`; smoke/regression suites assert files land under that prefix.
+- The `X-Test-Org` header is only honored when `settings.testing` is true or `APP_ENV=dev`; prod-mode tests should expect it to be ignored.

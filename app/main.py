@@ -84,9 +84,9 @@ def _resolve_log_identity(request: Request) -> dict[str, str]:
         worker_org = org_id or getattr(worker_identity, "org_id", None)
         if worker_org:
             context["org_id"] = str(worker_org)
-        worker_id = user_id or getattr(worker_identity, "worker_id", None)
-        if worker_id:
-            context["user_id"] = str(worker_id)
+        worker_user = user_id or getattr(worker_identity, "username", None)
+        if worker_user:
+            context["user_id"] = str(worker_user)
     else:
         if org_id:
             context["org_id"] = str(org_id)
@@ -349,9 +349,11 @@ def create_app(app_settings) -> FastAPI:
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception):
+        identity_context = _resolve_log_identity(request)
+        request_id = getattr(request.state, "request_id", None)
         logger.exception(
             "unhandled_exception",
-            extra={"request_id": getattr(request.state, "request_id", None), "path": request.url.path},
+            extra={"request_id": request_id, "path": request.url.path, **identity_context},
         )
         return problem_details(
             request=request,
