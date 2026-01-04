@@ -18,6 +18,7 @@ from app.api.routes_bookings import router as bookings_router
 from app.api.routes_chat import router as chat_router
 from app.api.routes_estimate import router as estimate_router
 from app.api.routes_bot import router as bot_router
+from app.api.admin_safety import AdminSafetyMiddleware
 from app.api.routes_checklists import router as checklists_router
 from app.api.routes_health import router as health_router
 from app.api.routes_client import router as client_router
@@ -290,6 +291,7 @@ def create_app(app_settings) -> FastAPI:
     app.add_middleware(WorkerAccessMiddleware)
     app.add_middleware(AdminAuditMiddleware)
     app.add_middleware(AdminAccessMiddleware)
+    app.add_middleware(AdminSafetyMiddleware, app_settings=app_settings)
     app.add_middleware(PasswordChangeGateMiddleware)
     app.add_middleware(TenantSessionMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
