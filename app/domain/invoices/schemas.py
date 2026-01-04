@@ -1,4 +1,5 @@
 from datetime import date, datetime
+import uuid
 from decimal import Decimal
 from typing import List
 
@@ -202,3 +203,32 @@ class InvoiceReconcileItem(BaseModel):
 
 class InvoiceReconcileListResponse(BaseModel):
     items: list[InvoiceReconcileItem]
+
+
+class InvoiceReconcileResponse(BaseModel):
+    invoice_id: str
+    invoice_number: str
+    status: str
+    total_cents: int
+    paid_cents: int
+    outstanding_cents: int
+    succeeded_payments_count: int
+
+
+class StripeEventView(BaseModel):
+    event_id: str
+    type: str | None = None
+    created_at: datetime
+    org_id: uuid.UUID | None = None
+    invoice_id: str | None = None
+    booking_id: str | None = None
+    processed_status: str
+    last_error: str | None = None
+
+
+class StripeEventListResponse(BaseModel):
+    items: list[StripeEventView]
+    total: int
+    limit: int
+    offset: int
+

@@ -1724,6 +1724,68 @@ async def list_invoice_reconcile_items(
     return invoice_schemas.InvoiceReconcileListResponse(items=cases)
 
 
+@router.post(
+    "/v1/admin/finance/invoices/{invoice_id}/reconcile",
+    response_model=invoice_schemas.InvoiceReconcileResponse,
+)
+async def reconcile_invoice(
+    request: Request,
+    invoice_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    identity: AdminIdentity = Depends(require_finance),
+) -> invoice_schemas.InvoiceReconcileResponse:
+    org_id = entitlements.resolve_org_id(request)
+    invoice, before, after = await invoice_service.reconcile_invoice(session, org_id, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
+
+    request.state.explicit_admin_audit = True
+    await audit_service.record_action(
+        session,
+        identity=identity,
+        org_id=org_id,
+        action="finance_reconcile",
+        resource_type="invoice",
+        resource_id=invoice.invoice_id,
+        before=before,
+        after=after,
+    )
+    await session.commit()
+    return invoice_schemas.InvoiceReconcileResponse(**after)
+
+
+@router.get(
+    "/v1/admin/finance/reconcile/stripe-events",
+    response_model=invoice_schemas.StripeEventListResponse,
+)
+async def list_stripe_events(
+    request: Request,
+    invoice_id: str | None = Query(default=None),
+    booking_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_finance),
+) -> invoice_schemas.StripeEventListResponse:
+    org_id = entitlements.resolve_org_id(request)
+    items, total = await invoice_service.list_stripe_events(
+        session,
+        org_id,
+        invoice_id=invoice_id,
+        booking_id=booking_id,
+        status=status,
+        limit=limit,
+        offset=offset,
+    )
+    return invoice_schemas.StripeEventListResponse(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
 @router.get("/v1/admin/exports/sales-ledger.csv")
 async def export_sales_ledger(
     request: Request,
