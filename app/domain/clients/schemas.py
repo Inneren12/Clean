@@ -1,4 +1,5 @@
 from datetime import datetime
+import uuid
 
 from pydantic import BaseModel, EmailStr
 
@@ -11,6 +12,7 @@ class ClientIdentity(BaseModel):
     client_id: str
     email: EmailStr
     issued_at: datetime
+    org_id: uuid.UUID
 
 
 class ClientOrderSummary(BaseModel):

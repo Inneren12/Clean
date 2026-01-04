@@ -97,6 +97,12 @@
 - Admin-issued onboarding and password resets are org-scoped via `/v1/iam/users/*`. Temp passwords are shown once in the API response and are only valid until the user changes their password; encourage operators to rotate sessions (`/v1/iam/users/{id}/logout`) if a credential leak is suspected.
 - Ensure SaaS admin accounts can reach `/v1/iam/users` with correct org context; configure `AUTH_SECRET_KEY` and TTL env vars before enabling production onboarding.
 
+## Client portal v1 usage
+- Magic links are issued from `/client/login/request` and verified via `/client/login/callback`. Links are HMAC-signed with `CLIENT_PORTAL_SECRET`, embed the `org_id`, and respect `CLIENT_PORTAL_TOKEN_TTL_MINUTES`; tokens must be sent as `client_session` cookies or `Authorization: Bearer` headers.
+- Client requests are org-scoped from the token: `/v1/client/portal/bookings*` (upcoming list + detail), `/v1/client/portal/invoices*`, and photo signed URLs require the same org. Cross-org identifiers return 404/403 even when the booking ID is guessed.
+- Photo access uses signed download redirects only (`/v1/orders/{order_id}/photos/{photo_id}/signed-download`); do not serve raw bucket URLs. Ensure storage signing keys and `PHOTO_URL_TTL_SECONDS` are configured and rotate tokens if a leak is suspected.
+- Rate limits apply to client portal endpoints using the shared rate limiter; keep Redis available in production to avoid abuse and monitor `429` spikes for scraping attempts.
+
 ## Backups and restores
 - Postgres backups should capture tenant-scoped tables (`org_id` columns). Use `scripts/backup_pg.sh` (custom format, no `--create`) and `scripts/restore_pg.sh` (supports `ALLOW_CREATE_IN_DUMP=1` when the dump was made with `--create`). Validate restore before releases; ensure `alembic_version` matches after restore.
 - Run the quarterly/local drill described in `docs/runbook_backup_restore_drill.md` to practice backup → restore → verification on a fresh database.
