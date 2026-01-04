@@ -1724,6 +1724,37 @@ async def list_invoice_reconcile_items(
     return invoice_schemas.InvoiceReconcileListResponse(items=cases)
 
 
+@router.post(
+    "/v1/admin/finance/invoices/{invoice_id}/reconcile",
+    response_model=invoice_schemas.InvoiceReconcileResponse,
+)
+async def reconcile_invoice(
+    request: Request,
+    invoice_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    identity: AdminIdentity = Depends(require_finance),
+) -> invoice_schemas.InvoiceReconcileResponse:
+    org_id = entitlements.resolve_org_id(request)
+    invoice, before, after = await invoice_service.reconcile_invoice(session, org_id, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
+
+    request.state.explicit_admin_audit = True
+    await audit_service.record_action(
+        session,
+        identity=identity,
+        org_id=org_id,
+        action="finance_reconcile",
+        resource_type="invoice",
+        resource_id=invoice.invoice_id,
+        before=before,
+        after=after,
+    )
+    await session.commit()
+
+    return invoice_schemas.InvoiceReconcileResponse(**after)
+
+
 @router.get("/v1/admin/exports/sales-ledger.csv")
 async def export_sales_ledger(
     request: Request,

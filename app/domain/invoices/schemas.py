@@ -202,3 +202,13 @@ class InvoiceReconcileItem(BaseModel):
 
 class InvoiceReconcileListResponse(BaseModel):
     items: list[InvoiceReconcileItem]
+
+
+class InvoiceReconcileResponse(BaseModel):
+    invoice_id: str
+    invoice_number: str
+    status: str
+    total_cents: int
+    paid_cents: int
+    outstanding_cents: int
+    succeeded_payments_count: int

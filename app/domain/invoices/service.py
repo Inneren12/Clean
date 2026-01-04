@@ -145,6 +145,22 @@ def outstanding_balance_cents(invoice: Invoice) -> int:
     return max(invoice.total_cents - _paid_cents(invoice), 0)
 
 
+def _reconcile_snapshot(invoice: Invoice) -> dict:
+    paid_cents = _paid_cents(invoice)
+    succeeded_payments_count = len(
+        [payment for payment in invoice.payments if payment.status == statuses.PAYMENT_STATUS_SUCCEEDED]
+    )
+    return {
+        "invoice_id": invoice.invoice_id,
+        "invoice_number": invoice.invoice_number,
+        "status": invoice.status,
+        "total_cents": invoice.total_cents,
+        "paid_cents": paid_cents,
+        "outstanding_cents": max(invoice.total_cents - paid_cents, 0),
+        "succeeded_payments_count": succeeded_payments_count,
+    }
+
+
 def recalculate_totals(invoice: Invoice) -> None:
     subtotal = 0
     tax_total = 0
@@ -538,3 +554,36 @@ async def list_invoice_reconcile_items(
         )
 
     return cases
+
+
+async def reconcile_invoice(
+    session: AsyncSession, org_id: uuid.UUID, invoice_id: str
+) -> tuple[Invoice | None, dict | None, dict | None]:
+    stmt = (
+        select(Invoice)
+        .options(selectinload(Invoice.payments))
+        .where(Invoice.invoice_id == invoice_id, Invoice.org_id == org_id)
+        .with_for_update(of=Invoice)
+    )
+    invoice = await session.scalar(stmt)
+    if not invoice:
+        return None, None, None
+
+    before = _reconcile_snapshot(invoice)
+    paid_cents = before["paid_cents"]
+
+    if paid_cents >= invoice.total_cents:
+        invoice.status = statuses.INVOICE_STATUS_PAID
+    elif paid_cents > 0:
+        invoice.status = statuses.INVOICE_STATUS_PARTIAL
+    elif invoice.status == statuses.INVOICE_STATUS_PAID:
+        today = date.today()
+        invoice.status = (
+            statuses.INVOICE_STATUS_OVERDUE
+            if invoice.due_date and invoice.due_date < today
+            else statuses.INVOICE_STATUS_SENT
+        )
+
+    await session.flush()
+    after = _reconcile_snapshot(invoice)
+    return invoice, before, after

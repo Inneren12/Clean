@@ -43,6 +43,11 @@
 - Org isolation: requests are scoped by the resolved org (`X-Test-Org` in dev/tests) and will not surface invoices from other tenants.
 - Response fields include payment counts, last payment timestamp, and quick action placeholders pointing at `/v1/admin/finance/reconcile/invoices/{invoice_id}` for future remediation workflows.
 
+### How to reconcile an invoice safely
+- Use finance credentials and call `POST /v1/admin/finance/invoices/{invoice_id}/reconcile` in the correct org context. The action locks the invoice row, recomputes succeeded manual/Stripe payments, and updates invoice status accordingly (PAID when succeeded funds cover total, PARTIAL when some funds exist, or SENT/OVERDUE when a PAID invoice has no settled funds and the due date has passed).
+- The reconcile action is idempotent: repeat calls do not create duplicate payments or alter Stripe-settled amounts. If no succeeded payments exist, the service will **not** invent Stripe records; it simply reopens the invoice.
+- Every reconcile call records an admin audit log with before/after snapshots (status, paid cents, outstanding cents, succeeded payment count). Review the unified timeline if you need to verify who performed a repair.
+
 ## Incident read-only + break-glass procedure
 1. **Enable admin read-only:** set `ADMIN_READ_ONLY=true` (config/env and restart) to block POST/PUT/PATCH/DELETE on `/v1/admin/*` and `/v1/iam/*` with 409 Problem+JSON while investigations run. IP allowlists remain enforced.
 2. **Start a break-glass session:** an OWNER/ADMIN calls `POST /v1/admin/break-glass/start` with `{"reason": "<incident summary>", "ttl_minutes": <minutes>}`. The API returns a one-time token and expiry; store it securely and never log it. The token is hashed at rest and scoped to the caller's org.
