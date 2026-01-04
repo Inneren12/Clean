@@ -8,6 +8,9 @@ jobs:
   sanity:
     runs-on: ubuntu-latest
 
+    env:
+      APP_ENV: dev
+
     steps:
       - uses: actions/checkout@v4
 
@@ -145,6 +148,9 @@ jobs:
           --health-interval=5s
           --health-timeout=5s
           --health-retries=30
+
+    env:
+      APP_ENV: dev
 
     steps:
       - uses: actions/checkout@v4
