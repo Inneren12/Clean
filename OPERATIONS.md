@@ -101,6 +101,12 @@
 - `outbox-delivery` job (or `/v1/admin/outbox/dead-letter` replay) pops due rows, attempts delivery with exponential backoff (`outbox_base_backoff_seconds`, `outbox_max_attempts`).
 - After `outbox_max_attempts`, rows move to status `dead` and exports also emit `export_events` for legacy DLQ visibility. Admins can replay dead rows without cross-org access.
 
+## Data export/delete playbook
+- OWNER/ADMIN roles only; all calls are org-scoped (`X-Test-Org` in dev/tests). Every export/deletion request is captured in admin audit logs with actor and resource metadata.
+- **Data export**: `POST /v1/admin/data/export` with `lead_id` or `email` returns a JSON bundle of leads and linked bookings, invoices, payments, and photo references. Only metadata is returned—no signed URLs or tokens.
+- **Deletion requests**: `POST /v1/admin/data-deletion/requests` records a request and marks matching leads as pending deletion. It is safe to enqueue multiple requests; they stay scoped to the caller’s org.
+- **Retention cleanup**: `POST /v1/admin/retention/cleanup` also processes pending deletion requests. Cleanup deletes photos (tombstoned for storage retry), detaches bookings from leads, removes invoice public tokens, nulls invoice `customer_id`, and anonymizes lead PII while retaining invoice totals/tax data for accounting.
+
 ## IAM onboarding operations
 - Admin-issued onboarding and password resets are org-scoped via `/v1/iam/users/*`. Temp passwords are shown once in the API response and are only valid until the user changes their password; encourage operators to rotate sessions (`/v1/iam/users/{id}/logout`) if a credential leak is suspected.
 - Ensure SaaS admin accounts can reach `/v1/iam/users` with correct org context; configure `AUTH_SECRET_KEY` and TTL env vars before enabling production onboarding.

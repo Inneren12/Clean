@@ -50,6 +50,10 @@ This document summarizes the authentication changes shipped in Sprint 11.
 - For development and automated tests (`APP_ENV=dev` or `settings.testing=true`), Basic Auth can remain on for convenience while SaaS auth is wired.
 - Billing pause/resume endpoints (`/v1/billing/pause`, `/v1/billing/resume`) require SaaS OWNER/ADMIN/FINANCE roles; actions are org-scoped and capture reason codes with pause/resume timestamps.
 
+## Data rights (export/delete)
+- OWNER/ADMIN only; org context is mandatory for all calls and every request is admin-audited with actor and resource metadata.
+- `POST /v1/admin/data/export` returns org-scoped lead/bookings/invoices/payments/photo metadata only—no signed URLs, session tokens, or invoice public tokens are emitted.
+- `POST /v1/admin/data-deletion/requests` marks matching leads for anonymization. Cleanup removes photo blobs, detaches bookings, removes invoice public tokens, and nulls `customer_id` while retaining invoice totals/tax amounts for accounting compliance.
 ## Analytics endpoint roles and data safety
 - `/v1/admin/analytics/funnel`, `/v1/admin/analytics/nps`, and `/v1/admin/analytics/cohorts` require FINANCE permission (OWNER/ADMIN/FINANCE roles qualify). Dispatcher/viewer roles cannot access these endpoints.
 - All analytics responses are org-scoped and return aggregates only. No raw leads, client identifiers, NPS comments, or booking details are emitted.
