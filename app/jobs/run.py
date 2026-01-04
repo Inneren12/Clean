@@ -11,7 +11,7 @@ from app.infra.email import EmailAdapter, resolve_email_adapter
 from app.infra.logging import clear_log_context
 from app.infra.metrics import configure_metrics, metrics
 from app.jobs.heartbeat import record_heartbeat
-from app.jobs import dlq_auto_replay, email_jobs, outbox, storage_janitor
+from app.jobs import accounting_export, dlq_auto_replay, email_jobs, outbox, storage_janitor
 from app.infra.storage import new_storage_backend
 from app.domain.ops.db_models import JobHeartbeat
 from app.settings import settings
@@ -100,6 +100,10 @@ def _job_runner(name: str, base_url: str | None = None) -> Callable:
             org_id=settings.default_org_id,
             export_transport=None,
             export_resolver=None,
+        )
+    if name == "accounting-export":
+        return lambda session: accounting_export.run_accounting_export(
+            session, org_id=settings.default_org_id, export_mode=settings.export_mode
         )
     if name == "storage-janitor":
         return lambda session: storage_janitor.run_storage_janitor(session, _STORAGE)
