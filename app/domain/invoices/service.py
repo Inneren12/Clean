@@ -24,6 +24,7 @@ from app.domain.invoices.db_models import (
     InvoiceNumberSequence,
     InvoicePublicToken,
     Payment,
+    StripeEvent,
 )
 from app.domain.invoices import schemas as invoice_schemas
 from app.domain.invoices.schemas import InvoiceItemCreate
@@ -587,3 +588,56 @@ async def reconcile_invoice(
     await session.flush()
     after = _reconcile_snapshot(invoice)
     return invoice, before, after
+
+
+async def list_stripe_events(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    invoice_id: str | None = None,
+    booking_id: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[invoice_schemas.StripeEventView], int]:
+    filters = [StripeEvent.org_id == org_id]
+    if invoice_id:
+        filters.append(StripeEvent.invoice_id == invoice_id)
+    if booking_id:
+        filters.append(StripeEvent.booking_id == booking_id)
+    if status:
+        filters.append(StripeEvent.status == status)
+
+    order_expr = func.coalesce(StripeEvent.event_created_at, StripeEvent.processed_at)
+
+    stmt = (
+        select(StripeEvent)
+        .where(*filters)
+        .order_by(order_expr.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    result = await session.execute(stmt)
+    events = result.scalars().all()
+
+    count_stmt = select(func.count()).select_from(StripeEvent).where(*filters)
+    total = int(await session.scalar(count_stmt) or 0)
+
+    items: list[invoice_schemas.StripeEventView] = []
+    for event in events:
+        created_at = event.event_created_at or event.processed_at
+        items.append(
+            invoice_schemas.StripeEventView(
+                event_id=event.event_id,
+                type=event.event_type,
+                created_at=created_at,
+                org_id=event.org_id,
+                invoice_id=event.invoice_id,
+                booking_id=event.booking_id,
+                processed_status=event.status,
+                last_error=event.last_error,
+            )
+        )
+
+    return items, total
+
