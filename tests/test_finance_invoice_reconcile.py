@@ -3,6 +3,7 @@ import base64
 import uuid
 from datetime import date, datetime, timezone
 
+import pytest
 import sqlalchemy as sa
 
 from app.domain.invoices import statuses
@@ -13,6 +14,31 @@ from app.settings import settings
 
 
 ORG_HEADER = "X-Test-Org"
+
+
+@pytest.fixture(autouse=True)
+def finance_credentials():
+    original_admin_username = settings.admin_basic_username
+    original_admin_password = settings.admin_basic_password
+    original_dispatcher_username = settings.dispatcher_basic_username
+    original_dispatcher_password = settings.dispatcher_basic_password
+    original_viewer_username = settings.viewer_basic_username
+    original_viewer_password = settings.viewer_basic_password
+
+    settings.admin_basic_username = "finance"
+    settings.admin_basic_password = "secret"
+    settings.dispatcher_basic_username = "dispatch"
+    settings.dispatcher_basic_password = "pw"
+    settings.viewer_basic_username = "viewer"
+    settings.viewer_basic_password = "pw"
+    yield
+
+    settings.admin_basic_username = original_admin_username
+    settings.admin_basic_password = original_admin_password
+    settings.dispatcher_basic_username = original_dispatcher_username
+    settings.dispatcher_basic_password = original_dispatcher_password
+    settings.viewer_basic_username = original_viewer_username
+    settings.viewer_basic_password = original_viewer_password
 
 
 def _auth_headers(username: str, password: str, org_id: uuid.UUID) -> dict[str, str]:
@@ -268,13 +294,6 @@ async def _seed_reconcile_targets(async_session_maker):
 
 
 def test_finance_reconcile_requires_finance_role(client, async_session_maker):
-    settings.admin_basic_username = "finance"
-    settings.admin_basic_password = "secret"
-    settings.dispatcher_basic_username = "dispatch"
-    settings.dispatcher_basic_password = "pw"
-    settings.viewer_basic_username = "viewer"
-    settings.viewer_basic_password = "pw"
-
     seeded = asyncio.run(_seed_invoice_mismatches(async_session_maker))
     finance_headers = _auth_headers("finance", "secret", seeded["org_a"])
 
@@ -291,10 +310,20 @@ def test_finance_reconcile_requires_finance_role(client, async_session_maker):
         assert forbidden.status_code == 403
 
 
-def test_finance_reconcile_lists_org_scoped_mismatches(client, async_session_maker):
-    settings.admin_basic_username = "finance"
-    settings.admin_basic_password = "secret"
+def test_finance_reconcile_post_requires_finance_role(client, async_session_maker):
+    seeded = asyncio.run(_seed_reconcile_targets(async_session_maker))
+    org_id = seeded["org_id"]
+    invoice = seeded["invoices"]["paid_mismatch"]
 
+    for username in ("dispatch", "viewer"):
+        forbidden = client.post(
+            f"/v1/admin/finance/invoices/{invoice.invoice_id}/reconcile",
+            headers=_auth_headers(username, "pw", org_id),
+        )
+        assert forbidden.status_code == 403
+
+
+def test_finance_reconcile_lists_org_scoped_mismatches(client, async_session_maker):
     seeded = asyncio.run(_seed_invoice_mismatches(async_session_maker))
     org_a = seeded["org_a"]
     org_b = seeded["org_b"]
@@ -314,6 +343,9 @@ def test_finance_reconcile_lists_org_scoped_mismatches(client, async_session_mak
     assert pending["outstanding_cents"] == 1500
     assert pending["last_payment_at"] is not None
     assert pending["quick_actions"]
+    assert pending["quick_actions"][0]["target"] == (
+        f"/v1/admin/finance/invoices/{invoices['pending'].invoice_id}/reconcile"
+    )
 
     duplicate = next(item for item in payload["items"] if item["invoice_number"] == "A-003")
     assert duplicate["succeeded_payments_count"] == 2
@@ -341,9 +373,6 @@ def test_finance_reconcile_lists_org_scoped_mismatches(client, async_session_mak
 
 
 def test_finance_reconcile_marks_invoice_paid(client, async_session_maker):
-    settings.admin_basic_username = "finance"
-    settings.admin_basic_password = "secret"
-
     seeded = asyncio.run(_seed_reconcile_targets(async_session_maker))
     org_id = seeded["org_id"]
     invoice = seeded["invoices"]["paid_mismatch"]
@@ -377,9 +406,6 @@ def test_finance_reconcile_marks_invoice_paid(client, async_session_maker):
 
 
 def test_finance_reconcile_reopens_unfunded_paid_invoice(client, async_session_maker):
-    settings.admin_basic_username = "finance"
-    settings.admin_basic_password = "secret"
-
     seeded = asyncio.run(_seed_reconcile_targets(async_session_maker))
     org_id = seeded["org_id"]
     invoice = seeded["invoices"]["paid_without_funds"]
@@ -404,9 +430,6 @@ def test_finance_reconcile_reopens_unfunded_paid_invoice(client, async_session_m
 
 
 def test_finance_reconcile_is_idempotent(client, async_session_maker):
-    settings.admin_basic_username = "finance"
-    settings.admin_basic_password = "secret"
-
     seeded = asyncio.run(_seed_reconcile_targets(async_session_maker))
     org_id = seeded["org_id"]
     invoice = seeded["invoices"]["partial"]
@@ -443,9 +466,6 @@ def test_finance_reconcile_is_idempotent(client, async_session_maker):
 
 
 def test_finance_reconcile_blocks_cross_org(client, async_session_maker):
-    settings.admin_basic_username = "finance"
-    settings.admin_basic_password = "secret"
-
     seeded = asyncio.run(_seed_reconcile_targets(async_session_maker))
     org_id = seeded["org_id"]
     other_invoice = seeded["invoices"]["other"]

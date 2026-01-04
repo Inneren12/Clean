@@ -578,7 +578,7 @@ async def list_invoice_reconcile_items(
                 quick_actions=[
                     QuickActionItem(
                         label="Reconcile",
-                        target=f"/v1/admin/finance/reconcile/invoices/{row.invoice_id}",
+                        target=f"/v1/admin/finance/invoices/{row.invoice_id}/reconcile",
                         method="POST",
                     )
                 ],

@@ -41,7 +41,7 @@
 ## How to detect invoice mismatches
 - Finance-only read endpoint: `GET /v1/admin/finance/reconcile/invoices?status=mismatch` (or `status=all` to include clean invoices) returns invoices where payments and invoice status disagree. Basic Auth finance roles or SaaS FINANCE tokens are required.
 - Org isolation: requests are scoped by the resolved org (`X-Test-Org` in dev/tests) and will not surface invoices from other tenants.
-- Response fields include payment counts, last payment timestamp, and quick action placeholders pointing at `/v1/admin/finance/reconcile/invoices/{invoice_id}` for future remediation workflows.
+- Response fields include payment counts, last payment timestamp, and quick action placeholders pointing at `/v1/admin/finance/invoices/{invoice_id}/reconcile` for remediation.
 
 ## Invoice tax snapshots and reporting
 - Invoices store tax snapshots at creation time: `taxable_subtotal_cents` (sum of line totals with a positive tax rate), `tax_cents`, and `tax_rate_basis` (effective rate derived from the stored amounts). These values are persisted alongside `subtotal_cents` and are not recomputed from current org tax configs.
