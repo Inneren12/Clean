@@ -23,6 +23,13 @@ def normalize_subscription_status(status: str | None) -> str:
     return normalized
 
 
+def _now() -> dt.datetime:
+    now = dt.datetime.now(tz=dt.timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=dt.timezone.utc)
+    return now
+
+
 async def get_or_create_billing(session: AsyncSession, org_id: uuid.UUID) -> OrganizationBilling:
     stmt = sa.select(OrganizationBilling).where(OrganizationBilling.org_id == org_id).with_for_update()
     result = await session.execute(stmt)
@@ -66,6 +73,37 @@ async def set_plan(
     billing.stripe_customer_id = stripe_customer_id or billing.stripe_customer_id
     billing.stripe_subscription_id = stripe_subscription_id or billing.stripe_subscription_id
     billing.current_period_end = current_period_end
+    await session.flush()
+    return billing
+
+
+def _normalize_reason(reason_code: str | None) -> str | None:
+    if reason_code is None:
+        return None
+    trimmed = str(reason_code).strip()
+    return trimmed.upper() if trimmed else None
+
+
+async def pause_subscription(
+    session: AsyncSession, org_id: uuid.UUID, *, reason_code: str | None = None
+) -> OrganizationBilling:
+    billing = await get_or_create_billing(session, org_id)
+    billing.status = "paused"
+    billing.pause_reason_code = _normalize_reason(reason_code)
+    billing.resume_reason_code = None
+    billing.paused_at = _now()
+    billing.resumed_at = None
+    await session.flush()
+    return billing
+
+
+async def resume_subscription(
+    session: AsyncSession, org_id: uuid.UUID, *, reason_code: str | None = None
+) -> OrganizationBilling:
+    billing = await get_or_create_billing(session, org_id)
+    billing.status = "active"
+    billing.resume_reason_code = _normalize_reason(reason_code)
+    billing.resumed_at = _now()
     await session.flush()
     return billing
 

@@ -43,3 +43,4 @@ This document summarizes the authentication changes shipped in Sprint 11.
 - Legacy admin Basic Auth remains supported for backward compatibility but is **deprecated**. Prefer SaaS identities with MFA enforced (`ADMIN_MFA_REQUIRED=true`) for all operators.
 - In production (`APP_ENV=prod`), legacy Basic Auth is disabled by default; operators must explicitly set `LEGACY_BASIC_AUTH_ENABLED=true` to allow it. This reduces the attack surface when environment configuration is missing or typoed.
 - For development and automated tests (`APP_ENV=dev` or `settings.testing=true`), Basic Auth can remain on for convenience while SaaS auth is wired.
+- Billing pause/resume endpoints (`/v1/billing/pause`, `/v1/billing/resume`) require SaaS OWNER/ADMIN/FINANCE roles; actions are org-scoped and capture reason codes with pause/resume timestamps.

@@ -259,6 +259,11 @@ async def _handle_invoice_event(session: AsyncSession, event: Any, ctx: StripeOr
         )
         return False
 
+    if payment_status == invoice_statuses.PAYMENT_STATUS_FAILED:
+        await invoice_service.enqueue_dunning_email(
+            session, invoice, failure_reason=str(event_type)
+        )
+
     logger.info(
         "stripe_invoice_payment_recorded",
         extra={

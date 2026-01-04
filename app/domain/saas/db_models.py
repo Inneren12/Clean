@@ -178,6 +178,10 @@ class OrganizationBilling(Base):
     plan_id: Mapped[str] = mapped_column(sa.String(64), nullable=False)
     status: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="inactive", server_default="inactive")
     current_period_end: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    pause_reason_code: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+    resume_reason_code: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+    paused_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    resumed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     )

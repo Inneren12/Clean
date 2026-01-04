@@ -8,9 +8,11 @@ import sqlalchemy as sa
 
 from app.domain.invoices import service as invoice_service, statuses as invoice_statuses
 from app.domain.invoices.db_models import Invoice, Payment, StripeEvent
+from app.domain.leads.db_models import Lead
 from app.infra import stripe_client as stripe_infra
 from app.main import app
 from app.settings import settings
+from tests.conftest import DEFAULT_ORG_ID
 
 
 async def _seed_invoice(
@@ -280,3 +282,69 @@ def test_checkout_then_payment_intent_single_payment(client, async_session_maker
     assert provider_ref == "pi_invoice_multi"
     assert invoice_status == invoice_statuses.INVOICE_STATUS_PAID
 
+
+def test_dunning_outbox_on_payment_failure(client, async_session_maker, monkeypatch):
+    monkeypatch.setattr(settings, "stripe_webhook_secret", "whsec_test")
+
+    async def _seed_invoice_with_customer() -> str:
+        async with async_session_maker() as session:
+            lead = Lead(
+                org_id=DEFAULT_ORG_ID,
+                name="Lead One",
+                phone="555-5555",
+                email="lead@example.com",
+                structured_inputs={},
+                estimate_snapshot={},
+                pricing_config_version="v1",
+                config_hash="test",
+            )
+            invoice = Invoice(
+                org_id=DEFAULT_ORG_ID,
+                invoice_number=f"INV-DUN-{uuid.uuid4()}",
+                customer_id=lead.lead_id,
+                status=invoice_statuses.INVOICE_STATUS_SENT,
+                issue_date=date.today(),
+                currency="CAD",
+                subtotal_cents=5000,
+                tax_cents=0,
+                total_cents=5000,
+            )
+            session.add_all([lead, invoice])
+            await session.flush()
+            await invoice_service.upsert_public_token(session, invoice)
+            await session.commit()
+            return invoice.invoice_id
+
+    invoice_id = asyncio.run(_seed_invoice_with_customer())
+
+    called: dict[str, bool] = {"value": False}
+    real_enqueue = invoice_service.enqueue_dunning_email
+
+    async def _enqueue_wrapper(session, invoice, *, failure_reason=None):
+        called["value"] = True
+        return await real_enqueue(session, invoice, failure_reason=failure_reason)
+
+    monkeypatch.setattr(invoice_service, "enqueue_dunning_email", _enqueue_wrapper)
+
+    event = {
+        "id": "evt_dunning",
+        "type": "payment_intent.payment_failed",
+        "created": int(datetime.now(tz=timezone.utc).timestamp()),
+        "data": {
+            "object": {
+                "id": "pi_fail",
+                "amount_received": 0,
+                "amount_total": 5000,
+                "currency": "CAD",
+                "metadata": {"invoice_id": invoice_id},
+            }
+        },
+    }
+
+    app.state.stripe_client = SimpleNamespace(verify_webhook=lambda payload, signature: event)
+    response = client.post(
+        "/v1/payments/stripe/webhook", content=b"{}", headers={"Stripe-Signature": "t=test"}
+    )
+    assert response.status_code == 200
+    assert response.json()["processed"] is True
+    assert called["value"] is True

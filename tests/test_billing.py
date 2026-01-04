@@ -124,6 +124,77 @@ async def test_checkout_session_subscription_defaults_to_incomplete(async_sessio
 
 
 @pytest.mark.anyio
+async def test_pause_and_resume_billing(async_session_maker, client):
+    async with async_session_maker() as session:
+        org = await saas_service.create_organization(session, "Pause Org")
+        user = await saas_service.create_user(session, "pause@example.com", "pw")
+        await saas_service.create_membership(session, org, user, saas_service.MembershipRole.OWNER)
+        await billing_service.set_plan(session, org.org_id, plan_id="pro", status="active")
+        await session.commit()
+
+    login = client.post(
+        "/v1/auth/login",
+        json={"email": "pause@example.com", "password": "pw", "org_id": str(org.org_id)},
+    )
+    assert login.status_code == 200
+    token = login.json()["access_token"]
+
+    pause = client.post(
+        "/v1/billing/pause",
+        json={"reason_code": "VACATION"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert pause.status_code == 200
+    payload = pause.json()
+    assert payload["status"] == "paused"
+    assert payload["pause_reason_code"] == "VACATION"
+    assert payload["paused_at"] is not None
+
+    resume = client.post(
+        "/v1/billing/resume",
+        json={"reason_code": "BACK"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resume.status_code == 200
+    resume_payload = resume.json()
+    assert resume_payload["status"] == "active"
+    assert resume_payload["resume_reason_code"] == "BACK"
+    assert resume_payload["resumed_at"] is not None
+
+
+@pytest.mark.anyio
+async def test_pause_is_org_scoped(async_session_maker, client):
+    async with async_session_maker() as session:
+        org_a = await saas_service.create_organization(session, "Org A")
+        org_b = await saas_service.create_organization(session, "Org B")
+        user_a = await saas_service.create_user(session, "a@example.com", "pw")
+        user_b = await saas_service.create_user(session, "b@example.com", "pw")
+        await saas_service.create_membership(session, org_a, user_a, saas_service.MembershipRole.FINANCE)
+        await saas_service.create_membership(session, org_b, user_b, saas_service.MembershipRole.FINANCE)
+        await billing_service.set_plan(session, org_a.org_id, plan_id="pro", status="active")
+        await billing_service.set_plan(session, org_b.org_id, plan_id="pro", status="active")
+        await session.commit()
+
+    token_a = client.post(
+        "/v1/auth/login",
+        json={"email": "a@example.com", "password": "pw", "org_id": str(org_a.org_id)},
+    ).json()["access_token"]
+
+    pause = client.post(
+        "/v1/billing/pause",
+        json={"reason_code": "TEST"},
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert pause.status_code == 200
+
+    async with async_session_maker() as session:
+        billing_a = await billing_service.get_or_create_billing(session, org_a.org_id)
+        billing_b = await billing_service.get_or_create_billing(session, org_b.org_id)
+        assert billing_a.status == "paused"
+        assert billing_b.status == "active"
+
+
+@pytest.mark.anyio
 async def test_worker_usage_snapshot_supports_deactivation(async_session_maker):
     async with async_session_maker() as session:
         await billing_service.record_usage_event(

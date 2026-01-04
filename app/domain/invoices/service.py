@@ -17,6 +17,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from app.domain.bookings.db_models import Booking
+from app.domain.leads.db_models import Lead
+from app.domain.outbox import service as outbox_service
 from app.domain.invoices import statuses
 from app.domain.invoices.db_models import (
     Invoice,
@@ -337,6 +339,38 @@ async def record_stripe_payment(
         checkout_session_id=checkout_session_id,
         payment_intent_id=payment_intent_id or provider_ref,
     )
+
+
+async def enqueue_dunning_email(
+    session: AsyncSession, invoice: Invoice, *, failure_reason: str | None = None
+):
+    if not invoice.customer_id:
+        return None
+    lead = await session.get(Lead, invoice.customer_id)
+    if not lead or not lead.email:
+        return None
+
+    subject = "Payment attempt failed"
+    amount = f"{invoice.total_cents / 100:.2f} {invoice.currency.upper()}"
+    reason = f" Reason: {failure_reason}." if failure_reason else ""
+    body = (
+        f"Hi {lead.name},\n\n"
+        "We could not process your recent payment for your invoice.\n"
+        f"Invoice: {invoice.invoice_number}\n"
+        f"Amount due: {amount}\n"
+        f"Please update your payment method or retry at your convenience.{reason}\n\n"
+        "Reply to this email if you need help."
+    )
+    dedupe_key = f"invoice:{invoice.invoice_id}:dunning:payment_failed"
+    event = await outbox_service.enqueue_outbox_event(
+        session,
+        org_id=invoice.org_id,
+        kind="email",
+        payload={"recipient": lead.email, "subject": subject, "body": body},
+        dedupe_key=dedupe_key,
+    )
+    await session.flush()
+    return event
 
 
 async def record_manual_payment(

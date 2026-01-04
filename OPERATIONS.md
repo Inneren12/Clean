@@ -11,6 +11,16 @@
 ## Scheduler templates
 - Cron and Cloudflare Scheduler examples live in `scripts/cron_examples/` with a runbook in `docs/runbook_scheduler.md`.
 
+## Pause/resume playbook
+- SaaS OWNER/ADMIN/FINANCE roles can pause billing via `POST /v1/billing/pause` with a reason code (64 chars max). The pause sets the subscription status to `paused`, records `pause_reason_code`, and timestamps `paused_at` for auditability.
+- Resume with `POST /v1/billing/resume` (same roles) to return status to `active`, capture `resume_reason_code`, and stamp `resumed_at`. Plan metadata is preserved; only the status gates entitlements.
+- Both endpoints are org-scoped and require the caller’s org context; use `/v1/billing/status` to verify status/reason/timestamps after each action.
+
+## Dunning-lite rules
+- Stripe invoice payment failures enqueue a single outbox email per invoice (`dedupe_key=invoice:{invoice_id}:dunning:payment_failed`) using lead contact metadata—no raw Stripe payloads are stored.
+- Email copy is minimal: invoice number, amount, and a friendly retry prompt; the outbox backoff controls resend timing and prevents spam.
+- Operators can monitor/replay via standard outbox/DLQ tooling; retries follow global `outbox_base_backoff_seconds`/`outbox_max_attempts` settings.
+
 ## Lifecycle and services container
 - FastAPI lifespan startup builds an `AppServices` bundle (storage, email adapter, Stripe client, rate limiter, metrics) on `app.state.services`; shutdown closes the rate limiter. Legacy aliases (`app.state.email_adapter`, `app.state.rate_limiter`, etc.) remain for compatibility during migration.
 - Tenant resolution honors `X-Test-Org` only when running in testing mode or `APP_ENV=dev`; in prod the header is ignored.
