@@ -24,6 +24,7 @@ CORE_TABLES = {
     "disputes",
     "financial_adjustment_events",
     "admin_audit_logs",
+    "break_glass_sessions",
     "export_events",
     "email_events",
 }

@@ -50,6 +50,7 @@ from app.domain.policy_overrides import db_models as policy_override_db_models  
 from app.domain.admin_audit import db_models as admin_audit_db_models  # noqa: F401
 from app.domain.admin_idempotency import db_models as admin_idempotency_db_models  # noqa: F401
 from app.domain.documents import db_models as document_db_models  # noqa: F401
+from app.domain.break_glass import db_models as break_glass_db_models  # noqa: F401
 from app.domain.saas import db_models as saas_db_models  # noqa: F401
 from app.domain.outbox import db_models as outbox_db_models  # noqa: F401
 from app.domain.saas.service import ensure_default_org_and_team
