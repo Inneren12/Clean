@@ -51,4 +51,5 @@
 - [ ] Start jobs: schedule cleanup/email/retention/export tasks **and** outbox DLQ handling (`/v1/admin/outbox/dead-letter` or the `outbox-delivery` loop); enable `job_heartbeat_required` if monitoring heartbeats.
 - [ ] Verify health: `/healthz` returns ok; `/readyz` shows DB+migrations OK and job heartbeat fresh.
 - [ ] Exercise smokes: lead intake with captcha (if enabled), booking with deposit to Stripe webhook, admin metrics CSV, worker photo upload + signed URL access.
+- [ ] Run `scripts/smoke_prod.sh` (see `docs/runbook_smoke.md`) against the target environment.
 - [ ] Confirm backups/restore runbook executed.
