@@ -6,6 +6,8 @@ from app.settings import settings
 def test_metrics_endpoint_requires_token_when_configured(client):
     settings.metrics_token = "secret-token"
     settings.app_env = "prod"
+    settings.metrics_enabled = True
+    app.state.metrics = configure_metrics(True)
 
     unauthorized = client.get("/metrics")
     assert unauthorized.status_code == 401

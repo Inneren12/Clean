@@ -1,15 +1,16 @@
 import json
 import uuid
+from ipaddress import ip_network
 from typing import Literal
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     app_name: str = "cleaning-economy-bot"
     cors_origins_raw: str | None = Field(None, validation_alias="cors_origins")
-    app_env: Literal["dev", "prod"] = Field("prod")
+    app_env: Literal["dev", "prod"] = Field("dev")
     strict_cors: bool = Field(False)
     strict_policy_mode: bool = Field(False)
     admin_read_only: bool = Field(False)
@@ -204,6 +205,53 @@ class Settings(BaseSettings):
         if value <= 0:
             raise ValueError("time_overrun_reason_threshold must be positive")
         return value
+
+    @model_validator(mode="after")
+    def validate_prod_settings(self) -> "Settings":
+        if self.app_env != "prod":
+            return self
+
+        def _require_secret(value: str | None, field_name: str, placeholders: set[str]) -> None:
+            if value is None:
+                raise ValueError(f"APP_ENV=prod requires {field_name} to be configured")
+            normalized = value.strip()
+            if not normalized or normalized in placeholders:
+                raise ValueError(
+                    f"APP_ENV=prod requires {field_name} to be set to a non-default value"
+                )
+
+        _require_secret(self.auth_secret_key, "AUTH_SECRET_KEY", {"dev-auth-secret"})
+        _require_secret(
+            self.client_portal_secret, "CLIENT_PORTAL_SECRET", {"dev-client-portal-secret"}
+        )
+        _require_secret(
+            self.worker_portal_secret,
+            "WORKER_PORTAL_SECRET",
+            {"dev-worker-portal-secret"},
+        )
+
+        if self.strict_cors:
+            if not self.cors_origins:
+                raise ValueError("STRICT_CORS=true in prod requires explicit CORS_ORIGINS")
+            if any(origin == "*" for origin in self.cors_origins):
+                raise ValueError(
+                    "STRICT_CORS=true in prod does not allow wildcard CORS_ORIGINS entries"
+                )
+
+        if self.metrics_enabled and (not self.metrics_token or not self.metrics_token.strip()):
+            raise ValueError("METRICS_TOKEN is required when METRICS_ENABLED=true in prod")
+
+        if self.admin_ip_allowlist_cidrs_raw:
+            for cidr in self.admin_ip_allowlist_cidrs:
+                try:
+                    ip_network(cidr, strict=False)
+                except ValueError as exc:  # noqa: BLE001
+                    raise ValueError(f"Invalid CIDR in ADMIN_IP_ALLOWLIST_CIDRS: {cidr}") from exc
+
+        if self.testing:
+            raise ValueError("APP_ENV=prod disables testing mode and X-Test-Org overrides")
+
+        return self
 
     @property
     def cors_origins(self) -> list[str]:
