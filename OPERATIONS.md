@@ -11,6 +11,10 @@
 ## Scheduler templates
 - Cron and Cloudflare Scheduler examples live in `scripts/cron_examples/` with a runbook in `docs/runbook_scheduler.md`.
 
+## Scheduling v2 endpoints & usage
+- **Suggestions:** `GET /v1/admin/schedule/suggestions` (dispatcher credentials required) returns available teams and workers for a start/end window. Optional `skill_tags` filter workers by matching role text and `booking_id` excludes the in-flight booking from overlap calculations. Responses are org-scoped and omit workers whose teams are blocked by bookings/blackouts.
+- **Conflict checks:** `GET /v1/admin/schedule/conflicts` (dispatcher credentials required) surfaces blocking bookings, blackouts, or worker conflicts for the provided window. Supports optional `team_id`, `booking_id` (to ignore the current booking), and `worker_id` to validate an assignment. Returns Problem+JSON 403 for cross-org access attempts and 422 for invalid windows.
+
 ## Accounting export v1
 - Finance-only CSV export is available at `/v1/admin/exports/accounting.csv` with optional `from`, `to`, and repeated `status` query parameters. Totals come from stored invoice snapshots (taxable_subtotal_cents, tax_cents, total_cents) plus succeeded payments and balances; CSV cells are injection-hardened.
 - Schedule monthly exports by adding `--job accounting-export` to the jobs runner (defaults to the previous calendar month). When `EXPORT_MODE=webhook` and `EXPORT_WEBHOOK_URL` is set the job enqueues an outbox export webhook; otherwise the CSV artifact is stored in `export_events` with `mode=accounting_csv` for review.
@@ -127,6 +131,11 @@
 - **Timeline endpoints** (`GET /v1/admin/timeline/booking/{id}`, `/invoice/{id}`): requires viewer credentials or higher; PII is masked for viewer role. Shows unified audit logs, email events, payments, photo reviews, NPS, support tickets, and outbox events.
 - **Role requirements**: dispatcher for photos/assignments, finance for invoices, admin for DLQ, viewer for timeline (with PII masking).
 - **Performance notes**: DLQ uses SQL UNION ALL for combined queries; timeline limits each event type (100 audit logs, 100 emails, 50 payments, etc.) to prevent unbounded queries. Timeline queries avoid dangerous `LIKE %id%` patterns; outbox events use structured prefix patterns like `:booking:{id}` or `:invoice:{id}`.
+
+## Analytics v1 endpoints
+- `GET /v1/admin/analytics/funnel`: finance/admin/owner roles only. Returns aggregate counts for leads → bookings → completed jobs → paid payments plus conversion rates. All queries are org-scoped by `org_id`.
+- `GET /v1/admin/analytics/nps`: finance/admin/owner roles only. Returns NPS distribution (promoters/passives/detractors) and weekly/monthly average score trends. Results are aggregates only—no comments or client identifiers.
+- `GET /v1/admin/analytics/cohorts`: finance/admin/owner roles only. Groups customers by their first booking month and reports repeat counts and rates. Cohorts are computed per-organization; no raw PII is returned.
 
 ## Config viewer and redaction
 - `GET /v1/admin/config` surfaces a read-only snapshot of operational settings with secrets redacted (`<redacted>`). Only whitelisted keys are returned; secrets (tokens/keys/passwords) are never echoed.

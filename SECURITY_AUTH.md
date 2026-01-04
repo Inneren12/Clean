@@ -54,3 +54,7 @@ This document summarizes the authentication changes shipped in Sprint 11.
 - OWNER/ADMIN only; org context is mandatory for all calls and every request is admin-audited with actor and resource metadata.
 - `POST /v1/admin/data/export` returns org-scoped lead/bookings/invoices/payments/photo metadata only—no signed URLs, session tokens, or invoice public tokens are emitted.
 - `POST /v1/admin/data-deletion/requests` marks matching leads for anonymization. Cleanup removes photo blobs, detaches bookings, removes invoice public tokens, and nulls `customer_id` while retaining invoice totals/tax amounts for accounting compliance.
+## Analytics endpoint roles and data safety
+- `/v1/admin/analytics/funnel`, `/v1/admin/analytics/nps`, and `/v1/admin/analytics/cohorts` require FINANCE permission (OWNER/ADMIN/FINANCE roles qualify). Dispatcher/viewer roles cannot access these endpoints.
+- All analytics responses are org-scoped and return aggregates only. No raw leads, client identifiers, NPS comments, or booking details are emitted.
+- Time-range filters are supported for queries; callers should supply `from`/`to` timestamps to bound aggregation windows and keep workloads predictable.

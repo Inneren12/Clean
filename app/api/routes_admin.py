@@ -38,9 +38,13 @@ from app.domain.analytics import schemas as analytics_schemas
 from app.domain.analytics.service import (
     EventType,
     average_revenue_cents,
+    cohort_repeat_rates,
     conversion_counts,
     duration_accuracy,
+    funnel_summary,
     kpi_aggregates,
+    nps_distribution,
+    nps_trends,
     estimated_duration_from_booking,
     estimated_revenue_from_lead,
     log_event,
@@ -83,11 +87,14 @@ from app.domain.ops.schemas import (
     BulkBookingsRequest,
     BulkBookingsResponse,
     GlobalSearchResult,
+    ConflictCheckResponse,
+    ConflictDetail,
     JobStatusResponse,
     MoveBookingRequest,
     QuickActionModel,
     ScheduleBlackout,
     ScheduleBooking,
+    ScheduleSuggestions,
     ScheduleResponse,
     TemplatePreviewRequest,
     TemplatePreviewResponse,
@@ -836,6 +843,67 @@ async def list_schedule(
     return ScheduleResponse(**payload)
 
 
+@router.get("/v1/admin/schedule/suggestions", response_model=ScheduleSuggestions)
+async def suggest_schedule(
+    request: Request,
+    starts_at: datetime,
+    ends_at: datetime,
+    skill_tags: list[str] | None = Query(None),
+    booking_id: str | None = None,
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_dispatch),
+) -> ScheduleSuggestions:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    try:
+        suggestions = await ops_service.suggest_schedule_resources(
+            session,
+            org_id,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            skill_tags=skill_tags,
+            exclude_booking_id=booking_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    return ScheduleSuggestions(**suggestions)
+
+
+@router.get("/v1/admin/schedule/conflicts", response_model=ConflictCheckResponse)
+async def check_schedule_conflicts(
+    request: Request,
+    starts_at: datetime,
+    ends_at: datetime,
+    team_id: int | None = None,
+    booking_id: str | None = None,
+    worker_id: int | None = None,
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_dispatch),
+) -> ConflictCheckResponse:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    try:
+        conflicts = await ops_service.check_schedule_conflicts(
+            session,
+            org_id,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            team_id=team_id,
+            booking_id=booking_id,
+            worker_id=worker_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    return ConflictCheckResponse(
+        has_conflict=bool(conflicts),
+        conflicts=[ConflictDetail(**conflict) for conflict in conflicts],
+    )
+
+
 @router.post("/v1/admin/schedule/{booking_id}/move", response_model=booking_schemas.AdminBookingListItem)
 async def move_booking_slot(
     booking_id: str,
@@ -1578,6 +1646,12 @@ def _normalize_range(
     return normalized_start, normalized_end
 
 
+def _rate(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(numerator / denominator, 4)
+
+
 def _org_scope_condition(entity: object, org_id: uuid.UUID, allow_null: bool = False):
     """Return an org_id filter for a given ORM entity.
 
@@ -1766,6 +1840,110 @@ async def get_admin_metrics(
         return Response("\n".join(lines), media_type="text/csv")
 
     return response_body
+
+
+@router.get(
+    "/v1/admin/analytics/funnel",
+    response_model=analytics_schemas.FunnelAnalyticsResponse,
+)
+async def get_funnel_analytics(
+    request: Request,
+    from_ts: datetime | None = Query(default=None, alias="from"),
+    to_ts: datetime | None = Query(default=None, alias="to"),
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_finance),
+) -> analytics_schemas.FunnelAnalyticsResponse:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    start, end = _normalize_range(from_ts, to_ts)
+    counts = await funnel_summary(session, start, end, org_id=org_id)
+    return analytics_schemas.FunnelAnalyticsResponse(
+        range_start=start,
+        range_end=end,
+        counts=analytics_schemas.FunnelCounts(**counts),
+        conversion_rates=analytics_schemas.FunnelConversionRates(
+            lead_to_booking=_rate(counts["bookings"], counts["leads"]),
+            booking_to_completed=_rate(counts["completed"], counts["bookings"]),
+            completed_to_paid=_rate(counts["paid"], counts["completed"]),
+            lead_to_paid=_rate(counts["paid"], counts["leads"]),
+        ),
+    )
+
+
+@router.get(
+    "/v1/admin/analytics/nps", response_model=analytics_schemas.NpsAnalyticsResponse
+)
+async def get_nps_analytics(
+    request: Request,
+    from_ts: datetime | None = Query(default=None, alias="from"),
+    to_ts: datetime | None = Query(default=None, alias="to"),
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_finance),
+) -> analytics_schemas.NpsAnalyticsResponse:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    start, end = _normalize_range(from_ts, to_ts)
+    total, avg_score, promoters, passives, detractors = await nps_distribution(
+        session, start, end, org_id=org_id
+    )
+    trends = await nps_trends(session, start, end, org_id=org_id)
+
+    def _trend_points(rows: list[tuple[datetime, float | None, int]]):
+        return [
+            analytics_schemas.NpsTrendPoint(
+                period_start=period,
+                average_score=score,
+                response_count=count,
+            )
+            for period, score, count in rows
+        ]
+
+    distribution = analytics_schemas.NpsDistribution(
+        total_responses=total,
+        average_score=avg_score,
+        promoters=promoters,
+        passives=passives,
+        detractors=detractors,
+        promoter_rate=_rate(promoters, total),
+        passive_rate=_rate(passives, total),
+        detractor_rate=_rate(detractors, total),
+    )
+
+    return analytics_schemas.NpsAnalyticsResponse(
+        range_start=start,
+        range_end=end,
+        distribution=distribution,
+        trends=analytics_schemas.NpsTrends(
+            weekly=_trend_points(trends.get("weekly", [])),
+            monthly=_trend_points(trends.get("monthly", [])),
+        ),
+    )
+
+
+@router.get(
+    "/v1/admin/analytics/cohorts",
+    response_model=analytics_schemas.CohortAnalyticsResponse,
+)
+async def get_cohort_analytics(
+    request: Request,
+    from_ts: datetime | None = Query(default=None, alias="from"),
+    to_ts: datetime | None = Query(default=None, alias="to"),
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_finance),
+) -> analytics_schemas.CohortAnalyticsResponse:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    start, end = _normalize_range(from_ts, to_ts)
+    cohorts = await cohort_repeat_rates(session, start, end, org_id=org_id)
+    cohort_payload = [
+        analytics_schemas.CohortBreakdown(
+            cohort_month=cohort_month,
+            customers=customers,
+            repeat_customers=repeat,
+            repeat_rate=_rate(repeat, customers),
+        )
+        for cohort_month, customers, repeat in cohorts
+    ]
+    return analytics_schemas.CohortAnalyticsResponse(
+        range_start=start, range_end=end, cohorts=cohort_payload
+    )
 
 
 @router.get("/v1/admin/reports/gst", response_model=invoice_schemas.GstReportResponse)

@@ -36,6 +36,69 @@ class OperationalKpis(BaseModel):
     retention_90_day: float
 
 
+class FunnelCounts(BaseModel):
+    leads: int
+    bookings: int
+    completed: int
+    paid: int
+
+
+class FunnelConversionRates(BaseModel):
+    lead_to_booking: float
+    booking_to_completed: float
+    completed_to_paid: float
+    lead_to_paid: float
+
+
+class FunnelAnalyticsResponse(BaseModel):
+    range_start: datetime
+    range_end: datetime
+    counts: FunnelCounts
+    conversion_rates: FunnelConversionRates
+
+
+class NpsDistribution(BaseModel):
+    total_responses: int
+    average_score: float | None
+    promoters: int
+    passives: int
+    detractors: int
+    promoter_rate: float
+    passive_rate: float
+    detractor_rate: float
+
+
+class NpsTrendPoint(BaseModel):
+    period_start: datetime
+    average_score: float | None
+    response_count: int
+
+
+class NpsTrends(BaseModel):
+    weekly: list[NpsTrendPoint]
+    monthly: list[NpsTrendPoint]
+
+
+class NpsAnalyticsResponse(BaseModel):
+    range_start: datetime
+    range_end: datetime
+    distribution: NpsDistribution
+    trends: NpsTrends
+
+
+class CohortBreakdown(BaseModel):
+    cohort_month: datetime
+    customers: int
+    repeat_customers: int
+    repeat_rate: float
+
+
+class CohortAnalyticsResponse(BaseModel):
+    range_start: datetime
+    range_end: datetime
+    cohorts: list[CohortBreakdown]
+
+
 class AdminMetricsResponse(BaseModel):
     range_start: datetime
     range_end: datetime
