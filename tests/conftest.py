@@ -120,6 +120,11 @@ def restore_admin_settings():
     original_email_mode = getattr(settings, "email_mode", "off")
     original_legacy_basic_auth_enabled = getattr(settings, "legacy_basic_auth_enabled", True)
     original_auth_secret_key = getattr(settings, "auth_secret_key", "")
+    original_admin_read_only = getattr(settings, "admin_read_only", False)
+    original_admin_ip_allowlist = getattr(settings, "admin_ip_allowlist_cidrs_raw", None)
+    original_trust_proxy_headers = getattr(settings, "trust_proxy_headers", False)
+    original_trusted_proxy_ips = getattr(settings, "trusted_proxy_ips_raw", None)
+    original_trusted_proxy_cidrs = getattr(settings, "trusted_proxy_cidrs_raw", None)
     yield
     settings.admin_basic_username = original_username
     settings.admin_basic_password = original_password
@@ -134,6 +139,11 @@ def restore_admin_settings():
     settings.legacy_basic_auth_enabled = original_legacy_basic_auth_enabled
     settings.auth_secret_key = original_auth_secret_key
     settings.email_mode = original_email_mode
+    settings.admin_read_only = original_admin_read_only
+    settings.admin_ip_allowlist_cidrs_raw = original_admin_ip_allowlist
+    settings.trust_proxy_headers = original_trust_proxy_headers
+    settings.trusted_proxy_ips_raw = original_trusted_proxy_ips
+    settings.trusted_proxy_cidrs_raw = original_trusted_proxy_cidrs
 
 
 @pytest.fixture(autouse=True)
