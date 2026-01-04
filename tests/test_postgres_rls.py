@@ -29,7 +29,7 @@ def _temporary_postgres_database(base_url: str):
         pytest.skip(f"PostgreSQL unavailable for RLS check: {exc}")
 
     try:
-        yield str(url.set(database=database_name))
+        yield url.set(database=database_name).render_as_string(hide_password=False)
     finally:
         with admin_engine.connect() as conn:
             conn.execute(
@@ -60,7 +60,29 @@ def test_rls_prevents_cross_org_queries():
         finally:
             settings.database_url = original_url
 
-        engine = sa.create_engine(temp_url, future=True)
+        base_url = make_url(temp_url)
+        admin_engine = sa.create_engine(base_url, future=True)
+
+        with admin_engine.begin() as conn:
+            conn.execute(sa.text("DROP ROLE IF EXISTS app_test"))
+            conn.execute(
+                sa.text(
+                    "CREATE ROLE app_test LOGIN PASSWORD 'app_test' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE"
+                )
+            )
+            conn.execute(sa.text("GRANT USAGE ON SCHEMA public TO app_test"))
+            conn.execute(sa.text("GRANT SELECT, INSERT ON ALL TABLES IN SCHEMA public TO app_test"))
+            conn.execute(sa.text("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_test"))
+            conn.execute(
+                sa.text(
+                    "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT ON TABLES TO app_test"
+                )
+            )
+
+        tenant_url = base_url.set(username="app_test", password="app_test").render_as_string(
+            hide_password=False
+        )
+        engine = sa.create_engine(tenant_url, future=True)
         org_a = uuid.uuid4()
         org_b = uuid.uuid4()
 
@@ -78,14 +100,14 @@ def test_rls_prevents_cross_org_queries():
             )
 
         with engine.begin() as conn:
-            conn.execute(sa.text("SET LOCAL app.current_org_id = :org_id"), {"org_id": str(org_a)})
+            conn.execute(sa.text(f"SET LOCAL app.current_org_id = '{org_a}'"))
             conn.execute(
                 sa.text("INSERT INTO teams (org_id, name) VALUES (:org_id, :name)"),
                 {"org_id": org_a, "name": "Team A"},
             )
 
         with engine.begin() as conn:
-            conn.execute(sa.text("SET LOCAL app.current_org_id = :org_id"), {"org_id": str(org_b)})
+            conn.execute(sa.text(f"SET LOCAL app.current_org_id = '{org_b}'"))
             conn.execute(
                 sa.text("INSERT INTO teams (org_id, name) VALUES (:org_id, :name)"),
                 {"org_id": org_b, "name": "Team B"},
@@ -96,7 +118,7 @@ def test_rls_prevents_cross_org_queries():
             assert rows.fetchall() == []
 
         with engine.begin() as conn:
-            conn.execute(sa.text("SET LOCAL app.current_org_id = :org_id"), {"org_id": str(org_a)})
+            conn.execute(sa.text(f"SET LOCAL app.current_org_id = '{org_a}'"))
             rows = conn.execute(sa.text("SELECT org_id, name FROM teams ORDER BY name"))
             assert {row.org_id for row in rows} == {org_a}
 

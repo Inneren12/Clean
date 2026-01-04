@@ -41,8 +41,8 @@ ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;
 ALTER TABLE {table} FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS {table}_org_isolation ON {table};
 CREATE POLICY {table}_org_isolation ON {table}
-    USING (org_id = current_setting('app.current_org_id', true)::uuid)
-    WITH CHECK (org_id = current_setting('app.current_org_id', true)::uuid);
+    USING (org_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid)
+    WITH CHECK (org_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid);
 """
 
 
