@@ -46,6 +46,14 @@
 ## Invoice tax snapshots and reporting
 - Invoices store tax snapshots at creation time: `taxable_subtotal_cents` (sum of line totals with a positive tax rate), `tax_cents`, and `tax_rate_basis` (effective rate derived from the stored amounts). These values are persisted alongside `subtotal_cents` and are not recomputed from current org tax configs.
 - GST and P&L reports read the stored invoice snapshots, so changing org tax settings or estimate snapshots after issuing an invoice will not mutate historical tax totals. When editing invoice items, call `recalculate_totals` to refresh the stored snapshot fields from the invoice items.
+### How to reconcile an invoice safely
+- Use finance credentials and call `POST /v1/admin/finance/invoices/{invoice_id}/reconcile` in the correct org context. The action locks the invoice row, recomputes succeeded manual/Stripe payments, and updates invoice status accordingly (PAID when succeeded funds cover total, PARTIAL when some funds exist, or SENT/OVERDUE when a PAID invoice has no settled funds and the due date has passed).
+- The reconcile action is idempotent: repeat calls do not create duplicate payments or alter Stripe-settled amounts. If no succeeded payments exist, the service will **not** invent Stripe records; it simply reopens the invoice.
+- Every reconcile call records an admin audit log with before/after snapshots (status, paid cents, outstanding cents, succeeded payment count). Review the unified timeline if you need to verify who performed a repair.
+## Stripe events view (read-only)
+- Finance-only endpoint: `GET /v1/admin/finance/reconcile/stripe-events` lists recent Stripe webhook events for the caller's org. Requires FINANCE credentials (admin/accountant/owner) or SaaS FINANCE tokens.
+- Filters: `invoice_id`, `booking_id`, `status` plus `limit`/`offset` pagination. Results are ordered by event creation/processing time, newest first.
+- Response fields: `event_id`, `type`, `created_at`, `org_id`, optional `invoice_id`/`booking_id`, `processed_status`, and `last_error`. Raw webhook payloads are **not** returned; only metadata captured during processing is surfaced.
 
 ## Incident read-only + break-glass procedure
 1. **Enable admin read-only:** set `ADMIN_READ_ONLY=true` (config/env and restart) to block POST/PUT/PATCH/DELETE on `/v1/admin/*` and `/v1/iam/*` with 409 Problem+JSON while investigations run. IP allowlists remain enforced.
