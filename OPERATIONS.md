@@ -57,6 +57,12 @@
 - Use finance credentials and call `POST /v1/admin/finance/invoices/{invoice_id}/reconcile` in the correct org context. The action locks the invoice row, recomputes succeeded manual/Stripe payments, and updates invoice status accordingly (PAID when succeeded funds cover total, PARTIAL when some funds exist, or SENT/OVERDUE when a PAID invoice has no settled funds and the due date has passed).
 - The reconcile action is idempotent: repeat calls do not create duplicate payments or alter Stripe-settled amounts. If no succeeded payments exist, the service will **not** invent Stripe records; it simply reopens the invoice.
 - Every reconcile call records an admin audit log with before/after snapshots (status, paid cents, outstanding cents, succeeded payment count). Review the unified timeline if you need to verify who performed a repair.
+
+## Billing and usage reporting
+- SaaS operators with finance/admin/owner roles can fetch per-org usage and plan limits via `GET /v1/billing/usage/report` using SaaS JWTs. Viewer/dispatcher roles are rejected.
+- The response includes current workers, bookings in the selected month (default current month), and total storage bytes alongside plan limits, overage flags, and recorded usage counters.
+- Drift detection compares stored usage events against the computed truth from workers/bookings/photos; discrepancies are surfaced per metric and flagged via `drift_detected`.
+- Optional `month=YYYY-MM` query parameter pins the booking window to a specific month; storage and worker counts remain current-state snapshots.
 ## Stripe events view (read-only)
 - Finance-only endpoint: `GET /v1/admin/finance/reconcile/stripe-events` lists recent Stripe webhook events for the caller's org. Requires FINANCE credentials (admin/accountant/owner) or SaaS FINANCE tokens.
 - Filters: `invoice_id`, `booking_id`, `status` plus `limit`/`offset` pagination. Results are ordered by event creation/processing time, newest first.
