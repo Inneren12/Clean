@@ -18,6 +18,7 @@ from app.domain.bookings.service import (
 )
 from app.domain.invoices.db_models import Invoice, Payment
 from app.domain.leads.db_models import Lead
+from app.domain.workers.db_models import Worker
 from app.domain.notifications import email_service
 
 logger = logging.getLogger(__name__)
@@ -50,38 +51,85 @@ class SearchHit:
     status: str | None
     created_at: datetime
     quick_actions: list[QuickAction]
+    relevance_score: int = 0  # Higher = more relevant
 
 
-def _build_quick_actions(kind: str, ref: str) -> list[QuickAction]:
+def _build_quick_actions(kind: str, ref: str, extra_context: dict | None = None) -> list[QuickAction]:
+    """Build context-aware quick actions for search results."""
     if kind == "lead":
-        return [QuickAction(label="View lead", target=f"/v1/admin/leads/{ref}")]
+        actions = [QuickAction(label="View lead", target=f"/v1/admin/leads/{ref}")]
+        if extra_context and extra_context.get("email"):
+            actions.append(QuickAction(label="Email", target=f"mailto:{extra_context['email']}"))
+        if extra_context and extra_context.get("phone"):
+            actions.append(QuickAction(label="Call", target=f"tel:{extra_context['phone']}"))
+        return actions
     if kind == "booking":
         return [
             QuickAction(label="View booking", target=f"/v1/bookings/{ref}"),
             QuickAction(label="Move", target=f"/v1/admin/schedule/{ref}/move", method="POST"),
+            QuickAction(label="Timeline", target=f"/v1/admin/timeline/booking/{ref}"),
         ]
     if kind == "invoice":
-        return [QuickAction(label="View invoice", target=f"/v1/invoices/{ref}")]
+        return [
+            QuickAction(label="View invoice", target=f"/v1/invoices/{ref}"),
+            QuickAction(label="Resend", target=f"/v1/admin/invoices/{ref}/resend", method="POST"),
+            QuickAction(label="Timeline", target=f"/v1/admin/timeline/invoice/{ref}"),
+        ]
     if kind == "payment":
         return [QuickAction(label="Review payment", target=f"/v1/admin/payments/{ref}")]
+    if kind == "worker":
+        actions = [QuickAction(label="View worker", target=f"/v1/admin/workers/{ref}")]
+        if extra_context and extra_context.get("phone"):
+            actions.append(QuickAction(label="Call", target=f"tel:{extra_context['phone']}"))
+        return actions
     return []
 
 
+def _calculate_relevance(q: str, text_fields: list[str | None]) -> int:
+    """Calculate relevance score (higher = more relevant).
+
+    Exact matches score highest, then prefix matches, then contains.
+    """
+    q_lower = q.lower().strip()
+    score = 0
+
+    for field in text_fields:
+        if not field:
+            continue
+        field_lower = field.lower()
+
+        if field_lower == q_lower:
+            score += 100  # Exact match
+        elif field_lower.startswith(q_lower):
+            score += 50  # Prefix match
+        elif q_lower in field_lower:
+            score += 10  # Contains
+
+    return score
+
+
 async def global_search(session: AsyncSession, org_id, q: str, limit: int = 20) -> list[SearchHit]:
+    """Enhanced global search with weighted results and expanded coverage.
+
+    Searches across leads, bookings, invoices, payments, and workers.
+    Results are sorted by relevance score (exact/prefix/contains matches) then recency.
+    """
     if not q:
         return []
 
     term = f"%{q.strip()}%"
     hits: list[SearchHit] = []
 
+    # Search leads
     lead_stmt: Select = (
         select(Lead)
         .where(Lead.org_id == org_id)
         .where(or_(Lead.name.ilike(term), Lead.email.ilike(term), Lead.phone.ilike(term)))
         .order_by(Lead.created_at.desc())
-        .limit(limit)
+        .limit(limit * 2)  # Fetch more for relevance sorting
     )
     for lead in (await session.execute(lead_stmt)).scalars().all():
+        relevance = _calculate_relevance(q, [lead.name, lead.email, lead.phone])
         hits.append(
             SearchHit(
                 kind="lead",
@@ -89,10 +137,12 @@ async def global_search(session: AsyncSession, org_id, q: str, limit: int = 20) 
                 label=lead.name,
                 status=lead.status,
                 created_at=lead.created_at,
-                quick_actions=_build_quick_actions("lead", lead.lead_id),
+                quick_actions=_build_quick_actions("lead", lead.lead_id, {"email": lead.email, "phone": lead.phone}),
+                relevance_score=relevance,
             )
         )
 
+    # Search bookings
     booking_stmt: Select = (
         select(Booking)
         .where(Booking.org_id == org_id)
@@ -103,9 +153,10 @@ async def global_search(session: AsyncSession, org_id, q: str, limit: int = 20) 
             )
         )
         .order_by(Booking.created_at.desc())
-        .limit(limit)
+        .limit(limit * 2)
     )
     for booking in (await session.execute(booking_stmt)).scalars().all():
+        relevance = _calculate_relevance(q, [booking.booking_id, booking.status])
         hits.append(
             SearchHit(
                 kind="booking",
@@ -114,17 +165,20 @@ async def global_search(session: AsyncSession, org_id, q: str, limit: int = 20) 
                 status=booking.status,
                 created_at=booking.created_at,
                 quick_actions=_build_quick_actions("booking", booking.booking_id),
+                relevance_score=relevance,
             )
         )
 
+    # Search invoices
     invoice_stmt: Select = (
         select(Invoice)
         .where(Invoice.org_id == org_id)
         .where(or_(Invoice.invoice_number.ilike(term), Invoice.invoice_id.ilike(term)))
         .order_by(Invoice.created_at.desc())
-        .limit(limit)
+        .limit(limit * 2)
     )
     for invoice in (await session.execute(invoice_stmt)).scalars().all():
+        relevance = _calculate_relevance(q, [invoice.invoice_number, invoice.invoice_id])
         hits.append(
             SearchHit(
                 kind="invoice",
@@ -133,9 +187,11 @@ async def global_search(session: AsyncSession, org_id, q: str, limit: int = 20) 
                 status=invoice.status,
                 created_at=invoice.created_at,
                 quick_actions=_build_quick_actions("invoice", invoice.invoice_id),
+                relevance_score=relevance,
             )
         )
 
+    # Search payments
     payment_stmt: Select = (
         select(Payment)
         .where(Payment.org_id == org_id)
@@ -147,9 +203,10 @@ async def global_search(session: AsyncSession, org_id, q: str, limit: int = 20) 
             )
         )
         .order_by(Payment.created_at.desc())
-        .limit(limit)
+        .limit(limit * 2)
     )
     for payment in (await session.execute(payment_stmt)).scalars().all():
+        relevance = _calculate_relevance(q, [payment.payment_id, payment.provider_ref, payment.status])
         hits.append(
             SearchHit(
                 kind="payment",
@@ -158,10 +215,40 @@ async def global_search(session: AsyncSession, org_id, q: str, limit: int = 20) 
                 status=payment.status,
                 created_at=payment.created_at,
                 quick_actions=_build_quick_actions("payment", payment.payment_id),
+                relevance_score=relevance,
             )
         )
 
-    hits.sort(key=lambda item: item.created_at, reverse=True)
+    # Search workers
+    worker_stmt: Select = (
+        select(Worker)
+        .where(Worker.org_id == org_id)
+        .where(
+            or_(
+                Worker.name.ilike(term),
+                Worker.phone.ilike(term),
+                Worker.email.ilike(term),
+            )
+        )
+        .order_by(Worker.created_at.desc())
+        .limit(limit * 2)
+    )
+    for worker in (await session.execute(worker_stmt)).scalars().all():
+        relevance = _calculate_relevance(q, [worker.name, worker.phone, worker.email])
+        hits.append(
+            SearchHit(
+                kind="worker",
+                ref=str(worker.worker_id),
+                label=worker.name,
+                status="active" if worker.is_active else "inactive",
+                created_at=worker.created_at,
+                quick_actions=_build_quick_actions("worker", str(worker.worker_id), {"phone": worker.phone}),
+                relevance_score=relevance,
+            )
+        )
+
+    # Sort by relevance (desc) then created_at (desc)
+    hits.sort(key=lambda item: (item.relevance_score, item.created_at), reverse=True)
     return hits[:limit]
 
 

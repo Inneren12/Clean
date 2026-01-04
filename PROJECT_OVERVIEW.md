@@ -11,6 +11,7 @@ Cleaning Economy Bot is a FastAPI backend for booking residential cleaning work,
 Key flows are implemented in the API routers under `app/api/`:
 - **Lead → Booking → Invoice → Payment → Photos** – leads and estimates (`routes_leads.py`, `routes_estimate.py`), slot search + booking + deposit checkout + webhook confirmation (`routes_bookings.py`, `routes_payments.py`, `routes_billing.py`), invoices and Stripe invoice links (`routes_payments.py`), and order photo uploads/listing (`routes_orders.py`, `photo_tokens.py`, storage backends in `app/infra/storage`).
 - **Worker upload → Admin review → Worker feedback** – workers authenticate via signed tokens (`worker_auth.py`), capture time-tracking events (`routes_time_tracking.py`), complete checklist items and order photos (`routes_worker.py`, `routes_checklists.py`, `routes_orders.py`), while admins can review and resend email notifications (`routes_admin.py`, `routes_bookings.py`).
+- **Operator productivity** – work queues for pending photos/overdue invoices/unassigned bookings/DLQ (`routes_queues.py`, `app/domain/queues`), enhanced global search with weighted results and worker coverage (`routes_admin.py`, `app/domain/ops/service.py`), and unified timeline views combining audit logs/outbox events/payments/photo reviews/NPS tickets (`routes_timeline.py`, `app/domain/timeline`).
 
 ## Environments and dependencies
 - **Environments:** `APP_ENV` is `dev` or `prod` (`app/settings.py`). Docker Compose (`docker-compose.yml`) runs Postgres and the API; CI spins services via `.github/workflows/ci.yml`.

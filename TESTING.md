@@ -23,6 +23,7 @@ Defined in `pytest.ini`:
 - Factories/fixtures live under `tests/` aligning with domain modules; reuse existing helper functions rather than recreating data setup.
 - For SaaS-authenticated endpoints, use helpers that mint JWTs via `app/api/routes_auth.py` flows or fixture utilities.
 - Use `X-Test-Org` header only in testing mode to set org context when entitlements require it (`app/api/entitlements.py`).
+- **Async testing**: Tests use the `anyio` plugin (not `pytest-asyncio`). Sync tests use the `client` fixture (FastAPI TestClient). Async fixtures can be wrapped with `asyncio.run()` to make them usable in sync tests.
 
 ## CI expectations
 - `.github/workflows/ci.yml` runs lint/unit/integration and migration checks; ensure new tests are deterministic.

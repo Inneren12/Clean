@@ -26,6 +26,8 @@ class GlobalSearchResult(BaseModel):
     ref: str
     label: str
     status: str | None = None
+    created_at: datetime
+    relevance_score: int = 0
     quick_actions: list[QuickActionModel] = []
     model_config = ConfigDict(from_attributes=True)
 
