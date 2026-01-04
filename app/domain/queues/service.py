@@ -334,12 +334,15 @@ async def list_dlq(
                 )
             )
 
-    # Fetch export dead letters
+    # Fetch export dead letters (events with errors)
     export_dead_count = 0
     if kind_filter in ("export", "all"):
         export_stmt = (
             select(ExportEvent)
-            .where(ExportEvent.org_id == org_id, ExportEvent.status == "dead")
+            .where(
+                ExportEvent.org_id == org_id,
+                ExportEvent.last_error_code.is_not(None),
+            )
             .order_by(ExportEvent.created_at.desc())
         )
         if kind_filter == "export":
@@ -349,16 +352,16 @@ async def list_dlq(
         export_dead_count = len(export_events)
 
         for event in export_events:
-            payload_summary = f"Lead export: {event.event_type}"
+            payload_summary = f"Lead export ({event.mode}): {event.target_url_host or 'unknown'}"
             items.append(
                 DLQItem(
                     event_id=event.event_id,
                     kind="export",
-                    event_type=event.event_type,
+                    event_type=event.mode,
                     org_id=str(event.org_id),
-                    status=event.status,
+                    status=f"error_{event.last_error_code}" if event.last_error_code else "failed",
                     attempts=event.attempts,
-                    last_error=event.last_error,
+                    last_error=event.last_error_code,
                     created_at=event.created_at,
                     payload_summary=payload_summary,
                     quick_actions=[

@@ -1,29 +1,47 @@
 """Tests for enhanced global search v2."""
 
+import base64
+
 import pytest
-from httpx import AsyncClient
 
 pytestmark = [pytest.mark.postgres, pytest.mark.smoke]
 
 
-@pytest.mark.asyncio
-async def test_search_returns_results(async_client: AsyncClient, admin_credentials):
+def _auth_headers(username: str, password: str) -> dict[str, str]:
+    token = base64.b64encode(f"{username}:{password}".encode()).decode()
+    return {"Authorization": f"Basic {token}"}
+
+
+@pytest.fixture()
+def admin_credentials():
+    from app.settings import settings
+    original_username = settings.admin_basic_username
+    original_password = settings.admin_basic_password
+    settings.admin_basic_username = "admin"
+    settings.admin_basic_password = "secret"
+    try:
+        yield
+    finally:
+        settings.admin_basic_username = original_username
+        settings.admin_basic_password = original_password
+
+
+def test_search_returns_results(client, admin_credentials):
     """Test that search returns results."""
-    response = await async_client.get(
+    response = client.get(
         "/v1/admin/search?q=test",
-        auth=admin_credentials,
+        headers=_auth_headers("admin", "secret"),
     )
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
 
 
-@pytest.mark.asyncio
-async def test_search_includes_relevance_score(async_client: AsyncClient, admin_credentials):
+def test_search_includes_relevance_score(client, admin_credentials):
     """Test that search results include relevance scores."""
-    response = await async_client.get(
+    response = client.get(
         "/v1/admin/search?q=test",
-        auth=admin_credentials,
+        headers=_auth_headers("admin", "secret"),
     )
     assert response.status_code == 200
     data = response.json()
@@ -33,12 +51,11 @@ async def test_search_includes_relevance_score(async_client: AsyncClient, admin_
         assert item["relevance_score"] >= 0
 
 
-@pytest.mark.asyncio
-async def test_search_includes_quick_actions(async_client: AsyncClient, admin_credentials):
+def test_search_includes_quick_actions(client, admin_credentials):
     """Test that search results include quick actions."""
-    response = await async_client.get(
+    response = client.get(
         "/v1/admin/search?q=test",
-        auth=admin_credentials,
+        headers=_auth_headers("admin", "secret"),
     )
     assert response.status_code == 200
     data = response.json()
@@ -47,43 +64,38 @@ async def test_search_includes_quick_actions(async_client: AsyncClient, admin_cr
         assert isinstance(item["quick_actions"], list)
 
 
-@pytest.mark.asyncio
-async def test_search_empty_query(async_client: AsyncClient, admin_credentials):
-    """Test search with empty query returns empty results."""
-    response = await async_client.get(
+def test_search_empty_query(client, admin_credentials):
+    """Test search with empty query returns validation error."""
+    response = client.get(
         "/v1/admin/search?q=",
-        auth=admin_credentials,
+        headers=_auth_headers("admin", "secret"),
     )
-    assert response.status_code == 200
-    data = response.json()
-    assert data == []
+    # Empty query should return 422 validation error (q must have min length)
+    assert response.status_code == 422
 
 
-@pytest.mark.asyncio
-async def test_search_respects_limit(async_client: AsyncClient, admin_credentials):
+def test_search_respects_limit(client, admin_credentials):
     """Test search respects limit parameter."""
-    response = await async_client.get(
+    response = client.get(
         "/v1/admin/search?q=test&limit=5",
-        auth=admin_credentials,
+        headers=_auth_headers("admin", "secret"),
     )
     assert response.status_code == 200
     data = response.json()
     assert len(data) <= 5
 
 
-@pytest.mark.asyncio
-async def test_search_requires_auth(async_client: AsyncClient):
+def test_search_requires_auth(client):
     """Test that search requires authentication."""
-    response = await async_client.get("/v1/admin/search?q=test")
+    response = client.get("/v1/admin/search?q=test")
     assert response.status_code == 401
 
 
-@pytest.mark.asyncio
-async def test_search_result_structure(async_client: AsyncClient, admin_credentials):
+def test_search_result_structure(client, admin_credentials):
     """Test search result has expected structure."""
-    response = await async_client.get(
+    response = client.get(
         "/v1/admin/search?q=test&limit=1",
-        auth=admin_credentials,
+        headers=_auth_headers("admin", "secret"),
     )
     assert response.status_code == 200
     data = response.json()
