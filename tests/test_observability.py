@@ -70,3 +70,33 @@ def test_email_notification_metric_labels_low_cardinality():
     assert collected
     sample = collected[0].samples[0]
     assert set(sample.labels.keys()) == {"template", "status"}
+
+
+def test_email_adapter_metric_labels_low_cardinality():
+    configure_metrics(True)
+    metrics.record_email_adapter("sent")
+
+    collected = metrics.email_adapter_outcomes.collect()
+    assert collected
+    sample = collected[0].samples[0]
+    assert set(sample.labels.keys()) == {"status"}
+
+
+def test_outbox_depth_metric_labels_low_cardinality():
+    configure_metrics(True)
+    metrics.set_outbox_depth("pending", 3)
+
+    collected = metrics.outbox_queue_depth.collect()
+    assert collected
+    sample = collected[0].samples[0]
+    assert set(sample.labels.keys()) == {"status"}
+
+
+def test_stripe_webhook_metric_labels_low_cardinality():
+    configure_metrics(True)
+    metrics.record_stripe_webhook("processed")
+
+    collected = metrics.stripe_webhook_events.collect()
+    assert collected
+    sample = collected[0].samples[0]
+    assert set(sample.labels.keys()) == {"outcome"}

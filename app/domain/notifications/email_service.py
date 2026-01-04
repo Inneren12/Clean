@@ -258,6 +258,7 @@ async def _try_send_email(
     if adapter is None:
         logger.warning("email_adapter_missing", extra={"extra": context or {}})
         _record_email_metric(email_type, "skipped")
+        metrics.record_email_adapter("skipped")
         return False
     try:
         delivered = await adapter.send_email(

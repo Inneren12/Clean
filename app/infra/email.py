@@ -8,6 +8,7 @@ from typing import Any
 import anyio
 import httpx
 
+from app.infra.metrics import metrics
 from app.settings import settings
 from app.shared.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 
@@ -22,6 +23,7 @@ class NoopEmailAdapter:
             "email_send_skipped",
             extra={"extra": {"recipient": recipient, "subject": subject, "mode": "noop"}},
         )
+        metrics.record_email_adapter("skipped")
         return False
 
     async def send_request_received(self, lead: Any) -> None:  # pragma: no cover - passthrough
@@ -44,8 +46,10 @@ class EmailAdapter:
         self, recipient: str, subject: str, body: str, *, headers: dict[str, str] | None = None
     ) -> bool:
         if settings.email_mode == "off":
+            metrics.record_email_adapter("skipped")
             return False
         if not recipient:
+            metrics.record_email_adapter("skipped")
             return False
         try:
             await self._breaker.call(
@@ -53,7 +57,12 @@ class EmailAdapter:
             )
         except CircuitBreakerOpenError:
             logger.warning("email_circuit_open", extra={"extra": {"recipient": recipient}})
+            metrics.record_email_adapter("circuit_open")
             return False
+        except Exception:
+            metrics.record_email_adapter("error")
+            raise
+        metrics.record_email_adapter("sent")
         return True
 
     async def send_request_received(self, lead: Any) -> None:

@@ -21,6 +21,10 @@ class Metrics:
         self.enabled = enabled
         self.registry = CollectorRegistry(auto_describe=True)
         if not enabled:
+            self.outbox_queue_depth = None
+            self.stripe_webhook_events = None
+            self.stripe_webhook_circuit_open = None
+            self.email_adapter_outcomes = None
             self.webhook_events = None
             self.webhook_errors = None
             self.email_jobs = None
@@ -42,10 +46,21 @@ class Metrics:
             ["result"],
             registry=self.registry,
         )
+        self.stripe_webhook_events = Counter(
+            "stripe_webhook_events_total",
+            "Stripe webhook outcomes by result.",
+            ["outcome"],
+            registry=self.registry,
+        )
         self.webhook_errors = Counter(
             "webhook_errors_total",
             "Webhook errors by type (low cardinality).",
             ["type"],
+            registry=self.registry,
+        )
+        self.stripe_webhook_circuit_open = Counter(
+            "stripe_webhook_circuit_open_total",
+            "Stripe webhook circuit breaker opened.",
             registry=self.registry,
         )
         self.email_jobs = Counter(
@@ -60,9 +75,21 @@ class Metrics:
             ["template", "status"],
             registry=self.registry,
         )
+        self.email_adapter_outcomes = Counter(
+            "email_adapter_outcomes_total",
+            "Email adapter send outcomes.",
+            ["status"],
+            registry=self.registry,
+        )
         self.email_dlq = Gauge(
             "email_dlq_messages",
             "Email dead-letter queue depth by status.",
+            ["status"],
+            registry=self.registry,
+        )
+        self.outbox_queue_depth = Gauge(
+            "outbox_queue_messages",
+            "Outbox queue depth by status (pending/retry/dead).",
             ["status"],
             registry=self.registry,
         )
@@ -121,11 +148,22 @@ class Metrics:
             return
         self.webhook_events.labels(result=result).inc()
 
+    def record_stripe_webhook(self, outcome: str) -> None:
+        if not self.enabled or self.stripe_webhook_events is None:
+            return
+        safe_outcome = outcome or "unknown"
+        self.stripe_webhook_events.labels(outcome=safe_outcome).inc()
+
     def record_webhook_error(self, error_type: str) -> None:
         if not self.enabled or self.webhook_errors is None:
             return
         safe_type = error_type or "unknown"
         self.webhook_errors.labels(type=safe_type).inc()
+
+    def record_stripe_circuit_open(self) -> None:
+        if not self.enabled or self.stripe_webhook_circuit_open is None:
+            return
+        self.stripe_webhook_circuit_open.inc()
 
     def record_email_job(self, job: str, status: str, count: int = 1) -> None:
         if not self.enabled or self.email_jobs is None:
@@ -133,6 +171,12 @@ class Metrics:
         if count <= 0:
             return
         self.email_jobs.labels(job=job, status=status).inc(count)
+
+    def record_email_adapter(self, status: str) -> None:
+        if not self.enabled or self.email_adapter_outcomes is None:
+            return
+        safe_status = status or "unknown"
+        self.email_adapter_outcomes.labels(status=safe_status).inc()
 
     def record_booking(self, action: str, count: int = 1) -> None:
         if not self.enabled or self.bookings is None:
@@ -186,6 +230,12 @@ class Metrics:
         if not self.enabled or self.email_dlq is None:
             return
         self.email_dlq.labels(status=status).set(max(0, count))
+
+    def set_outbox_depth(self, status: str, count: int) -> None:
+        if not self.enabled or self.outbox_queue_depth is None:
+            return
+        safe_status = status or "unknown"
+        self.outbox_queue_depth.labels(status=safe_status).set(max(0, count))
 
     def record_circuit_state(self, circuit: str, state: str) -> None:
         if not self.enabled or self.circuit_state is None:
