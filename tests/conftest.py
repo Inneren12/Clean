@@ -129,6 +129,15 @@ def restore_admin_settings():
     original_trust_proxy_headers = getattr(settings, "trust_proxy_headers", False)
     original_trusted_proxy_ips = getattr(settings, "trusted_proxy_ips_raw", None)
     original_trusted_proxy_cidrs = getattr(settings, "trusted_proxy_cidrs_raw", None)
+    original_dlq_auto_replay_enabled = getattr(settings, "dlq_auto_replay_enabled", False)
+    original_dlq_outbox_kinds = getattr(settings, "dlq_auto_replay_allow_outbox_kinds_raw", None)
+    original_dlq_export_modes = getattr(settings, "dlq_auto_replay_allow_export_modes_raw", None)
+    original_dlq_min_age = getattr(settings, "dlq_auto_replay_min_age_minutes", 60)
+    original_dlq_max_per_org = getattr(settings, "dlq_auto_replay_max_per_org", 5)
+    original_dlq_failure_streak = getattr(settings, "dlq_auto_replay_failure_streak_limit", 3)
+    original_dlq_outbox_attempt_ceiling = getattr(settings, "dlq_auto_replay_outbox_attempt_ceiling", 7)
+    original_dlq_export_replay_limit = getattr(settings, "dlq_auto_replay_export_replay_limit", 2)
+    original_dlq_export_cooldown = getattr(settings, "dlq_auto_replay_export_cooldown_minutes", 120)
     yield
     settings.admin_basic_username = original_username
     settings.admin_basic_password = original_password
@@ -150,6 +159,15 @@ def restore_admin_settings():
     settings.trust_proxy_headers = original_trust_proxy_headers
     settings.trusted_proxy_ips_raw = original_trusted_proxy_ips
     settings.trusted_proxy_cidrs_raw = original_trusted_proxy_cidrs
+    settings.dlq_auto_replay_enabled = original_dlq_auto_replay_enabled
+    settings.dlq_auto_replay_allow_outbox_kinds_raw = original_dlq_outbox_kinds
+    settings.dlq_auto_replay_allow_export_modes_raw = original_dlq_export_modes
+    settings.dlq_auto_replay_min_age_minutes = original_dlq_min_age
+    settings.dlq_auto_replay_max_per_org = original_dlq_max_per_org
+    settings.dlq_auto_replay_failure_streak_limit = original_dlq_failure_streak
+    settings.dlq_auto_replay_outbox_attempt_ceiling = original_dlq_outbox_attempt_ceiling
+    settings.dlq_auto_replay_export_replay_limit = original_dlq_export_replay_limit
+    settings.dlq_auto_replay_export_cooldown_minutes = original_dlq_export_cooldown
 
 
 @pytest.fixture(autouse=True)

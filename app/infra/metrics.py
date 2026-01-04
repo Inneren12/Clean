@@ -30,6 +30,8 @@ class Metrics:
             self.email_jobs = None
             self.email_notifications = None
             self.email_dlq = None
+            self.dlq_replay = None
+            self.dlq_depth_snapshot = None
             self.bookings = None
             self.http_5xx = None
             self.http_latency = None
@@ -75,6 +77,12 @@ class Metrics:
             ["template", "status"],
             registry=self.registry,
         )
+        self.dlq_replay = Counter(
+            "dlq_replay_total",
+            "DLQ auto replay attempts and outcomes by kind and org.",
+            ["kind", "status", "org"],
+            registry=self.registry,
+        )
         self.email_adapter_outcomes = Counter(
             "email_adapter_outcomes_total",
             "Email adapter send outcomes.",
@@ -85,6 +93,12 @@ class Metrics:
             "email_dlq_messages",
             "Email dead-letter queue depth by status.",
             ["status"],
+            registry=self.registry,
+        )
+        self.dlq_depth_snapshot = Gauge(
+            "dlq_depth_snapshot",
+            "Snapshot of DLQ depth before/after auto replay.",
+            ["kind", "stage"],
             registry=self.registry,
         )
         self.outbox_queue_depth = Gauge(
@@ -236,6 +250,21 @@ class Metrics:
             return
         safe_status = status or "unknown"
         self.outbox_queue_depth.labels(status=safe_status).set(max(0, count))
+
+    def record_dlq_depth(self, kind: str, stage: str, count: int) -> None:
+        if not self.enabled or self.dlq_depth_snapshot is None:
+            return
+        safe_kind = kind or "unknown"
+        safe_stage = stage or "unknown"
+        self.dlq_depth_snapshot.labels(kind=safe_kind, stage=safe_stage).set(max(0, count))
+
+    def record_dlq_replay(self, kind: str, status: str, org: str) -> None:
+        if not self.enabled or self.dlq_replay is None:
+            return
+        safe_kind = kind or "unknown"
+        safe_status = status or "unknown"
+        safe_org = org or "unknown"
+        self.dlq_replay.labels(kind=safe_kind, status=safe_status, org=safe_org).inc()
 
     def record_circuit_state(self, circuit: str, state: str) -> None:
         if not self.enabled or self.circuit_state is None:

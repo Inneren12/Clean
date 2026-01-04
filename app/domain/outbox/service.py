@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import inspect
 from typing import Callable, Iterable
 from urllib.parse import urlparse
 
@@ -156,6 +157,32 @@ async def _deliver_event(event: OutboxEvent, adapters: OutboxAdapters) -> tuple[
     return False, "unknown_kind"
 
 
+async def deliver_outbox_event(
+    session: AsyncSession, event: OutboxEvent, adapters: OutboxAdapters
+) -> tuple[bool, str | None]:
+    attempts = (event.attempts or 0) + 1
+    event.attempts = attempts
+    delivered, error = await _deliver_event(event, adapters)
+    if delivered:
+        event.status = "sent"
+        event.next_attempt_at = None
+        event.last_error = None
+    else:
+        event.last_error = error or "failed"
+        if attempts >= settings.outbox_max_attempts:
+            event.status = "dead"
+            event.next_attempt_at = None
+        else:
+            event.status = "retry"
+            event.next_attempt_at = _next_attempt(attempts)
+    flush = getattr(session, "flush", None)
+    if callable(flush):
+        result = flush()
+        if inspect.isawaitable(result):
+            await result
+    return delivered, event.last_error
+
+
 def _build_export_event(event: OutboxEvent) -> ExportEvent:
     payload = event.payload_json or {}
     export_payload = payload.get("payload") or {}
@@ -186,25 +213,12 @@ async def process_outbox(session: AsyncSession, adapters: OutboxAdapters, *, lim
     dead = 0
     for event in events:
         try:
-            attempts = (event.attempts or 0) + 1
-            event.attempts = attempts
-            delivered, error = await _deliver_event(event, adapters)
+            delivered, _ = await deliver_outbox_event(session, event, adapters)
             if delivered:
-                event.status = "sent"
-                event.next_attempt_at = None
-                event.last_error = None
                 sent += 1
-            else:
-                event.last_error = error or "failed"
-                if attempts >= settings.outbox_max_attempts:
-                    event.status = "dead"
-                    event.next_attempt_at = None
-                    dead += 1
-                    if event.kind == "export":
-                        session.add(_build_export_event(event))
-                else:
-                    event.status = "retry"
-                    event.next_attempt_at = _next_attempt(attempts)
+            elif event.status == "dead" and event.kind == "export":
+                dead += 1
+                session.add(_build_export_event(event))
         finally:
             clear_log_context()
     if events:
@@ -231,6 +245,23 @@ async def _record_outbox_depth(session: AsyncSession) -> None:
                 counts[status] = int(count)
     for status, count in counts.items():
         metrics.set_outbox_depth(status, count)
+
+
+async def outbox_counts_by_status(session: AsyncSession, statuses: Iterable[str]) -> dict[str, int]:
+    counts: dict[str, int] = {status: 0 for status in statuses}
+    result = await session.execute(
+        select(OutboxEvent.status, func.count()).where(OutboxEvent.status.in_(statuses)).group_by(OutboxEvent.status)
+    )
+    try:
+        rows = result.all()
+    except Exception:  # pragma: no cover - defensive for stub sessions
+        rows = []
+    for row in rows:
+        if isinstance(row, tuple) and len(row) == 2:
+            status, count = row
+            if status in counts:
+                counts[status] = int(count)
+    return counts
 
 
 async def replay_outbox_event(session: AsyncSession, event: OutboxEvent) -> None:
