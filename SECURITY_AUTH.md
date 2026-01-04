@@ -49,3 +49,8 @@ This document summarizes the authentication changes shipped in Sprint 11.
 - In production (`APP_ENV=prod`), legacy Basic Auth is disabled by default; operators must explicitly set `LEGACY_BASIC_AUTH_ENABLED=true` to allow it. This reduces the attack surface when environment configuration is missing or typoed.
 - For development and automated tests (`APP_ENV=dev` or `settings.testing=true`), Basic Auth can remain on for convenience while SaaS auth is wired.
 - Billing pause/resume endpoints (`/v1/billing/pause`, `/v1/billing/resume`) require SaaS OWNER/ADMIN/FINANCE roles; actions are org-scoped and capture reason codes with pause/resume timestamps.
+
+## Analytics endpoint roles and data safety
+- `/v1/admin/analytics/funnel`, `/v1/admin/analytics/nps`, and `/v1/admin/analytics/cohorts` require FINANCE permission (OWNER/ADMIN/FINANCE roles qualify). Dispatcher/viewer roles cannot access these endpoints.
+- All analytics responses are org-scoped and return aggregates only. No raw leads, client identifiers, NPS comments, or booking details are emitted.
+- Time-range filters are supported for queries; callers should supply `from`/`to` timestamps to bound aggregation windows and keep workloads predictable.
