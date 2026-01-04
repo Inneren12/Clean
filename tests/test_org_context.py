@@ -3,6 +3,12 @@ import jwt
 import pytest
 
 from app.domain.clients import service as client_service
+import base64
+
+import jwt
+import pytest
+
+from app.domain.clients import service as client_service
 from app.domain.saas import service as saas_service
 from app.domain.saas.db_models import MembershipRole
 from app.settings import settings

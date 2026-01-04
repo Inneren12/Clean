@@ -38,3 +38,8 @@ This document summarizes the authentication changes shipped in Sprint 11.
 
 ## Worker portal sessions
 - Worker sessions are HMAC-signed and now embed an expiry timestamp derived from `SESSION_TTL_MINUTES_WORKER`. Legacy tokens without expiry will be rejected, prompting a re-login.
+
+## Legacy Basic Auth
+- Legacy admin Basic Auth remains supported for backward compatibility but is **deprecated**. Prefer SaaS identities with MFA enforced (`ADMIN_MFA_REQUIRED=true`) for all operators.
+- In production (`APP_ENV=prod`), legacy Basic Auth is disabled by default; operators must explicitly set `LEGACY_BASIC_AUTH_ENABLED=true` to allow it. This reduces the attack surface when environment configuration is missing or typoed.
+- For development and automated tests (`APP_ENV=dev` or `settings.testing=true`), Basic Auth can remain on for convenience while SaaS auth is wired.

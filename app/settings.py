@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     worker_basic_username: str | None = Field(None)
     worker_basic_password: str | None = Field(None)
     worker_team_id: int = Field(1)
-    legacy_basic_auth_enabled: bool = Field(True)
+    legacy_basic_auth_enabled: bool | None = Field(None)
     admin_mfa_required: bool = Field(False)
     admin_mfa_required_roles_raw: str | None = Field(None, validation_alias="admin_mfa_required_roles")
     auth_secret_key: str = Field("dev-auth-secret")
@@ -209,6 +209,8 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_prod_settings(self) -> "Settings":
         if self.app_env != "prod":
+            if self.legacy_basic_auth_enabled is None:
+                self.legacy_basic_auth_enabled = True
             return self
 
         def _require_secret(value: str | None, field_name: str, placeholders: set[str]) -> None:
@@ -250,6 +252,9 @@ class Settings(BaseSettings):
 
         if self.testing:
             raise ValueError("APP_ENV=prod disables testing mode and X-Test-Org overrides")
+
+        if self.legacy_basic_auth_enabled is None:
+            self.legacy_basic_auth_enabled = False
 
         return self
 

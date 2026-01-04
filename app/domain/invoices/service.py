@@ -173,6 +173,7 @@ def _reconcile_snapshot(invoice: Invoice) -> dict:
         [payment for payment in invoice.payments if payment.status == statuses.PAYMENT_STATUS_SUCCEEDED]
     )
     return {
+        "org_id": str(invoice.org_id),
         "invoice_id": invoice.invoice_id,
         "invoice_number": invoice.invoice_number,
         "status": invoice.status,
