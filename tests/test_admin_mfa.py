@@ -1,9 +1,6 @@
 import uuid
 
 import pytest
-import uuid
-
-import pytest
 import sqlalchemy as sa
 
 from app.domain.saas import service as saas_service
@@ -148,3 +145,58 @@ async def test_non_admin_roles_not_blocked(async_session_maker, client):
     )
     assert login.status_code == 200
     assert login.json()["mfa_verified"] is False
+
+
+@pytest.mark.anyio
+async def test_admin_routes_reject_sessions_without_mfa(async_session_maker, client):
+    settings.admin_mfa_required = True
+    async with async_session_maker() as session:
+        org = await saas_service.create_organization(session, "MFA Gate Org")
+        user = await saas_service.create_user(session, "mfa-gate@example.com", "SecretPass123!")
+        membership = await saas_service.create_membership(session, org, user, MembershipRole.ADMIN)
+        user.totp_secret_base32 = saas_service.generate_totp_secret()
+        user.totp_enabled = True
+        session.add_all([user, membership])
+        session_token, _ = await saas_service.create_session(
+            session,
+            user,
+            membership,
+            ttl_minutes=settings.auth_session_ttl_minutes,
+            refresh_ttl_minutes=settings.auth_refresh_token_ttl_minutes,
+            mfa_verified=False,
+        )
+        mfa_session, _ = await saas_service.create_session(
+            session,
+            user,
+            membership,
+            ttl_minutes=settings.auth_session_ttl_minutes,
+            refresh_ttl_minutes=settings.auth_refresh_token_ttl_minutes,
+            mfa_verified=True,
+        )
+        await session.commit()
+
+    access_token_without_mfa = saas_service.build_session_access_token(
+        user, membership, session_token.session_id, mfa_verified=False
+    )
+    access_token_with_mfa = saas_service.build_session_access_token(
+        user, membership, mfa_session.session_id, mfa_verified=True
+    )
+
+    iam_resp = client.get(
+        "/v1/iam/users", headers={"Authorization": f"Bearer {access_token_without_mfa}"}
+    )
+    assert iam_resp.status_code == 401
+    assert iam_resp.headers["content-type"].startswith("application/problem+json")
+    assert iam_resp.json()["type"] == "mfa_required"
+
+    admin_resp = client.get(
+        "/v1/admin/profile", headers={"Authorization": f"Bearer {access_token_without_mfa}"}
+    )
+    assert admin_resp.status_code == 401
+    assert admin_resp.headers["content-type"].startswith("application/problem+json")
+    assert admin_resp.json()["type"] == "mfa_required"
+
+    success_resp = client.get(
+        "/v1/iam/users", headers={"Authorization": f"Bearer {access_token_with_mfa}"}
+    )
+    assert success_resp.status_code == 200

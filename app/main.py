@@ -301,8 +301,10 @@ def create_app(app_settings) -> FastAPI:
     app.add_middleware(AdminAccessMiddleware)
     app.add_middleware(AdminSafetyMiddleware, app_settings=app_settings)
     app.add_middleware(PasswordChangeGateMiddleware)
-    app.add_middleware(TenantSessionMiddleware)
     app.add_middleware(AdminMfaMiddleware, app_settings=app_settings)
+    # Last-added middleware runs first; keep TenantSessionMiddleware outermost so AdminMfaMiddleware
+    # sees the populated request.state.saas_identity.
+    app.add_middleware(TenantSessionMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(LoggingMiddleware)
     app.add_middleware(MetricsMiddleware, metrics_client=metrics_client)
