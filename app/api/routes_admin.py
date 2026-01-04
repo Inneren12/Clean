@@ -1805,6 +1805,35 @@ async def list_stripe_events(
     )
 
 
+@router.get("/v1/admin/exports/accounting.csv")
+async def export_accounting(
+    request: Request,
+    from_date: date | None = Query(default=None, alias="from"),
+    to_date: date | None = Query(default=None, alias="to"),
+    status: list[str] | None = Query(default=None),
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_finance),
+) -> Response:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    start, end = _normalize_date_range(from_date, to_date)
+    status_filter: set[str] | None = None
+    if status:
+        try:
+            status_filter = {invoice_statuses.normalize_status(value) for value in status}
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_status") from exc
+
+    rows = await invoice_service.accounting_export_rows(
+        session, org_id, start=start, end=end, statuses_filter=status_filter
+    )
+    csv_content = invoice_service.build_accounting_export_csv(rows)
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=accounting.csv"},
+    )
+
+
 @router.get("/v1/admin/exports/sales-ledger.csv")
 async def export_sales_ledger(
     request: Request,

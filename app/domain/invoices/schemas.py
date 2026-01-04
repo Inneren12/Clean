@@ -172,6 +172,23 @@ class PaymentLedgerRow(BaseModel):
     created_at: datetime
 
 
+class AccountingExportRow(BaseModel):
+    invoice_number: str
+    issue_date: date
+    due_date: date | None = None
+    status: str
+    currency: str
+    taxable_subtotal_cents: int
+    tax_cents: int
+    total_cents: int
+    paid_cents: int
+    payment_fees_cents: int
+    balance_due_cents: int
+    customer_id: str | None = None
+    booking_id: str | None = None
+    last_payment_at: datetime | None = None
+
+
 class PnlRow(BaseModel):
     booking_id: str
     invoice_number: str

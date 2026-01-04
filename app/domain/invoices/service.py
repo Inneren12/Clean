@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import asyncio
 import hmac
+import io
 import logging
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import secrets
 import uuid
+from typing import Iterable
 
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -31,13 +34,133 @@ from app.domain.invoices.db_models import (
 from app.domain.invoices import schemas as invoice_schemas
 from app.domain.invoices.schemas import InvoiceItemCreate
 from app.domain.queues.schemas import QuickActionItem
-from app.domain.leads.db_models import Lead
 from app.settings import settings
 
 
 logger = logging.getLogger(__name__)
 
 _SQLITE_INVOICE_NUMBER_LOCK = asyncio.Lock()
+_DANGEROUS_CSV_PREFIXES = ("=", "+", "-", "@", "\t")
+DEFAULT_ACCOUNTING_STATUSES: set[str] = {
+    statuses.INVOICE_STATUS_SENT,
+    statuses.INVOICE_STATUS_PAID,
+    statuses.INVOICE_STATUS_PARTIAL,
+    statuses.INVOICE_STATUS_OVERDUE,
+}
+ACCOUNTING_EXPORT_HEADERS = [
+    "invoice_number",
+    "issue_date",
+    "due_date",
+    "status",
+    "currency",
+    "taxable_subtotal_cents",
+    "tax_cents",
+    "total_cents",
+    "paid_cents",
+    "payment_fees_cents",
+    "balance_due_cents",
+    "customer_id",
+    "booking_id",
+    "last_payment_at",
+]
+
+
+def _sanitize_row(values: Iterable[object]) -> list[str]:
+    return [_safe_csv_value(value) for value in values]
+
+
+def _safe_csv_value(value: object) -> str:
+    text = "" if value is None else str(value)
+    if not text:
+        return ""
+    if text.startswith(_DANGEROUS_CSV_PREFIXES):
+        return f"'{text}"
+    return text
+
+
+async def accounting_export_rows(
+    session: AsyncSession,
+    org_id,
+    *,
+    start: date,
+    end: date,
+    statuses_filter: set[str] | None = None,
+) -> list[invoice_schemas.AccountingExportRow]:
+    normalized_statuses = statuses_filter or DEFAULT_ACCOUNTING_STATUSES
+    stmt = (
+        select(Invoice)
+        .options(selectinload(Invoice.payments))
+        .where(
+            Invoice.issue_date >= start,
+            Invoice.issue_date <= end,
+            Invoice.status.in_(normalized_statuses),
+            Invoice.org_id == org_id,
+        )
+        .order_by(Invoice.issue_date.asc(), Invoice.invoice_number.asc())
+    )
+    result = await session.execute(stmt)
+    invoices = result.scalars().all()
+
+    rows: list[invoice_schemas.AccountingExportRow] = []
+    for invoice in invoices:
+        succeeded_payments = [
+            payment
+            for payment in invoice.payments
+            if payment.status == statuses.PAYMENT_STATUS_SUCCEEDED
+        ]
+        paid_cents = sum(payment.amount_cents for payment in succeeded_payments)
+        last_payment_at = None
+        for payment in succeeded_payments:
+            ts = payment.received_at or payment.created_at
+            if ts and (last_payment_at is None or ts > last_payment_at):
+                last_payment_at = ts
+        rows.append(
+            invoice_schemas.AccountingExportRow(
+                invoice_number=invoice.invoice_number,
+                issue_date=invoice.issue_date,
+                due_date=invoice.due_date,
+                status=invoice.status,
+                currency=invoice.currency,
+                taxable_subtotal_cents=invoice.taxable_subtotal_cents,
+                tax_cents=invoice.tax_cents,
+                total_cents=invoice.total_cents,
+                paid_cents=paid_cents,
+                payment_fees_cents=0,
+                balance_due_cents=max(invoice.total_cents - paid_cents, 0),
+                customer_id=invoice.customer_id,
+                booking_id=invoice.order_id,
+                last_payment_at=last_payment_at,
+            )
+        )
+    return rows
+
+
+def build_accounting_export_csv(rows: list[invoice_schemas.AccountingExportRow]) -> str:
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(_sanitize_row(ACCOUNTING_EXPORT_HEADERS))
+    for row in rows:
+        writer.writerow(
+            _sanitize_row(
+                [
+                    row.invoice_number,
+                    row.issue_date.isoformat(),
+                    row.due_date.isoformat() if row.due_date else "",
+                    row.status,
+                    row.currency,
+                    row.taxable_subtotal_cents,
+                    row.tax_cents,
+                    row.total_cents,
+                    row.paid_cents,
+                    row.payment_fees_cents,
+                    row.balance_due_cents,
+                    row.customer_id or "",
+                    row.booking_id or "",
+                    row.last_payment_at.isoformat() if row.last_payment_at else "",
+                ]
+            )
+        )
+    return buffer.getvalue()
 
 
 def _calculate_tax(line_total_cents: int, tax_rate: Decimal | float | None) -> int:

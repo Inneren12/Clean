@@ -11,6 +11,10 @@
 ## Scheduler templates
 - Cron and Cloudflare Scheduler examples live in `scripts/cron_examples/` with a runbook in `docs/runbook_scheduler.md`.
 
+## Accounting export v1
+- Finance-only CSV export is available at `/v1/admin/exports/accounting.csv` with optional `from`, `to`, and repeated `status` query parameters. Totals come from stored invoice snapshots (taxable_subtotal_cents, tax_cents, total_cents) plus succeeded payments and balances; CSV cells are injection-hardened.
+- Schedule monthly exports by adding `--job accounting-export` to the jobs runner (defaults to the previous calendar month). When `EXPORT_MODE=webhook` and `EXPORT_WEBHOOK_URL` is set the job enqueues an outbox export webhook; otherwise the CSV artifact is stored in `export_events` with `mode=accounting_csv` for review.
+
 ## Pause/resume playbook
 - SaaS OWNER/ADMIN/FINANCE roles can pause billing via `POST /v1/billing/pause` with a reason code (64 chars max). The pause sets the subscription status to `paused`, records `pause_reason_code`, and timestamps `paused_at` for auditability.
 - Resume with `POST /v1/billing/resume` (same roles) to return status to `active`, capture `resume_reason_code`, and stamp `resumed_at`. Plan metadata is preserved; only the status gates entitlements.
