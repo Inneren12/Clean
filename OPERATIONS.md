@@ -23,6 +23,7 @@
 
 ## Environment variable groups
 - **Auth & portals:** `AUTH_SECRET_KEY`, `CLIENT_PORTAL_SECRET`, `WORKER_PORTAL_SECRET`, Basic Auth username/password pairs, `LEGACY_BASIC_AUTH_ENABLED`. JWT/session TTLs come from `AUTH_ACCESS_TOKEN_TTL_MINUTES`, `AUTH_SESSION_TTL_MINUTES`, and `AUTH_REFRESH_TOKEN_TTL_MINUTES`.
+- **Legacy Basic Auth hardening:** In production, `LEGACY_BASIC_AUTH_ENABLED` now defaults to `false` to reduce attack surface; set it to `true` only if SaaS auth is unavailable. Prefer SaaS identities with `ADMIN_MFA_REQUIRED=true` for admin/finance access.
 - **Database:** `DATABASE_URL`, pool/timeout overrides; statement timeout controlled via `DATABASE_STATEMENT_TIMEOUT_MS`.
 - **Rate limiting:** `RATE_LIMIT_PER_MINUTE`, `REDIS_URL`, proxy trust lists (`TRUST_PROXY_HEADERS`, `TRUSTED_PROXY_IPS`, `TRUSTED_PROXY_CIDRS`).
 - **Admin safety:** `ADMIN_IP_ALLOWLIST_CIDRS` (optional CIDR list) gates `/v1/admin/*` and `/v1/iam/*` after resolving client IPs through trusted proxies; `ADMIN_READ_ONLY=true` converts POST/PUT/PATCH/DELETE on those routes into 409 Problem+JSON during incidents while allowing GETs for investigation. Owners/admins can mint org-scoped break-glass tokens with `/v1/admin/break-glass/start` (reason + TTL required) to permit temporary writes while the flag is on.

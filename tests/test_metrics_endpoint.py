@@ -54,3 +54,14 @@ def test_metrics_unmatched_path_uses_placeholder(client_no_raise):
         samples.extend(metric.samples)
 
     assert any(sample.labels.get("path") == "unmatched" for sample in samples)
+
+
+def test_metrics_endpoint_disabled_when_metrics_off(client):
+    settings.metrics_enabled = False
+    settings.metrics_token = None
+    if hasattr(app.state, "metrics"):
+        delattr(app.state, "metrics")
+
+    response = client.get("/metrics")
+
+    assert response.status_code == 404

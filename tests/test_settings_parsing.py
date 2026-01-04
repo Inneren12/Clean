@@ -125,3 +125,22 @@ def test_prod_accepts_valid_configuration():
     )
 
     assert settings.admin_ip_allowlist_cidrs == ["10.0.0.0/8"]
+
+
+def test_legacy_basic_auth_defaults_disabled_in_prod():
+    settings = Settings(
+        app_env="prod",
+        auth_secret_key="super-secret",
+        client_portal_secret="client-secret",
+        worker_portal_secret="worker-secret",
+        metrics_enabled=False,
+        _env_file=None,
+    )
+
+    assert settings.legacy_basic_auth_enabled is False
+
+
+def test_legacy_basic_auth_defaults_enabled_in_dev():
+    settings = Settings(app_env="dev", _env_file=None)
+
+    assert settings.legacy_basic_auth_enabled is True
