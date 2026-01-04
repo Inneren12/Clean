@@ -46,43 +46,52 @@ def _temporary_postgres_database(base_url: str):
         admin_engine.dispose()
 
 
-@pytest.mark.postgres
-@pytest.mark.migrations
-def test_rls_prevents_cross_org_queries():
+def _apply_migrations(temp_url: str) -> None:
     config = Config("alembic.ini")
     original_url = settings.database_url
 
-    with _temporary_postgres_database(original_url) as temp_url:
-        try:
-            settings.database_url = temp_url
-            config.set_main_option("sqlalchemy.url", temp_url)
-            command.upgrade(config, "head")
-        finally:
-            settings.database_url = original_url
+    try:
+        settings.database_url = temp_url
+        config.set_main_option("sqlalchemy.url", temp_url)
+        command.upgrade(config, "head")
+    finally:
+        settings.database_url = original_url
 
-        base_url = make_url(temp_url)
-        admin_engine = sa.create_engine(base_url, future=True)
 
-        with admin_engine.begin() as conn:
-            conn.execute(sa.text("DROP ROLE IF EXISTS app_test"))
-            conn.execute(
-                sa.text(
-                    "CREATE ROLE app_test LOGIN PASSWORD 'app_test' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE"
-                )
+def _provision_tenant_engine(temp_url: str) -> sa.Engine:
+    base_url = make_url(temp_url)
+    admin_engine = sa.create_engine(base_url, future=True)
+
+    with admin_engine.begin() as conn:
+        conn.execute(sa.text("DROP ROLE IF EXISTS app_test"))
+        conn.execute(
+            sa.text(
+                "CREATE ROLE app_test LOGIN PASSWORD 'app_test' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE"
             )
-            conn.execute(sa.text("GRANT USAGE ON SCHEMA public TO app_test"))
-            conn.execute(sa.text("GRANT SELECT, INSERT ON ALL TABLES IN SCHEMA public TO app_test"))
-            conn.execute(sa.text("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_test"))
-            conn.execute(
-                sa.text(
-                    "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT ON TABLES TO app_test"
-                )
-            )
-
-        tenant_url = base_url.set(username="app_test", password="app_test").render_as_string(
-            hide_password=False
         )
-        engine = sa.create_engine(tenant_url, future=True)
+        conn.execute(sa.text("GRANT USAGE ON SCHEMA public TO app_test"))
+        conn.execute(sa.text("GRANT SELECT, INSERT ON ALL TABLES IN SCHEMA public TO app_test"))
+        conn.execute(sa.text("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_test"))
+        conn.execute(
+            sa.text(
+                "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT ON TABLES TO app_test"
+            )
+        )
+
+    admin_engine.dispose()
+
+    tenant_url = base_url.set(username="app_test", password="app_test").render_as_string(
+        hide_password=False
+    )
+    return sa.create_engine(tenant_url, future=True)
+
+
+@pytest.mark.postgres
+@pytest.mark.migrations
+def test_rls_prevents_cross_org_queries():
+    with _temporary_postgres_database(settings.database_url) as temp_url:
+        _apply_migrations(temp_url)
+        engine = _provision_tenant_engine(temp_url)
         org_a = uuid.uuid4()
         org_b = uuid.uuid4()
 
@@ -121,5 +130,44 @@ def test_rls_prevents_cross_org_queries():
             conn.execute(sa.text(f"SET LOCAL app.current_org_id = '{org_a}'"))
             rows = conn.execute(sa.text("SELECT org_id, name FROM teams ORDER BY name"))
             assert {row.org_id for row in rows} == {org_a}
+
+        engine.dispose()
+
+
+@pytest.mark.postgres
+@pytest.mark.migrations
+def test_rls_rejects_writes_without_org_context():
+    with _temporary_postgres_database(settings.database_url) as temp_url:
+        _apply_migrations(temp_url)
+        engine = _provision_tenant_engine(temp_url)
+
+        org_id = uuid.uuid4()
+        lead_id = uuid.uuid4()
+
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text("INSERT INTO organizations (org_id, name) VALUES (:org_id, :name)"),
+                {"org_id": org_id, "name": "RLS Org"},
+            )
+
+        with pytest.raises(sa.exc.DatabaseError):
+            with engine.begin() as conn:
+                conn.execute(
+                    sa.text(
+                        "INSERT INTO leads (lead_id, org_id, name) VALUES (:lead_id, :org_id, :name)"
+                    ),
+                    {"lead_id": lead_id, "org_id": org_id, "name": "Blocked lead"},
+                )
+
+        with engine.begin() as conn:
+            conn.execute(sa.text(f"SET LOCAL app.current_org_id = '{org_id}'"))
+            conn.execute(
+                sa.text(
+                    "INSERT INTO leads (lead_id, org_id, name) VALUES (:lead_id, :org_id, :name)"
+                ),
+                {"lead_id": lead_id, "org_id": org_id, "name": "Allowed lead"},
+            )
+            rows = conn.execute(sa.text("SELECT lead_id FROM leads"))
+            assert {row.lead_id for row in rows} == {lead_id}
 
         engine.dispose()
