@@ -203,6 +203,7 @@ def test_export_dead_letter_replay(client, async_session_maker):
         response = client.post(
             f"/v1/admin/export-dead-letter/{event.event_id}/replay",
             auth=("admin", "password"),
+            headers={"Idempotency-Key": "export-replay-test"},
         )
 
         assert response.status_code == 202

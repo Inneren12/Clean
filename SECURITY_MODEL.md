@@ -31,6 +31,7 @@
 
 ## Transport and rate limits
 - **Rate limiting**: middleware using Redis or in-memory limiter with proxy-aware client key resolution (`app/main.py`, `app/infra/security.py`).
+- **Admin idempotency**: dangerous admin actions (payments, resends/replays, bulk updates, IAM resets) require an `Idempotency-Key` header. Requests are hashed on method/path/normalized JSON body and persisted per-org in `admin_idempotency`; repeated hashes replay the stored response while mismatched payloads return a 409 Problem+JSON. Per-org action rate limits share the same limiter infrastructure and are applied before execution.
 - **CORS**: origins enforced via settings; `STRICT_CORS` recommended for prod (`app/main.py`, `app/settings.py`).
 - **Metrics/headers**: security headers middleware sets X-Content-Type-Options, X-Frame-Options, CSP, Referrer-Policy (`app/main.py`). Admin Basic Auth middleware only applies to `/v1/admin/*`; `/healthz`, `/readyz`, and `/metrics` are allowlisted from admin credentials.
 

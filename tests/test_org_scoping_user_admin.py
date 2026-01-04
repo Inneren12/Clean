@@ -20,7 +20,11 @@ async def test_cross_org_admin_actions_forbidden(async_session_maker, client):
     reset = client.post(
         f"/v1/admin/users/{user_b.user_id}/reset-temp-password",
         json={"reason": "cross"},
-        headers={"Authorization": f"Bearer {admin_token}", "X-Test-Org": str(org_b.org_id)},
+        headers={
+            "Authorization": f"Bearer {admin_token}",
+            "X-Test-Org": str(org_b.org_id),
+            "Idempotency-Key": "cross-org-reset",
+        },
     )
     assert reset.status_code == 403
 

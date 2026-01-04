@@ -48,6 +48,7 @@ from app.domain.nps import db_models as nps_db_models  # noqa: F401
 from app.domain.disputes import db_models as dispute_db_models  # noqa: F401
 from app.domain.policy_overrides import db_models as policy_override_db_models  # noqa: F401
 from app.domain.admin_audit import db_models as admin_audit_db_models  # noqa: F401
+from app.domain.admin_idempotency import db_models as admin_idempotency_db_models  # noqa: F401
 from app.domain.documents import db_models as document_db_models  # noqa: F401
 from app.domain.saas import db_models as saas_db_models  # noqa: F401
 from app.domain.outbox import db_models as outbox_db_models  # noqa: F401
@@ -258,6 +259,18 @@ def clean_database(test_engine):
                 anyio.from_thread.run(reset)
         else:
             reset()
+    action_rate_limiter = getattr(app.state, "action_rate_limiter", None)
+    reset_action = getattr(action_rate_limiter, "reset", None) if action_rate_limiter else None
+    if reset_action:
+        if inspect.iscoroutinefunction(reset_action):
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                asyncio.run(reset_action())
+            else:
+                anyio.from_thread.run(reset_action)
+        else:
+            reset_action()
     yield
 
 

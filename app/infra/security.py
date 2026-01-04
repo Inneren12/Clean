@@ -208,17 +208,18 @@ class RedisRateLimiter:
         return result
 
 
-def create_rate_limiter(app_settings) -> RateLimiter:
+def create_rate_limiter(app_settings, requests_per_minute: int | None = None) -> RateLimiter:
+    limit = requests_per_minute or app_settings.rate_limit_per_minute
     if getattr(app_settings, "redis_url", None):
         return RedisRateLimiter(
             app_settings.redis_url,
-            app_settings.rate_limit_per_minute,
+            limit,
             cleanup_minutes=app_settings.rate_limit_cleanup_minutes,
             fail_open_seconds=getattr(app_settings, "rate_limit_fail_open_seconds", 300),
             health_probe_seconds=getattr(app_settings, "rate_limit_redis_probe_seconds", 5.0),
         )
     return InMemoryRateLimiter(
-        app_settings.rate_limit_per_minute,
+        limit,
         cleanup_minutes=app_settings.rate_limit_cleanup_minutes,
     )
 

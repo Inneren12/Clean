@@ -111,7 +111,7 @@ async def test_cross_org_invoice_and_booking_actions_blocked(client, async_sessi
 
     payment_attempt = client.post(
         f"/v1/admin/invoices/{invoice_id}/record-payment",
-        headers=headers,
+        headers={**headers, "Idempotency-Key": "cross-org-payment"},
         json={"amount_cents": 5000, "method": "cash"},
     )
     assert payment_attempt.status_code == 404

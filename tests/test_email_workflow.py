@@ -211,7 +211,10 @@ def test_resend_last_email_replays_latest(client, async_session_maker):
     headers = _auth_headers("admin", "secret")
 
     try:
-        response = client.post(f"/v1/admin/bookings/{booking_id}/resend-last-email", headers=headers)
+        response = client.post(
+            f"/v1/admin/bookings/{booking_id}/resend-last-email",
+            headers={**headers, "Idempotency-Key": "resend-last-email"},
+        )
         assert response.status_code == 202
         assert response.json()["booking_id"] == booking_id
         assert len(adapter.sent) == 1
