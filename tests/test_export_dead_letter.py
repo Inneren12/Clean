@@ -2,6 +2,8 @@ import anyio
 import anyio
 from httpx import MockTransport, Request, Response
 from sqlalchemy import select
+from datetime import datetime, timezone
+import uuid
 
 from app.domain.export_events.db_models import ExportEvent
 from app.domain.outbox.service import OutboxAdapters, process_outbox
@@ -80,6 +82,63 @@ def test_export_dead_letter_recorded_on_failure(async_session_maker):
         settings.outbox_max_attempts = original_outbox_attempts
 
 
+def test_export_dead_letter_paginates(client, async_session_maker):
+    original_viewer_username = settings.viewer_basic_username
+    original_viewer_password = settings.viewer_basic_password
+
+    settings.viewer_basic_username = "viewer"
+    settings.viewer_basic_password = "pw"
+
+    async def seed_events():
+        async with async_session_maker() as session:
+            now = datetime.now(timezone.utc)
+            session.add_all(
+                [
+                    ExportEvent(
+                        event_id=str(uuid.uuid4()),
+                        org_id=settings.default_org_id,
+                        lead_id=f"lead-{idx}",
+                        mode="webhook",
+                        target_url="https://example.com/webhook",
+                        target_url_host="example.com",
+                        payload={"seq": idx},
+                        attempts=idx,
+                        last_error_code="status_500",
+                        created_at=now.replace(microsecond=idx),
+                    )
+                    for idx in range(3)
+                ]
+            )
+            await session.commit()
+
+    try:
+        anyio.run(seed_events)
+
+        first_page = client.get(
+            "/v1/admin/export-dead-letter?limit=2&offset=0",
+            auth=("viewer", "pw"),
+        )
+        assert first_page.status_code == 200
+        payload_one = first_page.json()
+        assert payload_one["total"] >= 3
+        assert len(payload_one["items"]) == 2
+
+        second_page = client.get(
+            "/v1/admin/export-dead-letter?limit=2&offset=2",
+            auth=("viewer", "pw"),
+        )
+        assert second_page.status_code == 200
+        payload_two = second_page.json()
+        assert payload_two["total"] >= 3
+        assert len(payload_two["items"]) == 1
+
+        seen_leads = {item["lead_id"] for item in payload_one["items"] + payload_two["items"]}
+        assert seen_leads.issuperset({"lead-0", "lead-1", "lead-2"})
+    finally:
+        settings.viewer_basic_username = original_viewer_username
+        settings.viewer_basic_password = original_viewer_password
+
+
 def test_export_dead_letter_endpoint_allows_dispatcher(client, async_session_maker):
     original_mode = settings.export_mode
     original_url = settings.export_webhook_url
@@ -125,7 +184,9 @@ def test_export_dead_letter_endpoint_allows_dispatcher(client, async_session_mak
             auth=("dispatcher", "password"),
         )
         assert response.status_code == 200
-        events = response.json()
+        payload = response.json()
+        assert payload["total"] >= 1
+        events = payload["items"]
         event = next(
             (evt for evt in events if evt["lead_id"] == "lead-dead-letter-api"),
             None,

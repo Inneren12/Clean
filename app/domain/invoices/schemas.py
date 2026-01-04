@@ -203,6 +203,7 @@ class InvoiceReconcileItem(BaseModel):
 
 class InvoiceReconcileListResponse(BaseModel):
     items: list[InvoiceReconcileItem]
+    total: int
 
 
 class InvoiceReconcileResponse(BaseModel):

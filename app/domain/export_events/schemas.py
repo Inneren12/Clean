@@ -21,6 +21,11 @@ class ExportEventResponse(BaseModel):
     last_replayed_by: Optional[str] = None
 
 
+class ExportDeadLetterListResponse(BaseModel):
+    items: list[ExportEventResponse]
+    total: int
+
+
 class ExportReplayResponse(BaseModel):
     event_id: str
     success: bool

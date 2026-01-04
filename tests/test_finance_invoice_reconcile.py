@@ -335,6 +335,7 @@ def test_finance_reconcile_lists_org_scoped_mismatches(client, async_session_mak
     )
     assert response.status_code == 200
     payload = response.json()
+    assert payload["total"] == 3
     numbers = {item["invoice_number"] for item in payload["items"]}
     assert numbers == {"A-001", "A-002", "A-003"}
 
@@ -360,7 +361,9 @@ def test_finance_reconcile_lists_org_scoped_mismatches(client, async_session_mak
         headers=_auth_headers("finance", "secret", org_a),
     )
     assert all_response.status_code == 200
-    all_numbers = {item["invoice_number"] for item in all_response.json()["items"]}
+    all_payload = all_response.json()
+    assert all_payload["total"] == 4
+    all_numbers = {item["invoice_number"] for item in all_payload["items"]}
     assert "A-004" in all_numbers
 
     cross_org = client.get(
@@ -368,8 +371,36 @@ def test_finance_reconcile_lists_org_scoped_mismatches(client, async_session_mak
         headers=_auth_headers("finance", "secret", org_b),
     )
     assert cross_org.status_code == 200
-    cross_numbers = {item["invoice_number"] for item in cross_org.json()["items"]}
+    cross_payload = cross_org.json()
+    assert cross_payload["total"] == 1
+    cross_numbers = {item["invoice_number"] for item in cross_payload["items"]}
     assert cross_numbers == {"B-001"}
+
+
+def test_finance_reconcile_supports_pagination(client, async_session_maker):
+    seeded = asyncio.run(_seed_invoice_mismatches(async_session_maker))
+    org_a = seeded["org_a"]
+
+    page_one = client.get(
+        "/v1/admin/finance/reconcile/invoices?limit=2&offset=0",
+        headers=_auth_headers("finance", "secret", org_a),
+    )
+    assert page_one.status_code == 200
+    payload_one = page_one.json()
+    assert payload_one["total"] == 3
+    assert len(payload_one["items"]) == 2
+
+    page_two = client.get(
+        "/v1/admin/finance/reconcile/invoices?limit=2&offset=2",
+        headers=_auth_headers("finance", "secret", org_a),
+    )
+    assert page_two.status_code == 200
+    payload_two = page_two.json()
+    assert payload_two["total"] == 3
+    assert len(payload_two["items"]) == 1
+
+    combined_numbers = {item["invoice_number"] for item in payload_one["items"] + payload_two["items"]}
+    assert combined_numbers == {"A-001", "A-002", "A-003"}
 
 
 def test_finance_reconcile_marks_invoice_paid(client, async_session_maker):
