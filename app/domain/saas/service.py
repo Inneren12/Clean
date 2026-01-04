@@ -22,6 +22,7 @@ from app.domain.saas.db_models import (
     User,
 )
 from app.infra.auth import create_access_token, hash_api_token, hash_password, verify_password
+from app.infra.totp import build_otpauth_uri, generate_totp_code, generate_totp_secret, verify_totp_code
 from app.settings import settings
 
 DEFAULT_ORG_NAME = "Default Org"
@@ -239,6 +240,45 @@ async def set_new_password(session: AsyncSession, user: User, new_password: str)
     await session.flush()
 
 
+async def enroll_totp(session: AsyncSession, user: User) -> tuple[str, str]:
+    secret = generate_totp_secret()
+    user.totp_secret_base32 = secret
+    user.totp_enabled = False
+    user.totp_enrolled_at = datetime.now(timezone.utc)
+    session.add(user)
+    await session.flush()
+    label = f"{settings.app_name}:{user.email}" if user.email else settings.app_name
+    uri = build_otpauth_uri(label, secret, issuer=settings.app_name)
+    return secret, uri
+
+
+async def verify_totp(session: AsyncSession, user: User, code: str) -> bool:
+    if not user.totp_secret_base32:
+        return False
+    if not verify_totp_code(user.totp_secret_base32, code):
+        return False
+    user.totp_enabled = True
+    user.totp_enrolled_at = datetime.now(timezone.utc)
+    session.add(user)
+    await revoke_user_sessions(session, user.user_id, reason="mfa_enabled")
+    await session.flush()
+    return True
+
+
+async def disable_totp(session: AsyncSession, user: User, *, code: str) -> bool:
+    if not user.totp_secret_base32:
+        return False
+    if not verify_totp_code(user.totp_secret_base32, code):
+        return False
+    user.totp_enabled = False
+    user.totp_secret_base32 = None
+    user.totp_enrolled_at = None
+    session.add(user)
+    await revoke_user_sessions(session, user.user_id, reason="mfa_disabled")
+    await session.flush()
+    return True
+
+
 def build_access_token(user: User, membership: Membership) -> str:
     return create_access_token(
         subject=str(user.user_id),
@@ -249,7 +289,13 @@ def build_access_token(user: User, membership: Membership) -> str:
     )
 
 
-def build_session_access_token(user: User, membership: Membership, session_id: uuid.UUID) -> str:
+def build_session_access_token(
+    user: User,
+    membership: Membership,
+    session_id: uuid.UUID,
+    *,
+    mfa_verified: bool = False,
+) -> str:
     return create_access_token(
         subject=str(user.user_id),
         org_id=str(membership.org_id),
@@ -258,6 +304,7 @@ def build_session_access_token(user: User, membership: Membership, session_id: u
         settings=settings,
         session_id=session_id,
         token_id=uuid.uuid4(),
+        mfa_verified=mfa_verified,
     )
 
 
@@ -268,6 +315,7 @@ async def create_session(
     *,
     ttl_minutes: int,
     refresh_ttl_minutes: int,
+    mfa_verified: bool = False,
     request_id: str | None = None,
 ) -> tuple[SaaSSession, str]:
     now = datetime.now(timezone.utc)
@@ -281,6 +329,7 @@ async def create_session(
         created_at=now,
         expires_at=now + timedelta(minutes=ttl_minutes),
         refresh_expires_at=now + timedelta(minutes=refresh_ttl_minutes),
+        mfa_verified=mfa_verified,
     )
     session.add(record)
     await session.flush()
@@ -301,6 +350,7 @@ async def rotate_session(
     *,
     ttl_minutes: int,
     refresh_ttl_minutes: int,
+    mfa_verified: bool | None = None,
     request_id: str | None = None,
 ) -> tuple[SaaSSession, str]:
     prior.revoked_at = datetime.now(timezone.utc)
@@ -319,6 +369,7 @@ async def rotate_session(
         membership,
         ttl_minutes=ttl_minutes,
         refresh_ttl_minutes=refresh_ttl_minutes,
+        mfa_verified=prior.mfa_verified if mfa_verified is None else mfa_verified,
         request_id=request_id,
     )
     new_session.rotated_from = prior.session_id
@@ -370,7 +421,9 @@ async def refresh_tokens(
         refresh_ttl_minutes=settings.auth_refresh_token_ttl_minutes,
         request_id=request_id,
     )
-    access_token = build_session_access_token(user, membership, new_session.session_id)
+    access_token = build_session_access_token(
+        user, membership, new_session.session_id, mfa_verified=bool(new_session.mfa_verified)
+    )
     return access_token, new_refresh, new_session, membership
 
 

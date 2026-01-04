@@ -135,6 +135,7 @@ def create_access_token(
     *,
     session_id: uuid.UUID | None = None,
     token_id: uuid.UUID | None = None,
+    mfa_verified: bool | None = None,
 ) -> str:
     expire = datetime.now(tz=timezone.utc) + timedelta(minutes=ttl_minutes)
     payload: Dict[str, Any] = {
@@ -148,6 +149,8 @@ def create_access_token(
         payload["sid"] = str(session_id)
     if token_id:
         payload["jti"] = str(token_id)
+    if mfa_verified:
+        payload["mfa"] = True
     return jwt.encode(payload, settings.auth_secret_key, algorithm="HS256")
 
 

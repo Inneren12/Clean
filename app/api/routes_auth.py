@@ -2,25 +2,42 @@ import uuid
 from datetime import datetime
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.admin_auth import AdminPermission
 from app.api.org_context import require_org_context
-from app.api.saas_auth import require_permissions, require_saas_user
+from app.api.problem_details import problem_details
+from app.api.saas_auth import require_permissions, require_role, require_saas_user
 from app.domain.saas import service as saas_service
 from app.domain.saas.db_models import Membership, MembershipRole, User
 from app.infra.db import get_db_session
+from app.infra.totp import verify_totp_code
 from app.settings import settings
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
+
+
+def _requires_admin_mfa(role: MembershipRole) -> bool:
+    return settings.admin_mfa_required and role.value in {r.lower() for r in settings.admin_mfa_required_roles}
+
+
+def _mfa_required_response(request: Request, detail: str):
+    return problem_details(
+        request=request,
+        status=status.HTTP_401_UNAUTHORIZED,
+        title="Unauthorized",
+        detail=detail,
+        type_="mfa_required",
+    )
 
 
 class LoginRequest(BaseModel):
     email: str
     password: str
     org_id: uuid.UUID | None = None
+    mfa_code: str | None = None
 
 
 class TokenResponse(BaseModel):
@@ -31,6 +48,7 @@ class TokenResponse(BaseModel):
     role: MembershipRole
     expires_at: datetime | None = None
     must_change_password: bool = False
+    mfa_verified: bool = False
 
 
 class ChangePasswordRequest(BaseModel):
@@ -46,20 +64,47 @@ class MeResponse(BaseModel):
     must_change_password: bool
 
 
+class TOTPEnrollResponse(BaseModel):
+    secret: str
+    otpauth_uri: str
+
+
+class TOTPVerifyRequest(BaseModel):
+    code: str
+
+
+class TOTPDisableRequest(BaseModel):
+    code: str
+    reason: str | None = None
+
+
 @router.post("/login", response_model=TokenResponse)
-async def login(payload: LoginRequest, session: AsyncSession = Depends(get_db_session)) -> TokenResponse:
+async def login(
+    payload: LoginRequest, request: Request, session: AsyncSession = Depends(get_db_session)
+) -> TokenResponse:
     try:
         user, membership = await saas_service.authenticate_user(session, payload.email, payload.password, payload.org_id)
     except ValueError as exc:  # noqa: BLE001
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    requires_mfa = _requires_admin_mfa(membership.role)
+    mfa_verified = False
+    if requires_mfa and user.totp_enabled:
+        if not payload.mfa_code:
+            return _mfa_required_response(request, "MFA code required")
+        if not verify_totp_code(user.totp_secret_base32 or "", payload.mfa_code):
+            return _mfa_required_response(request, "Invalid MFA code")
+        mfa_verified = True
     session_record, refresh_token = await saas_service.create_session(
         session,
         user,
         membership,
         ttl_minutes=settings.auth_session_ttl_minutes,
         refresh_ttl_minutes=settings.auth_refresh_token_ttl_minutes,
+        mfa_verified=mfa_verified,
     )
-    token = saas_service.build_session_access_token(user, membership, session_record.session_id)
+    token = saas_service.build_session_access_token(
+        user, membership, session_record.session_id, mfa_verified=mfa_verified
+    )
     await session.commit()
     return TokenResponse(
         access_token=token,
@@ -68,15 +113,19 @@ async def login(payload: LoginRequest, session: AsyncSession = Depends(get_db_se
         role=membership.role,
         expires_at=session_record.expires_at,
         must_change_password=user.must_change_password,
+        mfa_verified=mfa_verified,
     )
 
 
 class RefreshRequest(BaseModel):
     refresh_token: str
+    mfa_code: str | None = None
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh_tokens(payload: RefreshRequest, session: AsyncSession = Depends(get_db_session)) -> TokenResponse:
+async def refresh_tokens(
+    payload: RefreshRequest, request: Request, session: AsyncSession = Depends(get_db_session)
+) -> TokenResponse:
     try:
         access_token, refresh_token, token_session, membership = await saas_service.refresh_tokens(
             session, payload.refresh_token
@@ -84,6 +133,19 @@ async def refresh_tokens(payload: RefreshRequest, session: AsyncSession = Depend
     except ValueError as exc:  # noqa: BLE001
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     user = await session.get(User, membership.user_id)
+    requires_mfa = _requires_admin_mfa(membership.role)
+    mfa_verified = bool(getattr(token_session, "mfa_verified", False))
+    if requires_mfa and user and getattr(user, "totp_enabled", False) and not mfa_verified:
+        if not payload.mfa_code:
+            return _mfa_required_response(request, "MFA code required")
+        if not verify_totp_code(user.totp_secret_base32 or "", payload.mfa_code):
+            return _mfa_required_response(request, "Invalid MFA code")
+        token_session.mfa_verified = True
+        session.add(token_session)
+        mfa_verified = True
+        access_token = saas_service.build_session_access_token(
+            user, membership, token_session.session_id, mfa_verified=True
+        )
     await session.commit()
     return TokenResponse(
         access_token=access_token,
@@ -92,6 +154,7 @@ async def refresh_tokens(payload: RefreshRequest, session: AsyncSession = Depend
         role=membership.role,
         expires_at=token_session.expires_at,
         must_change_password=bool(getattr(user, "must_change_password", False)),
+        mfa_verified=mfa_verified,
     )
 
 
@@ -143,6 +206,7 @@ async def change_password(
 
     await saas_service.set_new_password(session, user, payload.new_password)
     await saas_service.revoke_user_sessions(session, user.user_id, reason="password_changed")
+    mfa_verified = bool(getattr(identity, "mfa_verified", False))
 
     session_record, refresh_token = await saas_service.create_session(
         session,
@@ -150,8 +214,11 @@ async def change_password(
         membership,
         ttl_minutes=settings.auth_session_ttl_minutes,
         refresh_ttl_minutes=settings.auth_refresh_token_ttl_minutes,
+        mfa_verified=mfa_verified,
     )
-    token = saas_service.build_session_access_token(user, membership, session_record.session_id)
+    token = saas_service.build_session_access_token(
+        user, membership, session_record.session_id, mfa_verified=mfa_verified
+    )
     await session.commit()
     return TokenResponse(
         access_token=token,
@@ -160,6 +227,7 @@ async def change_password(
         role=membership.role,
         expires_at=session_record.expires_at,
         must_change_password=user.must_change_password,
+        mfa_verified=mfa_verified,
     )
 
 
@@ -172,6 +240,51 @@ async def me(identity=Depends(require_saas_user)) -> MeResponse:
         email=identity.email,
         must_change_password=getattr(identity, "must_change_password", False),
     )
+
+
+@router.post("/2fa/enroll", response_model=TOTPEnrollResponse)
+async def enroll_totp(
+    identity=Depends(require_role(MembershipRole.OWNER, MembershipRole.ADMIN)),
+    session: AsyncSession = Depends(get_db_session),
+) -> TOTPEnrollResponse:
+    user = await session.get(User, identity.user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    secret, uri = await saas_service.enroll_totp(session, user)
+    await session.commit()
+    return TOTPEnrollResponse(secret=secret, otpauth_uri=uri)
+
+
+@router.post("/2fa/verify")
+async def verify_totp(
+    payload: TOTPVerifyRequest,
+    identity=Depends(require_role(MembershipRole.OWNER, MembershipRole.ADMIN)),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, str]:
+    user = await session.get(User, identity.user_id)
+    if not user or not user.totp_secret_base32:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA enrollment missing")
+    verified = await saas_service.verify_totp(session, user, payload.code)
+    if not verified:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid MFA code")
+    await session.commit()
+    return {"status": "enabled"}
+
+
+@router.post("/2fa/disable")
+async def disable_totp(
+    payload: TOTPDisableRequest,
+    identity=Depends(require_role(MembershipRole.OWNER)),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, str]:
+    user = await session.get(User, identity.user_id)
+    if not user or not user.totp_secret_base32:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA not enrolled")
+    disabled = await saas_service.disable_totp(session, user, code=payload.code)
+    if not disabled:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid MFA code")
+    await session.commit()
+    return {"status": "disabled", "reason": payload.reason or ""}
 
 
 class OrgContextResponse(BaseModel):
