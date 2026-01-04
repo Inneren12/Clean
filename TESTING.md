@@ -6,7 +6,7 @@
 - Migration invariants: `pytest -m "migrations"`.
 - Targeted modules: `pytest tests/test_estimate_api.py`, etc. Use `PYTEST_ADDOPTS` to pass `-k` selectors.
 - Org-scope regressions: `pytest tests/test_org_scope_regression_suite.py` to assert org isolation for finance/payments, IAM resets, exports, and signed photo URLs.
-- Operator pack hardening: `pytest tests/test_operator_pack_hardening.py` to verify RBAC, PII masking, org-scoping, filters, counts, and pagination for queues/timeline endpoints.
+- Operator pack hardening: `pytest tests/test_operator_pack_hardening.py` (non-smoke) to verify RBAC, PII masking, org-scoping, filters, and pagination for queues/timeline endpoints. Payment assertions use the invoice `Payment` model from `app/domain/invoices/db_models.py`.
 - Metrics contracts: `pytest tests/test_metrics_endpoint.py -k metrics_path_label` to ensure HTTP metrics use templated route labels.
 
 ## Markers

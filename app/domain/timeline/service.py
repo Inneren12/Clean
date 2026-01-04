@@ -78,7 +78,7 @@ async def get_booking_timeline(
                 event_type="email_sent",
                 timestamp=email.created_at,
                 actor="system",
-                action=f"Sent {email.email_type} email to {email.recipient}",
+                action=f"Sent {email.email_type} email",
                 resource_type="booking",
                 resource_id=booking_id,
                 metadata={
@@ -325,7 +325,7 @@ async def get_invoice_timeline(
                 event_type="email_sent",
                 timestamp=email.created_at,
                 actor="system",
-                action=f"Sent {email.email_type} email to {email.recipient}",
+                action=f"Sent {email.email_type} email",
                 resource_type="invoice",
                 resource_id=invoice_id,
                 metadata={
