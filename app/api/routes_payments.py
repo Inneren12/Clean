@@ -59,6 +59,24 @@ def _safe_get(source: object, key: str, default: Any | None = None) -> Any:
     return getattr(source, key, default)
 
 
+def _extract_event_metadata_ids(event: Any) -> tuple[str | None, str | None]:
+    data = _safe_get(event, "data", {}) or {}
+    payload_object = _safe_get(data, "object", {}) or {}
+    metadata = _safe_get(payload_object, "metadata", {}) or {}
+    invoice_id = metadata.get("invoice_id") if isinstance(metadata, dict) else None
+    booking_id = metadata.get("booking_id") if isinstance(metadata, dict) else None
+    return invoice_id, booking_id
+
+
+def _coerce_event_created_at(event: Any) -> datetime | None:
+    created_raw = _safe_get(event, "created")
+    if isinstance(created_raw, (int, float)):
+        return datetime.fromtimestamp(created_raw, tz=timezone.utc)
+    if isinstance(created_raw, datetime):
+        return created_raw.astimezone(timezone.utc)
+    return None
+
+
 async def _lock_invoice(session: AsyncSession, invoice_id: str) -> Invoice | None:
     stmt = select(Invoice).where(Invoice.invoice_id == invoice_id).with_for_update()
     result = await session.execute(stmt)
@@ -658,6 +676,9 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
         metrics.record_webhook_error("missing_event_id")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing event id")
     payload_hash = hashlib.sha256(payload or b"").hexdigest()
+    event_type = _safe_get(event, "type")
+    event_created_at = _coerce_event_created_at(event)
+    metadata_invoice_id, metadata_booking_id = _extract_event_metadata_ids(event)
 
     processed = False
     processing_error: Exception | None = None
@@ -727,12 +748,26 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
             record.status = "processing"
             if record.org_id is None and ctx.org_id:
                 record.org_id = ctx.org_id
+            if not record.event_type:
+                record.event_type = event_type
+            if record.event_created_at is None:
+                record.event_created_at = event_created_at
+            if not record.invoice_id:
+                record.invoice_id = metadata_invoice_id or getattr(ctx.invoice, "invoice_id", None)
+            if not record.booking_id:
+                record.booking_id = metadata_booking_id or getattr(ctx.booking, "booking_id", None)
         else:
+            invoice_id = getattr(ctx.invoice, "invoice_id", None) or metadata_invoice_id
+            booking_id = getattr(ctx.booking, "booking_id", None) or metadata_booking_id
             record = StripeEvent(
                 event_id=str(event_id),
                 status="processing",
                 payload_hash=payload_hash,
                 org_id=ctx.org_id,
+                event_type=event_type,
+                event_created_at=event_created_at,
+                invoice_id=invoice_id,
+                booking_id=booking_id,
             )
             session.add(record)
 
@@ -745,12 +780,15 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
             processed = False
             record.status = "error"
             processing_error = exc
+            record.last_error = str(exc)
             logger.exception(
                 "stripe_webhook_error",
                 extra={"extra": {"event_id": event_id, "reason": type(exc).__name__}},
             )
             metrics.record_webhook("error")
             metrics.record_webhook_error("processing_error")
+        else:
+            record.last_error = None
 
     if processing_error is not None:
         raise HTTPException(
