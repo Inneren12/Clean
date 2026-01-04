@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.analytics.db_models import EventLog
 from app.domain.bookings.db_models import Booking
 from app.domain.leads.db_models import Lead
+from app.domain.nps.db_models import NpsResponse
+from app.domain.invoices.db_models import Payment
 
 
 class EventType(StrEnum):
@@ -153,6 +155,209 @@ async def duration_accuracy(
         float(round(avg_delta, 2)),
         len(actual_values),
     )
+
+
+def _safe_rate(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(numerator / denominator, 4)
+
+
+def _bucket_start(column: sa.ColumnElement, period: str, bind) -> sa.ColumnElement:
+    if bind and bind.dialect.name == "sqlite":
+        if period == "week":
+            return func.strftime("%Y-%W", column)
+        return func.strftime("%Y-%m-01", column)
+    return func.date_trunc(period, column)
+
+
+async def funnel_summary(
+    session: AsyncSession, start: datetime, end: datetime, *, org_id: uuid.UUID
+) -> dict[str, int]:
+    lead_stmt = select(func.count()).select_from(Lead).where(
+        Lead.org_id == org_id, Lead.created_at >= start, Lead.created_at <= end
+    )
+    booking_stmt = select(func.count()).select_from(Booking).where(
+        Booking.org_id == org_id,
+        Booking.created_at >= start,
+        Booking.created_at <= end,
+    )
+    completed_stmt = select(func.count()).select_from(Booking).where(
+        Booking.org_id == org_id,
+        Booking.status == "DONE",
+        Booking.updated_at >= start,
+        Booking.updated_at <= end,
+    )
+    paid_stmt = select(func.count()).select_from(Payment).where(
+        Payment.org_id == org_id,
+        Payment.status.in_(["succeeded", "paid", "succeeded_pending", "succeeded_with_delay"]),
+        Payment.received_at.isnot(None),
+        Payment.received_at >= start,
+        Payment.received_at <= end,
+    )
+
+    lead_count = int((await session.execute(lead_stmt)).scalar_one())
+    booking_count = int((await session.execute(booking_stmt)).scalar_one())
+    completed_count = int((await session.execute(completed_stmt)).scalar_one())
+    paid_count = int((await session.execute(paid_stmt)).scalar_one())
+
+    return {
+        "leads": lead_count,
+        "bookings": booking_count,
+        "completed": completed_count,
+        "paid": paid_count,
+    }
+
+
+async def nps_distribution(
+    session: AsyncSession, start: datetime, end: datetime, *, org_id: uuid.UUID
+) -> tuple[int, float | None, int, int, int]:
+    stmt = (
+        select(
+            func.count(),
+            func.avg(NpsResponse.score),
+            func.sum(sa.case((NpsResponse.score >= 9, 1), else_=0)),
+            func.sum(sa.case((NpsResponse.score.between(7, 8), 1), else_=0)),
+            func.sum(sa.case((NpsResponse.score <= 6, 1), else_=0)),
+        )
+        .select_from(NpsResponse)
+        .join(Booking, Booking.booking_id == NpsResponse.order_id)
+        .where(
+            Booking.org_id == org_id,
+            NpsResponse.created_at >= start,
+            NpsResponse.created_at <= end,
+        )
+    )
+    result = await session.execute(stmt)
+    total, avg_score, promoters, passives, detractors = result.one()
+    return (
+        int(total or 0),
+        float(avg_score) if avg_score is not None else None,
+        int(promoters or 0),
+        int(passives or 0),
+        int(detractors or 0),
+    )
+
+
+async def nps_trends(
+    session: AsyncSession, start: datetime, end: datetime, *, org_id: uuid.UUID
+) -> dict[str, list[tuple[datetime, float | None, int]]]:
+    bind = session.get_bind()
+    weekly_bucket = _bucket_start(NpsResponse.created_at, "week", bind)
+    monthly_bucket = _bucket_start(NpsResponse.created_at, "month", bind)
+
+    def _parse_bucket(value: str | datetime) -> datetime:
+        if isinstance(value, datetime):
+            normalized = value
+        else:
+            raw = str(value)
+            try:
+                normalized = datetime.fromisoformat(raw)
+            except ValueError:
+                normalized = datetime.strptime(f"{raw}-1", "%Y-%W-%w")
+        if normalized.tzinfo is None:
+            return normalized.replace(tzinfo=timezone.utc)
+        return normalized.astimezone(timezone.utc)
+
+    weekly_stmt = (
+        select(
+            weekly_bucket.label("bucket"),
+            func.avg(NpsResponse.score),
+            func.count(),
+        )
+        .select_from(NpsResponse)
+        .join(Booking, Booking.booking_id == NpsResponse.order_id)
+        .where(
+            Booking.org_id == org_id,
+            NpsResponse.created_at >= start,
+            NpsResponse.created_at <= end,
+        )
+        .group_by("bucket")
+        .order_by("bucket")
+    )
+
+    monthly_stmt = (
+        select(
+            monthly_bucket.label("bucket"),
+            func.avg(NpsResponse.score),
+            func.count(),
+        )
+        .select_from(NpsResponse)
+        .join(Booking, Booking.booking_id == NpsResponse.order_id)
+        .where(
+            Booking.org_id == org_id,
+            NpsResponse.created_at >= start,
+            NpsResponse.created_at <= end,
+        )
+        .group_by("bucket")
+        .order_by("bucket")
+    )
+
+    weekly_rows = (await session.execute(weekly_stmt)).all()
+    monthly_rows = (await session.execute(monthly_stmt)).all()
+
+    weekly = [
+        (_parse_bucket(bucket), float(avg) if avg is not None else None, int(count))
+        for bucket, avg, count in weekly_rows
+    ]
+    monthly = [
+        (_parse_bucket(bucket), float(avg) if avg is not None else None, int(count))
+        for bucket, avg, count in monthly_rows
+    ]
+    return {"weekly": weekly, "monthly": monthly}
+
+
+async def cohort_repeat_rates(
+    session: AsyncSession, start: datetime, end: datetime, *, org_id: uuid.UUID
+) -> list[tuple[datetime, int, int]]:
+    bind = session.get_bind()
+    customer_key = sa.func.coalesce(Booking.client_id, Booking.lead_id)
+    first_booking_subquery = (
+        select(
+            customer_key.label("customer_key"),
+            func.min(Booking.created_at).label("first_created_at"),
+            func.count().label("total_bookings"),
+        )
+        .where(Booking.org_id == org_id, customer_key.isnot(None))
+        .group_by(customer_key)
+    ).subquery()
+
+    cohort_bucket = _bucket_start(first_booking_subquery.c.first_created_at, "month", bind)
+    cohort_stmt = (
+        select(
+            cohort_bucket.label("cohort_month"),
+            func.count().label("customers"),
+            func.sum(sa.case((first_booking_subquery.c.total_bookings > 1, 1), else_=0)).label(
+                "repeat_customers"
+            ),
+        )
+        .where(
+            first_booking_subquery.c.first_created_at >= start,
+            first_booking_subquery.c.first_created_at <= end,
+        )
+        .group_by("cohort_month")
+        .order_by("cohort_month")
+    )
+
+    rows = (await session.execute(cohort_stmt)).all()
+
+    def _normalize_bucket(bucket: str | datetime) -> datetime:
+        if isinstance(bucket, datetime):
+            normalized = bucket
+        else:
+            normalized = datetime.fromisoformat(str(bucket))
+        if normalized.tzinfo is None:
+            return normalized.replace(tzinfo=timezone.utc)
+        return normalized.astimezone(timezone.utc)
+
+    return [
+        (
+            _normalize_bucket(bucket),
+            int(customers or 0),
+            int(repeat or 0),
+        )
+        for bucket, customers, repeat in rows
+    ]
 
 
 def estimated_revenue_from_lead(lead: Lead | None) -> int | None:

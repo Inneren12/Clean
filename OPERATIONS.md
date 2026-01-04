@@ -118,6 +118,11 @@
 - **Role requirements**: dispatcher for photos/assignments, finance for invoices, admin for DLQ, viewer for timeline (with PII masking).
 - **Performance notes**: DLQ uses SQL UNION ALL for combined queries; timeline limits each event type (100 audit logs, 100 emails, 50 payments, etc.) to prevent unbounded queries. Timeline queries avoid dangerous `LIKE %id%` patterns; outbox events use structured prefix patterns like `:booking:{id}` or `:invoice:{id}`.
 
+## Analytics v1 endpoints
+- `GET /v1/admin/analytics/funnel`: finance/admin/owner roles only. Returns aggregate counts for leads → bookings → completed jobs → paid payments plus conversion rates. All queries are org-scoped by `org_id`.
+- `GET /v1/admin/analytics/nps`: finance/admin/owner roles only. Returns NPS distribution (promoters/passives/detractors) and weekly/monthly average score trends. Results are aggregates only—no comments or client identifiers.
+- `GET /v1/admin/analytics/cohorts`: finance/admin/owner roles only. Groups customers by their first booking month and reports repeat counts and rates. Cohorts are computed per-organization; no raw PII is returned.
+
 ## Config viewer and redaction
 - `GET /v1/admin/config` surfaces a read-only snapshot of operational settings with secrets redacted (`<redacted>`). Only whitelisted keys are returned; secrets (tokens/keys/passwords) are never echoed.
 - Keep config viewer behind admin Basic Auth and avoid piping responses into logs to prevent metadata leaks.
