@@ -4,6 +4,8 @@ Release-grade hardening tests for Operator Productivity Pack.
 Tests RBAC, PII masking, org-scoping, pagination, and semantic correctness.
 """
 
+import base64
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator
@@ -14,15 +16,29 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.bookings.db_models import Booking, OrderPhoto, Team
+from app.domain.bookings.db_models import Booking, EmailEvent, OrderPhoto, Team
 from app.domain.export_events.db_models import ExportEvent
 from app.domain.invoices.db_models import Invoice
 from app.domain.leads.db_models import Lead
 from app.domain.outbox.db_models import OutboxEvent
 from app.domain.saas.db_models import Organization
 from app.domain.workers.db_models import Worker
-from app.infra.models import Payment
+from app.domain.invoices.db_models import Payment
 from app.main import app
+from app.settings import settings
+
+
+def _basic_auth_header(username: str, password: str) -> dict[str, str]:
+    token = base64.b64encode(f"{username}:{password}".encode()).decode()
+    return {"Authorization": f"Basic {token}"}
+
+
+@pytest.fixture
+async def session(async_session_maker) -> AsyncGenerator[AsyncSession, None]:
+    """Provide a fresh async session for operator pack tests."""
+
+    async with async_session_maker() as db_session:
+        yield db_session
 
 
 @pytest.fixture
@@ -623,6 +639,55 @@ class TestPIIMasking:
 
         assert should_mask_pii("VIEWER") is True
         assert should_mask_pii("viewer") is True
+
+    async def test_timeline_viewer_masks_email_in_action(
+        self, session: AsyncSession, client: TestClient
+    ):
+        """Timeline responses must not leak raw recipient emails to viewers."""
+
+        original_username = settings.viewer_basic_username
+        original_password = settings.viewer_basic_password
+        settings.viewer_basic_username = "viewer"
+        settings.viewer_basic_password = "secret"
+
+        try:
+            org = Organization(
+                org_id=settings.default_org_id,
+                name="Timeline Org",
+                slug="timeline-org",
+            )
+            booking = Booking(
+                booking_id=str(uuid.uuid4()),
+                org_id=settings.default_org_id,
+                starts_at=datetime.now(timezone.utc),
+                duration_minutes=60,
+                status="CONFIRMED",
+            )
+            email_event = EmailEvent(
+                booking_id=booking.booking_id,
+                org_id=settings.default_org_id,
+                email_type="receipt",
+                recipient="user@example.com",
+                subject="Your receipt",
+                body="Thank you",
+                dedupe_key=f"email:{booking.booking_id}",
+            )
+
+            session.add_all([org, booking, email_event])
+            await session.commit()
+
+            response = client.get(
+                f"/v1/admin/timeline/booking/{booking.booking_id}",
+                headers=_basic_auth_header("viewer", "secret"),
+            )
+
+            assert response.status_code == http_status.HTTP_200_OK
+            payload = response.json()
+            serialized = json.dumps(payload)
+            assert "user@example.com" not in serialized
+        finally:
+            settings.viewer_basic_username = original_username
+            settings.viewer_basic_password = original_password
 
     async def test_should_not_mask_pii_for_other_roles(self):
         """Other roles should not trigger PII masking."""
