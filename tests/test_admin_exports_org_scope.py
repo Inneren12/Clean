@@ -292,4 +292,5 @@ def test_export_dead_letter_scoped(client, async_session_maker):
     resp = client.get("/v1/admin/export-dead-letter", headers=headers)
     assert resp.status_code == 200
     payload = resp.json()
-    assert {event["event_id"] for event in payload} == {"a1"}
+    assert payload["total"] == 1
+    assert {event["event_id"] for event in payload["items"]} == {"a1"}

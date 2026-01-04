@@ -513,8 +513,13 @@ def build_public_invoice_view(invoice: Invoice, lead: Lead | None) -> dict:
 
 
 async def list_invoice_reconcile_items(
-    session: AsyncSession, org_id: uuid.UUID, *, include_all: bool = False
-) -> list[invoice_schemas.InvoiceReconcileItem]:
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    include_all: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[invoice_schemas.InvoiceReconcileItem], int]:
     payments_subquery = (
         select(
             Payment.invoice_id.label("invoice_id"),
@@ -551,7 +556,11 @@ async def list_invoice_reconcile_items(
         )
         .outerjoin(payments_subquery, payments_subquery.c.invoice_id == Invoice.invoice_id)
         .where(Invoice.org_id == org_id)
-        .order_by(Invoice.created_at.desc())
+        .order_by(
+            Invoice.issue_date.desc().nullslast(),
+            Invoice.created_at.desc(),
+            Invoice.invoice_id.desc(),
+        )
     )
 
     mismatch_condition = or_(
@@ -563,7 +572,10 @@ async def list_invoice_reconcile_items(
     if not include_all:
         stmt = stmt.where(mismatch_condition)
 
-    result = await session.execute(stmt)
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = int((await session.execute(count_stmt)).scalar_one())
+
+    result = await session.execute(stmt.limit(limit).offset(offset))
     cases: list[invoice_schemas.InvoiceReconcileItem] = []
     for row in result.all():
         cases.append(
@@ -585,7 +597,7 @@ async def list_invoice_reconcile_items(
             )
         )
 
-    return cases
+    return cases, total
 
 
 async def reconcile_invoice(

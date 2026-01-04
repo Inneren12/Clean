@@ -50,6 +50,7 @@ from app.domain.bookings.db_models import Booking, Team
 from app.domain.bookings import schemas as booking_schemas
 from app.domain.bookings import service as booking_service
 from app.domain.bookings.service import DEFAULT_TEAM_NAME
+from app.domain.export_events import schemas as export_schemas
 from app.domain.export_events.db_models import ExportEvent
 from app.domain.export_events.schemas import ExportEventResponse, ExportReplayResponse
 from app.domain.invoices import schemas as invoice_schemas
@@ -1126,38 +1127,50 @@ async def _resolve_export_payload(
     return export_payload_from_lead(lead)
 
 
-@router.get("/v1/admin/export-dead-letter", response_model=List[ExportEventResponse])
+@router.get(
+    "/v1/admin/export-dead-letter",
+    response_model=export_schemas.ExportDeadLetterListResponse,
+)
 async def list_export_dead_letter(
     request: Request,
     limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_db_session),
     _principal: AdminIdentity = Depends(require_viewer),
-) -> List[ExportEventResponse]:
+) -> export_schemas.ExportDeadLetterListResponse:
     org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    filters = _org_scope_filters(org_id, ExportEvent)
+    count_stmt = select(func.count()).select_from(ExportEvent).where(*filters)
+    total = int((await session.execute(count_stmt)).scalar_one())
+
     result = await session.execute(
         select(ExportEvent)
-        .where(*_org_scope_filters(org_id, ExportEvent))
+        .where(*filters)
         .order_by(ExportEvent.created_at.desc())
         .limit(limit)
+        .offset(offset)
     )
     events = result.scalars().all()
-    return [
-        ExportEventResponse(
-            event_id=event.event_id,
-            lead_id=event.lead_id,
-            mode=event.mode,
-            target_url=event.target_url,
-            target_url_host=event.target_url_host,
-            payload=event.payload,
-            attempts=event.attempts,
-            last_error_code=event.last_error_code,
-            created_at=event.created_at,
-            replay_count=event.replay_count or 0,
-            last_replayed_at=event.last_replayed_at,
-            last_replayed_by=event.last_replayed_by,
-        )
-        for event in events
-    ]
+    return export_schemas.ExportDeadLetterListResponse(
+        items=[
+            ExportEventResponse(
+                event_id=event.event_id,
+                lead_id=event.lead_id,
+                mode=event.mode,
+                target_url=event.target_url,
+                target_url_host=event.target_url_host,
+                payload=event.payload,
+                attempts=event.attempts,
+                last_error_code=event.last_error_code,
+                created_at=event.created_at,
+                replay_count=event.replay_count or 0,
+                last_replayed_at=event.last_replayed_at,
+                last_replayed_by=event.last_replayed_by,
+            )
+            for event in events
+        ],
+        total=total,
+    )
 
 
 @router.post(
@@ -1714,14 +1727,20 @@ async def admin_gst_report(
 async def list_invoice_reconcile_items(
     request: Request,
     status: Literal["mismatch", "all"] = Query("mismatch"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_session),
     _identity: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.InvoiceReconcileListResponse:
     org_id = entitlements.resolve_org_id(request)
-    cases = await invoice_service.list_invoice_reconcile_items(
-        session, org_id, include_all=status == "all"
+    cases, total = await invoice_service.list_invoice_reconcile_items(
+        session,
+        org_id,
+        include_all=status == "all",
+        limit=limit,
+        offset=offset,
     )
-    return invoice_schemas.InvoiceReconcileListResponse(items=cases)
+    return invoice_schemas.InvoiceReconcileListResponse(items=cases, total=total)
 
 
 @router.post(
