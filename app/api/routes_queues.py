@@ -7,7 +7,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.admin_auth import require_viewer
+from app.api.admin_auth import require_admin, require_dispatch, require_finance, require_viewer, AdminIdentity
 from app.api.org_context import require_org_context
 from app.dependencies import get_db_session
 from app.domain.queues import service as queue_service
@@ -20,7 +20,8 @@ from app.domain.queues.schemas import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(dependencies=[Depends(require_viewer)])
+# Router without default dependencies - each endpoint specifies its own RBAC
+router = APIRouter()
 
 
 @router.get("/v1/admin/queue/photos", response_model=PhotoQueueResponse)
@@ -30,8 +31,11 @@ async def get_photo_queue(
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_session),
     org_id: uuid.UUID = Depends(require_org_context),
+    identity: AdminIdentity = Depends(require_dispatch),
 ):
     """List photos requiring review.
+
+    Requires: DISPATCH permission (dispatcher/admin/owner roles)
 
     Filters:
     - pending: Photos awaiting initial review
@@ -59,8 +63,11 @@ async def get_invoice_queue(
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_session),
     org_id: uuid.UUID = Depends(require_org_context),
+    identity: AdminIdentity = Depends(require_finance),
 ):
     """List invoices requiring attention.
+
+    Requires: FINANCE permission (accountant/finance/admin/owner roles)
 
     Filters:
     - overdue: Invoices past due date
@@ -68,6 +75,7 @@ async def get_invoice_queue(
     - all: All unpaid (default)
 
     Returns paginated list with quick actions for resend/mark paid.
+    PII (customer email) is masked for viewer role if accessed via other endpoints.
     """
     items, total, counts = await queue_service.list_invoice_queue(
         session, org_id, status_filter=status, limit=limit, offset=offset
@@ -88,11 +96,15 @@ async def get_assignment_queue(
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_session),
     org_id: uuid.UUID = Depends(require_org_context),
+    identity: AdminIdentity = Depends(require_dispatch),
 ):
     """List unassigned bookings in the next N days.
 
+    Requires: DISPATCH permission (dispatcher/admin/owner roles)
+
     Returns bookings without assigned workers, sorted by start time.
     Includes urgency indicator (within 24h).
+    PII (lead email/phone) is masked for viewer role if accessed via other endpoints.
     """
     items, total, counts = await queue_service.list_assignment_queue(
         session, org_id, days_ahead=days_ahead, limit=limit, offset=offset
@@ -112,8 +124,11 @@ async def get_dlq(
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_session),
     org_id: uuid.UUID = Depends(require_org_context),
+    identity: AdminIdentity = Depends(require_admin),
 ):
     """List dead letter queue items (failed outbox + export events).
+
+    Requires: ADMIN permission (admin/owner roles only)
 
     Filters:
     - outbox: Failed email/webhook/export outbox events
@@ -121,6 +136,7 @@ async def get_dlq(
     - all: Both (default)
 
     Returns paginated list with quick actions for replay.
+    Uses SQL-level pagination for scalability.
     """
     items, total, counts = await queue_service.list_dlq(
         session, org_id, kind_filter=kind, limit=limit, offset=offset
