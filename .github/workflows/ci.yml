@@ -8,6 +8,9 @@ jobs:
   sanity:
     runs-on: ubuntu-latest
 
+    env:
+      APP_ENV: dev
+
     steps:
       - uses: actions/checkout@v4
 
@@ -146,6 +149,9 @@ jobs:
           --health-timeout=5s
           --health-retries=30
 
+    env:
+      APP_ENV: dev
+
     steps:
       - uses: actions/checkout@v4
 
@@ -205,6 +211,8 @@ jobs:
           PY
 
       - name: Run migration invariants
+        env:
+          APP_ENV: dev
         run: pytest -q -m migrations tests/test_postgres_migrations.py
 
   web:
