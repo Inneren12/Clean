@@ -1683,7 +1683,7 @@ async def admin_gst_report(
     stmt = (
         select(
             func.count(Invoice.invoice_id),
-            func.coalesce(func.sum(Invoice.subtotal_cents), 0),
+            func.coalesce(func.sum(Invoice.taxable_subtotal_cents), 0),
             func.coalesce(func.sum(Invoice.tax_cents), 0),
         )
         .where(

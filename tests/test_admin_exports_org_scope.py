@@ -2,6 +2,7 @@ import asyncio
 import base64
 import csv
 import io
+from decimal import Decimal
 import uuid
 from datetime import date, datetime, timezone
 
@@ -110,7 +111,9 @@ async def _seed_finance_records(async_session_maker):
             issue_date=date(2024, 1, 5),
             currency="CAD",
             subtotal_cents=10000,
+            taxable_subtotal_cents=10000,
             tax_cents=500,
+            tax_rate_basis=Decimal("0.05"),
             total_cents=10500,
         )
         invoice_a2 = Invoice(
@@ -122,6 +125,7 @@ async def _seed_finance_records(async_session_maker):
             issue_date=date(2024, 2, 1),
             currency="CAD",
             subtotal_cents=20000,
+            taxable_subtotal_cents=0,
             tax_cents=0,
             total_cents=20000,
         )
@@ -134,7 +138,9 @@ async def _seed_finance_records(async_session_maker):
             issue_date=date(2024, 1, 10),
             currency="CAD",
             subtotal_cents=15000,
+            taxable_subtotal_cents=15000,
             tax_cents=750,
+            tax_rate_basis=Decimal("0.05"),
             total_cents=15750,
         )
         session.add_all([invoice_a1, invoice_a2, invoice_b1])
@@ -223,7 +229,7 @@ def test_admin_exports_are_org_scoped(client, async_session_maker):
     assert gst_resp.status_code == 200
     gst_payload = gst_resp.json()
     assert gst_payload["invoice_count"] == len(seeded["invoices_a"])
-    assert gst_payload["taxable_subtotal_cents"] == 30000
+    assert gst_payload["taxable_subtotal_cents"] == 10000
     assert gst_payload["tax_cents"] == 500
 
     sales_resp = client.get(
