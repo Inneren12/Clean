@@ -9,8 +9,10 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.bookings.db_models import Booking, OrderPhoto
 from app.domain.saas.db_models import OrganizationBilling, OrganizationUsageEvent
 from app.domain.saas.plans import Plan, get_plan
+from app.domain.workers.db_models import Worker
 
 
 ACTIVE_SUBSCRIPTION_STATES = {"active", "trialing", "past_due"}
@@ -153,9 +155,60 @@ async def record_usage_event(
     return event
 
 
-async def usage_snapshot(session: AsyncSession, org_id: uuid.UUID) -> dict[str, int]:
-    now = dt.datetime.now(tz=dt.timezone.utc)
+async def usage_snapshot(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    reference_time: dt.datetime | None = None,
+    include_recorded_usage: bool = True,
+) -> dict[str, int]:
+    start_of_month, end_of_month = _month_window(reference_time)
+
+    workers_query = sa.select(sa.func.count()).select_from(Worker).where(
+        Worker.org_id == org_id, Worker.is_active.is_(True)
+    )
+    bookings_query = sa.select(sa.func.count()).select_from(Booking).where(
+        Booking.org_id == org_id,
+        Booking.created_at >= start_of_month,
+        Booking.created_at < end_of_month,
+    )
+    storage_query = sa.select(sa.func.coalesce(sa.func.sum(OrderPhoto.size_bytes), 0)).where(
+        OrderPhoto.org_id == org_id
+    )
+
+    workers = int((await session.execute(workers_query)).scalar_one() or 0)
+    bookings = int((await session.execute(bookings_query)).scalar_one() or 0)
+    storage = int((await session.execute(storage_query)).scalar_one() or 0)
+
+    usage = {
+        "workers": workers,
+        "bookings_this_month": bookings,
+        "storage_bytes": storage,
+    }
+
+    if include_recorded_usage:
+        recorded = await usage_event_snapshot(session, org_id, reference_time=reference_time)
+        usage = {key: max(value, recorded.get(key, 0)) for key, value in usage.items()}
+
+    return usage
+
+
+def _month_window(reference_time: dt.datetime | None = None) -> tuple[dt.datetime, dt.datetime]:
+    now = reference_time or dt.datetime.now(tz=dt.timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=dt.timezone.utc)
     start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if start_of_month.month == 12:
+        end_of_month = start_of_month.replace(year=start_of_month.year + 1, month=1)
+    else:
+        end_of_month = start_of_month.replace(month=start_of_month.month + 1)
+    return start_of_month, end_of_month
+
+
+async def usage_event_snapshot(
+    session: AsyncSession, org_id: uuid.UUID, *, reference_time: dt.datetime | None = None
+) -> dict[str, int]:
+    start_of_month, end_of_month = _month_window(reference_time)
 
     workers_query = sa.select(sa.func.coalesce(sa.func.sum(OrganizationUsageEvent.quantity), 0)).where(
         OrganizationUsageEvent.org_id == org_id, OrganizationUsageEvent.metric == "worker_created"
@@ -164,6 +217,7 @@ async def usage_snapshot(session: AsyncSession, org_id: uuid.UUID) -> dict[str, 
         OrganizationUsageEvent.org_id == org_id,
         OrganizationUsageEvent.metric == "booking_created",
         OrganizationUsageEvent.created_at >= start_of_month,
+        OrganizationUsageEvent.created_at < end_of_month,
     )
     storage_query = sa.select(sa.func.coalesce(sa.func.sum(OrganizationUsageEvent.quantity), 0)).where(
         OrganizationUsageEvent.org_id == org_id, OrganizationUsageEvent.metric == "storage_bytes"
@@ -177,4 +231,49 @@ async def usage_snapshot(session: AsyncSession, org_id: uuid.UUID) -> dict[str, 
         "workers": int(workers),
         "bookings_this_month": int(bookings),
         "storage_bytes": int(storage),
+    }
+
+
+def _drift_delta(recorded: dict[str, int], computed: dict[str, int]) -> dict[str, int]:
+    deltas: dict[str, int] = {}
+    keys: set[str] = set(recorded.keys()) | set(computed.keys())
+    for key in keys:
+        deltas[key] = int(recorded.get(key, 0) - computed.get(key, 0))
+    return deltas
+
+
+async def usage_report(
+    session: AsyncSession, org_id: uuid.UUID, *, reference_time: dt.datetime | None = None
+) -> dict[str, Any]:
+    billing = await get_or_create_billing(session, org_id)
+    plan = await get_current_plan(session, org_id)
+    start_of_month, end_of_month = _month_window(reference_time)
+
+    computed_usage = await usage_snapshot(
+        session, org_id, reference_time=reference_time, include_recorded_usage=False
+    )
+    recorded_usage = await usage_event_snapshot(session, org_id, reference_time=reference_time)
+    drift = _drift_delta(recorded_usage, computed_usage)
+
+    limits = {
+        "workers": plan.limits.max_workers,
+        "bookings_this_month": plan.limits.max_bookings_per_month,
+        "storage_bytes": plan.limits.storage_gb * 1024 * 1024 * 1024,
+    }
+
+    overages = {
+        key: computed_usage.get(key, 0) > limits[key] if key in limits else False
+        for key in computed_usage
+    }
+
+    return {
+        "plan": plan,
+        "billing": billing,
+        "period_start": start_of_month,
+        "period_end": end_of_month,
+        "usage": computed_usage,
+        "recorded_usage": recorded_usage,
+        "drift": drift,
+        "overages": overages,
+        "limits": limits,
     }

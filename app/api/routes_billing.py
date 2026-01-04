@@ -3,10 +3,14 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+import datetime as dt
+import uuid
+
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.saas_auth import require_saas_user, SaaSIdentity
+from app.api.admin_auth import AdminPermission
+from app.api.saas_auth import SaaSIdentity, require_permissions, require_saas_user
 from app.domain.saas import billing_service
 from app.domain.saas.plans import get_plan
 from app.infra import stripe_client as stripe_infra
@@ -42,6 +46,26 @@ class BillingStatusResponse(BaseModel):
     usage: dict[str, int]
     status: str
     current_period_end: str | None
+
+
+class UsageMetricResponse(BaseModel):
+    value: int
+    limit: int | None
+    over_limit: bool
+    recorded: int | None = None
+    drift: int | None = None
+
+
+class UsageReportResponse(BaseModel):
+    org_id: uuid.UUID
+    plan_id: str
+    plan_name: str
+    status: str
+    current_period_end: str | None
+    period_start: str
+    period_end: str
+    drift_detected: bool
+    usage: dict[str, UsageMetricResponse]
 
 
 @router.post("/v1/billing/checkout", response_model=CheckoutResponse, status_code=status.HTTP_201_CREATED)
@@ -141,4 +165,52 @@ async def billing_status(
         usage=usage,
         status=billing.status,
         current_period_end=billing.current_period_end.isoformat() if billing.current_period_end else None,
+    )
+
+
+def _parse_month(month: str | None) -> dt.datetime | None:
+    if not month:
+        return None
+    try:
+        parsed = dt.datetime.strptime(month, "%Y-%m")
+        return parsed.replace(tzinfo=dt.timezone.utc)
+    except ValueError as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid month format, expected YYYY-MM",
+        ) from exc
+
+
+@router.get("/v1/billing/usage/report", response_model=UsageReportResponse)
+async def usage_report(
+    month: str | None = None,
+    session: AsyncSession = Depends(get_db_session),
+    identity: SaaSIdentity = Depends(require_permissions(AdminPermission.FINANCE)),
+) -> UsageReportResponse:
+    reference_time = _parse_month(month)
+    report = await billing_service.usage_report(
+        session, identity.org_id, reference_time=reference_time
+    )
+
+    usage: dict[str, UsageMetricResponse] = {}
+    for key, value in report["usage"].items():
+        usage[key] = UsageMetricResponse(
+            value=int(value),
+            limit=int(report["limits"].get(key)) if report["limits"].get(key) is not None else None,
+            over_limit=bool(report["overages"].get(key, False)),
+            recorded=int(report["recorded_usage"].get(key, 0)),
+            drift=int(report["drift"].get(key, 0)),
+        )
+
+    billing = report["billing"]
+    return UsageReportResponse(
+        org_id=identity.org_id,
+        plan_id=report["plan"].plan_id,
+        plan_name=report["plan"].name,
+        status=billing.status,
+        current_period_end=billing.current_period_end.isoformat() if billing.current_period_end else None,
+        period_start=report["period_start"].isoformat(),
+        period_end=report["period_end"].isoformat(),
+        drift_detected=any(value.drift for value in usage.values()),
+        usage=usage,
     )
