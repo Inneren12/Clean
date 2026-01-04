@@ -43,6 +43,10 @@
 - Org isolation: requests are scoped by the resolved org (`X-Test-Org` in dev/tests) and will not surface invoices from other tenants.
 - Response fields include payment counts, last payment timestamp, and quick action placeholders pointing at `/v1/admin/finance/reconcile/invoices/{invoice_id}` for future remediation workflows.
 
+## Invoice tax snapshots and reporting
+- Invoices store tax snapshots at creation time: `taxable_subtotal_cents` (sum of line totals with a positive tax rate), `tax_cents`, and `tax_rate_basis` (effective rate derived from the stored amounts). These values are persisted alongside `subtotal_cents` and are not recomputed from current org tax configs.
+- GST and P&L reports read the stored invoice snapshots, so changing org tax settings or estimate snapshots after issuing an invoice will not mutate historical tax totals. When editing invoice items, call `recalculate_totals` to refresh the stored snapshot fields from the invoice items.
+
 ## Incident read-only + break-glass procedure
 1. **Enable admin read-only:** set `ADMIN_READ_ONLY=true` (config/env and restart) to block POST/PUT/PATCH/DELETE on `/v1/admin/*` and `/v1/iam/*` with 409 Problem+JSON while investigations run. IP allowlists remain enforced.
 2. **Start a break-glass session:** an OWNER/ADMIN calls `POST /v1/admin/break-glass/start` with `{"reason": "<incident summary>", "ttl_minutes": <minutes>}`. The API returns a one-time token and expiry; store it securely and never log it. The token is hashed at rest and scoped to the caller's org.
