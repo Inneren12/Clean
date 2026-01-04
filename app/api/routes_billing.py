@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 import datetime as dt
 import uuid
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.admin_auth import AdminPermission
@@ -46,6 +46,10 @@ class BillingStatusResponse(BaseModel):
     usage: dict[str, int]
     status: str
     current_period_end: str | None
+    pause_reason_code: str | None = None
+    resume_reason_code: str | None = None
+    paused_at: str | None = None
+    resumed_at: str | None = None
 
 
 class UsageMetricResponse(BaseModel):
@@ -66,6 +70,34 @@ class UsageReportResponse(BaseModel):
     period_end: str
     drift_detected: bool
     usage: dict[str, UsageMetricResponse]
+
+
+class PauseRequest(BaseModel):
+    reason_code: str | None = Field(default=None, max_length=64)
+
+
+class ResumeRequest(BaseModel):
+    reason_code: str | None = Field(default=None, max_length=64)
+
+
+def _serialize_status(billing, usage: dict[str, int]) -> BillingStatusResponse:
+    plan = get_plan(billing.plan_id)
+    return BillingStatusResponse(
+        plan_id=plan.plan_id,
+        plan_name=plan.name,
+        limits={
+            "max_workers": plan.limits.max_workers,
+            "max_bookings_per_month": plan.limits.max_bookings_per_month,
+            "storage_gb": plan.limits.storage_gb,
+        },
+        usage=usage,
+        status=billing.status,
+        current_period_end=billing.current_period_end.isoformat() if billing.current_period_end else None,
+        pause_reason_code=billing.pause_reason_code,
+        resume_reason_code=billing.resume_reason_code,
+        paused_at=billing.paused_at.isoformat() if billing.paused_at else None,
+        resumed_at=billing.resumed_at.isoformat() if billing.resumed_at else None,
+    )
 
 
 @router.post("/v1/billing/checkout", response_model=CheckoutResponse, status_code=status.HTTP_201_CREATED)
@@ -151,21 +183,8 @@ async def billing_status(
     identity: SaaSIdentity = Depends(require_saas_user),
 ) -> BillingStatusResponse:
     billing = await billing_service.get_or_create_billing(session, identity.org_id)
-    plan = await billing_service.get_current_plan(session, identity.org_id)
     usage = await billing_service.usage_snapshot(session, identity.org_id)
-
-    return BillingStatusResponse(
-        plan_id=plan.plan_id,
-        plan_name=plan.name,
-        limits={
-            "max_workers": plan.limits.max_workers,
-            "max_bookings_per_month": plan.limits.max_bookings_per_month,
-            "storage_gb": plan.limits.storage_gb,
-        },
-        usage=usage,
-        status=billing.status,
-        current_period_end=billing.current_period_end.isoformat() if billing.current_period_end else None,
-    )
+    return _serialize_status(billing, usage)
 
 
 def _parse_month(month: str | None) -> dt.datetime | None:
@@ -214,3 +233,31 @@ async def usage_report(
         drift_detected=any(value.drift for value in usage.values()),
         usage=usage,
     )
+
+
+@router.post("/v1/billing/pause", response_model=BillingStatusResponse)
+async def pause_billing(
+    payload: PauseRequest,
+    session: AsyncSession = Depends(get_db_session),
+    identity: SaaSIdentity = Depends(require_permissions(AdminPermission.FINANCE)),
+) -> BillingStatusResponse:
+    billing = await billing_service.pause_subscription(
+        session, identity.org_id, reason_code=payload.reason_code
+    )
+    await session.commit()
+    usage = await billing_service.usage_snapshot(session, identity.org_id)
+    return _serialize_status(billing, usage)
+
+
+@router.post("/v1/billing/resume", response_model=BillingStatusResponse)
+async def resume_billing(
+    payload: ResumeRequest,
+    session: AsyncSession = Depends(get_db_session),
+    identity: SaaSIdentity = Depends(require_permissions(AdminPermission.FINANCE)),
+) -> BillingStatusResponse:
+    billing = await billing_service.resume_subscription(
+        session, identity.org_id, reason_code=payload.reason_code
+    )
+    await session.commit()
+    usage = await billing_service.usage_snapshot(session, identity.org_id)
+    return _serialize_status(billing, usage)
