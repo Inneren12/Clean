@@ -89,7 +89,7 @@ groups:
   - name: clean-integrations
     rules:
       - alert: EmailDLQBacklog
-        expr: max_over_time(email_dlq_messages{status="dead"}[15m]) > 0
+        expr: increase(email_dlq_messages{status="dead"}[15m]) > 0
         for: 15m
         labels:
           severity: ticket
@@ -99,6 +99,18 @@ groups:
           description: |
             email_dlq_messages{status="dead"} is non-zero. Investigate email
             provider credentials and replay DLQ items once fixed.
+
+      - alert: OutboxDLQGrowing
+        expr: increase(outbox_queue_messages{status="dead"}[15m]) > 0
+        for: 15m
+        labels:
+          severity: ticket
+          service: clean
+        annotations:
+          summary: "Outbox dead-letter queue growing"
+          description: |
+            outbox_queue_messages{status="dead"} increased over the last 15 minutes.
+            Inspect /v1/admin/outbox/dead-letter and resolve upstream failures before replaying.
 
       - alert: StripeCircuitOpen
         expr: max_over_time(circuit_state{circuit="stripe"}[5m]) == 1
@@ -111,3 +123,19 @@ groups:
           description: |
             Stripe circuit breaker has been open for 5+ minutes. Inspect upstream
             errors and retry once the dependency recovers.
+
+      - alert: StripeWebhookErrorsSpiking
+        expr: |
+          (sum(rate(stripe_webhook_events_total{outcome="error"}[5m])) /
+            clamp_min(sum(rate(stripe_webhook_events_total[5m])), 1)) > 0.1
+          and sum(rate(stripe_webhook_events_total[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: page
+          service: clean
+        annotations:
+          summary: "Stripe webhook errors above 10%"
+          description: |
+            More than 10% of Stripe webhooks are failing over the last 10 minutes.
+            Check /stripe/webhook logs, Stripe dashboard for incident notices,
+            and verify signature secrets and processing jobs.

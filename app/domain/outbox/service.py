@@ -5,7 +5,7 @@ from typing import Callable, Iterable
 from urllib.parse import urlparse
 
 import httpx
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +13,7 @@ from app.domain.export_events.db_models import ExportEvent
 from app.domain.outbox.db_models import OutboxEvent
 from app.infra.email import EmailAdapter
 from app.infra.logging import clear_log_context
+from app.infra.metrics import metrics
 from app.settings import settings
 
 PENDING_STATUSES = {"pending", "retry"}
@@ -208,7 +209,28 @@ async def process_outbox(session: AsyncSession, adapters: OutboxAdapters, *, lim
             clear_log_context()
     if events:
         await session.commit()
+    await _record_outbox_depth(session)
     return {"sent": sent, "dead": dead, "pending": len(events)}
+
+
+async def _record_outbox_depth(session: AsyncSession) -> None:
+    counts: dict[str, int] = {"pending": 0, "retry": 0, "dead": 0}
+    result = await session.execute(
+        select(OutboxEvent.status, func.count())
+        .where(OutboxEvent.status.in_(counts.keys()))
+        .group_by(OutboxEvent.status)
+    )
+    try:
+        rows = result.all()
+    except Exception:  # pragma: no cover - defensive for stub sessions
+        rows = []
+    for row in rows:
+        if isinstance(row, tuple) and len(row) == 2:
+            status, count = row
+            if status in counts:
+                counts[status] = int(count)
+    for status, count in counts.items():
+        metrics.set_outbox_depth(status, count)
 
 
 async def replay_outbox_event(session: AsyncSession, event: OutboxEvent) -> None:

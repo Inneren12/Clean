@@ -653,151 +653,162 @@ async def _stripe_webhook_handler(http_request: Request, session: AsyncSession) 
     if not settings.stripe_webhook_secret:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Stripe webhook disabled")
 
-    stripe_client = _stripe_client(http_request)
+    outcome = "error"
     try:
-        event = await stripe_infra.call_stripe_client_method(
-            stripe_client, "verify_webhook", payload=payload, signature=sig_header
-        )
-    except CircuitBreakerOpenError as exc:
-        metrics.record_webhook_error("stripe_unavailable")
-        logger.warning("stripe_webhook_circuit_open", extra={"extra": {"reason": type(exc).__name__}})
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Stripe temporarily unavailable",
-        ) from exc
-    except Exception as exc:  # noqa: BLE001
-        metrics.record_webhook("error")
-        metrics.record_webhook_error("invalid_signature")
-        logger.warning("stripe_webhook_invalid", extra={"extra": {"reason": type(exc).__name__}})
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Stripe webhook") from exc
-
-    event_id = _safe_get(event, "id")
-    if not event_id:
-        metrics.record_webhook_error("missing_event_id")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing event id")
-    payload_hash = hashlib.sha256(payload or b"").hexdigest()
-    event_type = _safe_get(event, "type")
-    event_created_at = _coerce_event_created_at(event)
-    metadata_invoice_id, metadata_booking_id = _extract_event_metadata_ids(event)
-
-    processed = False
-    processing_error: Exception | None = None
-    async with session.begin():
+        stripe_client = _stripe_client(http_request)
         try:
-            ctx = await _resolve_org_for_event(session, event)
-        except StripeOrgResolutionError as exc:
-            # Differentiate between security violations (400) and non-actionable events (200)
-            # Security violations: org_customer_mismatch (consistency violation)
-            # Non-actionable: invoice_not_found, booking_not_found, missing_org, invalid_org, org_not_found
-            if exc.reason == "org_customer_mismatch":
-                logger.warning(
-                    "stripe_webhook_org_mismatch",
+            event = await stripe_infra.call_stripe_client_method(
+                stripe_client, "verify_webhook", payload=payload, signature=sig_header
+            )
+        except CircuitBreakerOpenError as exc:
+            metrics.record_webhook_error("stripe_unavailable")
+            metrics.record_stripe_circuit_open()
+            logger.warning("stripe_webhook_circuit_open", extra={"extra": {"reason": type(exc).__name__}})
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Stripe temporarily unavailable",
+            ) from exc
+        except Exception as exc:  # noqa: BLE001
+            metrics.record_webhook("error")
+            metrics.record_webhook_error("invalid_signature")
+            logger.warning("stripe_webhook_invalid", extra={"extra": {"reason": type(exc).__name__}})
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Stripe webhook") from exc
+
+        event_id = _safe_get(event, "id")
+        if not event_id:
+            metrics.record_webhook_error("missing_event_id")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing event id")
+        payload_hash = hashlib.sha256(payload or b"").hexdigest()
+        event_type = _safe_get(event, "type")
+        event_created_at = _coerce_event_created_at(event)
+        metadata_invoice_id, metadata_booking_id = _extract_event_metadata_ids(event)
+
+        processed = False
+        processing_error: Exception | None = None
+        async with session.begin():
+            try:
+                ctx = await _resolve_org_for_event(session, event)
+            except StripeOrgResolutionError as exc:
+                # Differentiate between security violations (400) and non-actionable events (200)
+                # Security violations: org_customer_mismatch (consistency violation)
+                # Non-actionable: invoice_not_found, booking_not_found, missing_org, invalid_org, org_not_found
+                if exc.reason == "org_customer_mismatch":
+                    logger.warning(
+                        "stripe_webhook_org_mismatch",
+                        extra={"extra": {"event_id": event_id, "reason": exc.reason}},
+                    )
+                    metrics.record_webhook_error("org_resolution_conflict")
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Org conflict") from exc
+
+                # Non-actionable: log, record metric, return 200
+                logger.info(
+                    "stripe_webhook_ignored_unresolvable",
                     extra={"extra": {"event_id": event_id, "reason": exc.reason}},
                 )
-                metrics.record_webhook_error("org_resolution_conflict")
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Org conflict") from exc
-
-            # Non-actionable: log, record metric, return 200
-            logger.info(
-                "stripe_webhook_ignored_unresolvable",
-                extra={"extra": {"event_id": event_id, "reason": exc.reason}},
-            )
-            metrics.record_webhook("ignored")
-            metrics.record_webhook_error(f"org_resolution_{exc.reason}")
-            return {"received": True, "processed": False}
-
-        existing = await session.scalar(select(StripeEvent).where(StripeEvent.event_id == str(event_id)).with_for_update())
-        if existing:
-            if existing.org_id and ctx.org_id and existing.org_id != ctx.org_id:
-                logger.warning(
-                    "stripe_webhook_org_conflict",
-                    extra={
-                        "extra": {
-                            "event_id": event_id,
-                            "expected_org": str(existing.org_id),
-                            "resolved_org": str(ctx.org_id),
-                        }
-                    },
-                )
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Stripe event org mismatch")
-            if existing.payload_hash != payload_hash:
-                logger.warning(
-                    "stripe_webhook_replayed_mismatch",
-                    extra={"extra": {"event_id": event_id}},
-                )
-                metrics.record_webhook_error("payload_mismatch")
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Event payload mismatch")
-
-            if existing.status in {"succeeded", "ignored"}:
-                logger.info(
-                    "stripe_webhook_duplicate",
-                    extra={"extra": {"event_id": event_id, "status": existing.status}},
-                )
                 metrics.record_webhook("ignored")
+                metrics.record_webhook_error(f"org_resolution_{exc.reason}")
+                outcome = "ignored"
                 return {"received": True, "processed": False}
 
-            if existing.status == "processing":
-                logger.info(
-                    "stripe_webhook_duplicate",
-                    extra={"extra": {"event_id": event_id, "status": existing.status}},
+            existing = await session.scalar(
+                select(StripeEvent).where(StripeEvent.event_id == str(event_id)).with_for_update()
+            )
+            if existing:
+                if existing.org_id and ctx.org_id and existing.org_id != ctx.org_id:
+                    logger.warning(
+                        "stripe_webhook_org_conflict",
+                        extra={
+                            "extra": {
+                                "event_id": event_id,
+                                "expected_org": str(existing.org_id),
+                                "resolved_org": str(ctx.org_id),
+                            }
+                        },
+                    )
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Stripe event org mismatch")
+                if existing.payload_hash != payload_hash:
+                    logger.warning(
+                        "stripe_webhook_replayed_mismatch",
+                        extra={"extra": {"event_id": event_id}},
+                    )
+                    metrics.record_webhook_error("payload_mismatch")
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Event payload mismatch")
+
+                if existing.status in {"succeeded", "ignored"}:
+                    logger.info(
+                        "stripe_webhook_duplicate",
+                        extra={"extra": {"event_id": event_id, "status": existing.status}},
+                    )
+                    metrics.record_webhook("ignored")
+                    outcome = "ignored"
+                    return {"received": True, "processed": False}
+
+                if existing.status == "processing":
+                    logger.info(
+                        "stripe_webhook_duplicate",
+                        extra={"extra": {"event_id": event_id, "status": existing.status}},
+                    )
+                    metrics.record_webhook("ignored")
+                    outcome = "ignored"
+                    return {"received": True, "processed": False}
+
+                record = existing
+                record.status = "processing"
+                if record.org_id is None and ctx.org_id:
+                    record.org_id = ctx.org_id
+                if not record.event_type:
+                    record.event_type = event_type
+                if record.event_created_at is None:
+                    record.event_created_at = event_created_at
+                if not record.invoice_id:
+                    record.invoice_id = metadata_invoice_id or getattr(ctx.invoice, "invoice_id", None)
+                if not record.booking_id:
+                    record.booking_id = metadata_booking_id or getattr(ctx.booking, "booking_id", None)
+            else:
+                invoice_id = getattr(ctx.invoice, "invoice_id", None) or metadata_invoice_id
+                booking_id = getattr(ctx.booking, "booking_id", None) or metadata_booking_id
+                record = StripeEvent(
+                    event_id=str(event_id),
+                    status="processing",
+                    payload_hash=payload_hash,
+                    org_id=ctx.org_id,
+                    event_type=event_type,
+                    event_created_at=event_created_at,
+                    invoice_id=invoice_id,
+                    booking_id=booking_id,
                 )
-                metrics.record_webhook("ignored")
-                return {"received": True, "processed": False}
+                session.add(record)
 
-            record = existing
-            record.status = "processing"
-            if record.org_id is None and ctx.org_id:
-                record.org_id = ctx.org_id
-            if not record.event_type:
-                record.event_type = event_type
-            if record.event_created_at is None:
-                record.event_created_at = event_created_at
-            if not record.invoice_id:
-                record.invoice_id = metadata_invoice_id or getattr(ctx.invoice, "invoice_id", None)
-            if not record.booking_id:
-                record.booking_id = metadata_booking_id or getattr(ctx.booking, "booking_id", None)
-        else:
-            invoice_id = getattr(ctx.invoice, "invoice_id", None) or metadata_invoice_id
-            booking_id = getattr(ctx.booking, "booking_id", None) or metadata_booking_id
-            record = StripeEvent(
-                event_id=str(event_id),
-                status="processing",
-                payload_hash=payload_hash,
-                org_id=ctx.org_id,
-                event_type=event_type,
-                event_created_at=event_created_at,
-                invoice_id=invoice_id,
-                booking_id=booking_id,
-            )
-            session.add(record)
+            try:
+                processed = await _handle_webhook_event(
+                    session, event, resolve_app_email_adapter(http_request), ctx
+                )
+                record.status = "succeeded" if processed else "ignored"
+            except Exception as exc:  # noqa: BLE001
+                processed = False
+                record.status = "error"
+                processing_error = exc
+                record.last_error = str(exc)
+                logger.exception(
+                    "stripe_webhook_error",
+                    extra={"extra": {"event_id": event_id, "reason": type(exc).__name__}},
+                )
+                metrics.record_webhook("error")
+                metrics.record_webhook_error("processing_error")
+            else:
+                record.last_error = None
 
-        try:
-            processed = await _handle_webhook_event(
-                session, event, resolve_app_email_adapter(http_request), ctx
-            )
-            record.status = "succeeded" if processed else "ignored"
-        except Exception as exc:  # noqa: BLE001
-            processed = False
-            record.status = "error"
-            processing_error = exc
-            record.last_error = str(exc)
-            logger.exception(
-                "stripe_webhook_error",
-                extra={"extra": {"event_id": event_id, "reason": type(exc).__name__}},
-            )
-            metrics.record_webhook("error")
-            metrics.record_webhook_error("processing_error")
-        else:
-            record.last_error = None
+        if processing_error is not None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Stripe webhook processing error",
+            ) from processing_error
 
-    if processing_error is not None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Stripe webhook processing error",
-        ) from processing_error
-
-    metrics.record_webhook("processed" if processed else "ignored")
-    return {"received": True, "processed": processed}
+        metrics.record_webhook("processed" if processed else "ignored")
+        outcome = "processed" if processed else "ignored"
+        return {"received": True, "processed": processed}
+    finally:
+        metrics.record_stripe_webhook(outcome)
 
 
 @router.post("/v1/payments/stripe/webhook", status_code=status.HTTP_200_OK)
