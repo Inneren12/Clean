@@ -26,7 +26,7 @@ async def test_admin_reset_temp_password_invalidates_sessions(async_session_make
     reset_resp = client.post(
         f"/v1/admin/users/{user.user_id}/reset-temp-password",
         json={"reason": "support"},
-        headers={"Authorization": f"Bearer {admin_token}"},
+        headers={"Authorization": f"Bearer {admin_token}", "Idempotency-Key": "reset-temp"},
     )
     assert reset_resp.status_code == 200
     new_temp = reset_resp.json()["temp_password"]

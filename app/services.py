@@ -18,6 +18,7 @@ class AppServices:
     email_adapter: EmailAdapter | NoopEmailAdapter
     stripe_client: StripeClient
     rate_limiter: RateLimiter
+    action_rate_limiter: RateLimiter
     metrics: Metrics
 
 
@@ -31,6 +32,9 @@ def build_app_services(app_settings, *, metrics: Metrics | None = None) -> AppSe
             webhook_secret=app_settings.stripe_webhook_secret,
         ),
         rate_limiter=create_rate_limiter(app_settings),
+        action_rate_limiter=create_rate_limiter(
+            app_settings, requests_per_minute=app_settings.admin_action_rate_limit_per_minute
+        ),
         metrics=metrics_client,
     )
 

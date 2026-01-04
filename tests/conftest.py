@@ -48,6 +48,7 @@ from app.domain.nps import db_models as nps_db_models  # noqa: F401
 from app.domain.disputes import db_models as dispute_db_models  # noqa: F401
 from app.domain.policy_overrides import db_models as policy_override_db_models  # noqa: F401
 from app.domain.admin_audit import db_models as admin_audit_db_models  # noqa: F401
+from app.domain.admin_idempotency import db_models as admin_idempotency_db_models  # noqa: F401
 from app.domain.documents import db_models as document_db_models  # noqa: F401
 from app.domain.saas import db_models as saas_db_models  # noqa: F401
 from app.domain.outbox import db_models as outbox_db_models  # noqa: F401
@@ -120,6 +121,11 @@ def restore_admin_settings():
     original_email_mode = getattr(settings, "email_mode", "off")
     original_legacy_basic_auth_enabled = getattr(settings, "legacy_basic_auth_enabled", True)
     original_auth_secret_key = getattr(settings, "auth_secret_key", "")
+    original_admin_read_only = getattr(settings, "admin_read_only", False)
+    original_admin_ip_allowlist = getattr(settings, "admin_ip_allowlist_cidrs_raw", None)
+    original_trust_proxy_headers = getattr(settings, "trust_proxy_headers", False)
+    original_trusted_proxy_ips = getattr(settings, "trusted_proxy_ips_raw", None)
+    original_trusted_proxy_cidrs = getattr(settings, "trusted_proxy_cidrs_raw", None)
     yield
     settings.admin_basic_username = original_username
     settings.admin_basic_password = original_password
@@ -134,6 +140,11 @@ def restore_admin_settings():
     settings.legacy_basic_auth_enabled = original_legacy_basic_auth_enabled
     settings.auth_secret_key = original_auth_secret_key
     settings.email_mode = original_email_mode
+    settings.admin_read_only = original_admin_read_only
+    settings.admin_ip_allowlist_cidrs_raw = original_admin_ip_allowlist
+    settings.trust_proxy_headers = original_trust_proxy_headers
+    settings.trusted_proxy_ips_raw = original_trusted_proxy_ips
+    settings.trusted_proxy_cidrs_raw = original_trusted_proxy_cidrs
 
 
 @pytest.fixture(autouse=True)
@@ -248,6 +259,18 @@ def clean_database(test_engine):
                 anyio.from_thread.run(reset)
         else:
             reset()
+    action_rate_limiter = getattr(app.state, "action_rate_limiter", None)
+    reset_action = getattr(action_rate_limiter, "reset", None) if action_rate_limiter else None
+    if reset_action:
+        if inspect.iscoroutinefunction(reset_action):
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                asyncio.run(reset_action())
+            else:
+                anyio.from_thread.run(reset_action)
+        else:
+            reset_action()
     yield
 
 

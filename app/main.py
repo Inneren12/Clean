@@ -20,6 +20,7 @@ from app.api.routes_bookings import router as bookings_router
 from app.api.routes_chat import router as chat_router
 from app.api.routes_estimate import router as estimate_router
 from app.api.routes_bot import router as bot_router
+from app.api.admin_safety import AdminSafetyMiddleware
 from app.api.routes_checklists import router as checklists_router
 from app.api.routes_health import router as health_router
 from app.api.routes_client import router as client_router
@@ -274,6 +275,9 @@ def create_app(app_settings) -> FastAPI:
         app.state.services = state_services
 
         app.state.rate_limiter = getattr(app.state, "rate_limiter", None) or state_services.rate_limiter
+        app.state.action_rate_limiter = (
+            getattr(app.state, "action_rate_limiter", None) or state_services.action_rate_limiter
+        )
         app.state.metrics = getattr(app.state, "metrics", None) or state_services.metrics
         app.state.storage_backend = getattr(app.state, "storage_backend", None) or state_services.storage
         app.state.app_settings = getattr(app.state, "app_settings", app_settings)
@@ -284,6 +288,7 @@ def create_app(app_settings) -> FastAPI:
         app.state.stripe_client = getattr(app.state, "stripe_client", None) or state_services.stripe_client
         yield
         await app.state.rate_limiter.close()
+        await app.state.action_rate_limiter.close()
 
     app = FastAPI(title="Cleaning Economy Bot", version="1.0.0", lifespan=lifespan)
 
@@ -292,6 +297,7 @@ def create_app(app_settings) -> FastAPI:
     app.add_middleware(WorkerAccessMiddleware)
     app.add_middleware(AdminAuditMiddleware)
     app.add_middleware(AdminAccessMiddleware)
+    app.add_middleware(AdminSafetyMiddleware, app_settings=app_settings)
     app.add_middleware(PasswordChangeGateMiddleware)
     app.add_middleware(TenantSessionMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)

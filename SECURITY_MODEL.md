@@ -2,6 +2,7 @@
 
 ## Authentication mechanisms
 - **Admin/Dispatcher/Finance/Viewer Basic Auth**: enforced by `AdminAccessMiddleware` with per-role permissions and auditing (`app/api/admin_auth.py`). Credentials come from env vars (owner/admin/dispatcher/accountant/viewer pairs).
+- **Admin safety gates**: `/v1/admin/*` and `/v1/iam/*` run through `AdminSafetyMiddleware` for two controls: (1) `ADMIN_IP_ALLOWLIST_CIDRS` enforces CIDR allowlisting using trusted proxy resolution, returning 403 Problem+JSON on mismatch; (2) `ADMIN_READ_ONLY=true` blocks POST/PUT/PATCH/DELETE with a 409 Problem+JSON, keeping read-only GETs available during incidents.
 - **SaaS JWT (org-scoped)**: access tokens validated by `TenantSessionMiddleware`; sessions stored in DB and refreshed via `/v1/auth/refresh` (`app/api/saas_auth.py`, `app/api/routes_auth.py`). `require_org_context` enforces org presence when SaaS tokens are expected.
 - **Worker portal tokens**: signed tokens using `WORKER_PORTAL_SECRET`, validated by `WorkerAccessMiddleware` and endpoints in `app/api/worker_auth.py`/`routes_worker.py`.
 - **Client portal tokens**: HMAC tokens for invoice/portal links using `CLIENT_PORTAL_SECRET` with TTL (`app/api/routes_payments.py`, `app/settings.py`).
@@ -30,6 +31,7 @@
 
 ## Transport and rate limits
 - **Rate limiting**: middleware using Redis or in-memory limiter with proxy-aware client key resolution (`app/main.py`, `app/infra/security.py`).
+- **Admin idempotency**: dangerous admin actions (payments, resends/replays, bulk updates, IAM resets) require an `Idempotency-Key` header. Requests are hashed on method/path/normalized JSON body and persisted per-org in `admin_idempotency`; repeated hashes replay the stored response while mismatched payloads return a 409 Problem+JSON. Per-org action rate limits share the same limiter infrastructure and are applied before execution.
 - **CORS**: origins enforced via settings; `STRICT_CORS` recommended for prod (`app/main.py`, `app/settings.py`).
 - **Metrics/headers**: security headers middleware sets X-Content-Type-Options, X-Frame-Options, CSP, Referrer-Policy (`app/main.py`). Admin Basic Auth middleware only applies to `/v1/admin/*`; `/healthz`, `/readyz`, and `/metrics` are allowlisted from admin credentials.
 

@@ -234,7 +234,7 @@ def test_admin_invoice_flow(client, async_session_maker):
     alias_amount = invoice_data["total_cents"] // 2
     alias_resp = client.post(
         f"/v1/admin/invoices/{invoice_id}/record-payment",
-        headers=headers,
+        headers={**headers, "Idempotency-Key": "alias-payment"},
         json={"amount_cents": alias_amount, "method": "cash", "reference": "receipt-1"},
     )
     assert alias_resp.status_code == 201

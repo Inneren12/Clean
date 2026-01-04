@@ -6,10 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.admin_auth import AdminPermission
-from app.api.saas_auth import SaaSIdentity, require_permissions
+from app.api.admin_auth import AdminIdentity, AdminPermission, AdminRole
+from app.api.idempotency import enforce_org_action_rate_limit, require_idempotency
+from app.api.saas_auth import ROLE_TO_ADMIN_ROLE, SaaSIdentity, require_permissions
 from app.domain.saas import service as saas_service
 from app.domain.saas.db_models import Membership, MembershipRole, Organization, PasswordResetEvent, User
+from app.domain.admin_audit import service as audit_service
 from app.infra.db import get_db_session
 from app.infra.email import resolve_app_email_adapter
 from app.settings import settings
@@ -147,6 +149,14 @@ async def reset_temp_password(
     identity: SaaSIdentity = Depends(require_permissions(AdminPermission.ADMIN)),
     session: AsyncSession = Depends(get_db_session),
 ) -> IAMCreateUserResponse:
+    rate_limited = await enforce_org_action_rate_limit(request, identity.org_id, "reset_temp_password")
+    if rate_limited:
+        return rate_limited
+    idempotency = await require_idempotency(request, session, identity.org_id, "reset_temp_password")
+    if isinstance(idempotency, Response):
+        return idempotency
+    if idempotency.existing_response:
+        return idempotency.existing_response
     membership, user = await _get_membership_with_user(session, identity.org_id, user_id)
     if not membership or not user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
@@ -184,11 +194,32 @@ async def reset_temp_password(
             )
 
     response.headers["Cache-Control"] = "no-store"
-    await session.commit()
-    return IAMCreateUserResponse(
+    response_body = IAMCreateUserResponse(
         **_serialize_user(membership, user).model_dump(),
         temp_password=temp_password,
     )
+    audit_identity = AdminIdentity(
+        username=identity.email,
+        role=ROLE_TO_ADMIN_ROLE.get(identity.role, AdminRole.VIEWER),
+        org_id=identity.org_id,
+    )
+    request.state.explicit_admin_audit = True
+    await audit_service.record_action(
+        session,
+        identity=audit_identity,
+        action="reset_temp_password",
+        resource_type="user",
+        resource_id=str(user.user_id),
+        before={"reason": payload.reason},
+        after=response_body.model_dump(mode="json"),
+    )
+    await idempotency.save_response(
+        session,
+        status_code=status.HTTP_200_OK,
+        body=response_body.model_dump(mode="json"),
+    )
+    await session.commit()
+    return response_body
 
 
 @router.post("/users/{user_id}/deactivate", response_model=IAMUserResponse)

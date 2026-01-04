@@ -12,8 +12,13 @@ class Settings(BaseSettings):
     app_env: Literal["dev", "prod"] = Field("prod")
     strict_cors: bool = Field(False)
     strict_policy_mode: bool = Field(False)
+    admin_read_only: bool = Field(False)
+    admin_ip_allowlist_cidrs_raw: str | None = Field(
+        None, validation_alias="admin_ip_allowlist_cidrs"
+    )
     redis_url: str | None = Field(None)
     rate_limit_per_minute: int = Field(30)
+    admin_action_rate_limit_per_minute: int = Field(5)
     rate_limit_cleanup_minutes: int = Field(10)
     rate_limit_fail_open_seconds: int = Field(300)
     rate_limit_redis_probe_seconds: float = Field(5.0)
@@ -229,6 +234,14 @@ class Settings(BaseSettings):
     @export_webhook_allowed_hosts.setter
     def export_webhook_allowed_hosts(self, value: list[str] | str | None) -> None:
         self.export_webhook_allowed_hosts_raw = self._normalize_raw_list(value)
+
+    @property
+    def admin_ip_allowlist_cidrs(self) -> list[str]:
+        return self._parse_list(self.admin_ip_allowlist_cidrs_raw)
+
+    @admin_ip_allowlist_cidrs.setter
+    def admin_ip_allowlist_cidrs(self, value: list[str] | str | None) -> None:
+        self.admin_ip_allowlist_cidrs_raw = self._normalize_raw_list(value)
 
     @property
     def email_sender(self) -> str | None:

@@ -95,14 +95,14 @@ async def test_cross_org_finance_and_exports_blocked(client, async_session_maker
     cross_headers = _auth_headers("admin", "secret", org_b)
     payment_attempt = client.post(
         f"/v1/admin/invoices/{invoice_id}/record-payment",
-        headers=cross_headers,
+        headers={**cross_headers, "Idempotency-Key": "cross-org-payment"},
         json={"amount_cents": 1000, "method": "cash"},
     )
     assert payment_attempt.status_code == 404
 
     export_replay = client.post(
         f"/v1/admin/export-dead-letter/{event_id}/replay",
-        headers=cross_headers,
+        headers={**cross_headers, "Idempotency-Key": "cross-org-export"},
     )
     assert export_replay.status_code == 404
 
@@ -132,14 +132,14 @@ async def test_cross_org_iam_resets_forbidden(client, async_session_maker, orgs)
     cross_reset = client.post(
         f"/v1/iam/users/{worker.user_id}/reset-temp-password",
         json={"reason": "test"},
-        headers={"Authorization": f"Bearer {admin_b_token}"},
+        headers={"Authorization": f"Bearer {admin_b_token}", "Idempotency-Key": "cross-reset"},
     )
     assert cross_reset.status_code == 403
 
     allowed_reset = client.post(
         f"/v1/iam/users/{worker.user_id}/reset-temp-password",
         json={"reason": "test"},
-        headers={"Authorization": f"Bearer {admin_a_token}"},
+        headers={"Authorization": f"Bearer {admin_a_token}", "Idempotency-Key": "allowed-reset"},
     )
     assert allowed_reset.status_code == 200
     assert allowed_reset.json()["must_change_password"] is True
