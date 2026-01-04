@@ -5,6 +5,8 @@ import io
 from decimal import Decimal
 from datetime import date, datetime, timezone
 
+from sqlalchemy import select
+
 from app.domain.bookings.db_models import Booking
 from app.domain.invoices import service as invoice_service
 from app.domain.invoices import statuses
@@ -265,6 +267,95 @@ def test_gst_report_uses_tax_snapshot(client, async_session_maker):
     stored_invoice = asyncio.run(load_invoice())
     assert stored_invoice.taxable_subtotal_cents == 10000
     assert stored_invoice.tax_cents == 500
+    assert stored_invoice.tax_rate_basis == Decimal("0.05")
+
+
+def test_reports_respect_tax_snapshot_after_config_change(client, async_session_maker):
+    """GST and P&L should rely on stored invoice snapshots even if tax config changes later."""
+
+    settings.admin_basic_username = "admin"
+    settings.admin_basic_password = "secret"
+
+    async def seed_invoice() -> Invoice:
+        async with async_session_maker() as session:
+            lead = Lead(**_lead_payload("Config Drift Lead"))
+            session.add(lead)
+            await session.flush()
+
+            worker = Worker(team_id=1, name="Worker", phone="123", hourly_rate_cents=3600)
+            session.add(worker)
+            await session.flush()
+
+            booking = Booking(
+                team_id=1,
+                lead_id=lead.lead_id,
+                assigned_worker_id=worker.worker_id,
+                starts_at=datetime(2024, 6, 1, 15, 0, tzinfo=timezone.utc),
+                duration_minutes=90,
+                actual_duration_minutes=90,
+                status="DONE",
+            )
+            session.add(booking)
+            await session.flush()
+
+            invoice = await invoice_service.create_invoice_from_order(
+                session=session,
+                order=booking,
+                items=[
+                    InvoiceItemCreate(
+                        description="Taxed",
+                        qty=1,
+                        unit_price_cents=8000,
+                        tax_rate=Decimal("0.05"),
+                    ),
+                    InvoiceItemCreate(
+                        description="Untaxed",
+                        qty=1,
+                        unit_price_cents=2000,
+                        tax_rate=None,
+                    ),
+                ],
+                issue_date=date(2024, 6, 1),
+                currency="CAD",
+            )
+            invoice.status = statuses.INVOICE_STATUS_SENT
+            lead.estimate_snapshot = {"tax_rate": "0.13"}  # simulate org tax policy change after issuance
+            await session.commit()
+            return invoice
+
+    invoice = asyncio.run(seed_invoice())
+
+    headers = _auth_headers("admin", "secret")
+
+    gst_resp = client.get(
+        "/v1/admin/reports/gst?from=2024-06-01&to=2024-06-30",
+        headers=headers,
+    )
+    assert gst_resp.status_code == 200
+    gst_payload = gst_resp.json()
+    assert gst_payload["invoice_count"] == 1
+    assert gst_payload["taxable_subtotal_cents"] == 8000
+    assert gst_payload["tax_cents"] == 400
+
+    pnl_resp = client.get(
+        "/v1/admin/reports/pnl?from=2024-06-01&to=2024-06-30",
+        headers=headers,
+    )
+    assert pnl_resp.status_code == 200
+    pnl_payload = pnl_resp.json()
+    assert pnl_payload["rows"], pnl_payload
+    pnl_row = pnl_payload["rows"][0]
+    assert pnl_row["invoice_number"] == invoice.invoice_number
+    assert pnl_row["revenue_cents"] == 10000
+
+    async def load_invoice() -> Invoice:
+        async with async_session_maker() as session:
+            result = await session.execute(select(Invoice).where(Invoice.invoice_id == invoice.invoice_id))
+            return result.scalar_one()
+
+    stored_invoice = asyncio.run(load_invoice())
+    assert stored_invoice.taxable_subtotal_cents == 8000
+    assert stored_invoice.tax_cents == 400
     assert stored_invoice.tax_rate_basis == Decimal("0.05")
 
 
