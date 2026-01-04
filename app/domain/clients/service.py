@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -10,6 +11,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.clients.db_models import ClientUser
+from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,7 @@ class TokenResult:
     client_id: str
     issued_at: datetime
     expires_at: datetime
+    org_id: uuid.UUID
 
 
 def issue_magic_token(
@@ -38,13 +41,16 @@ def issue_magic_token(
     secret: str,
     ttl_minutes: int,
     issued_at: datetime | None = None,
+    org_id: uuid.UUID | None = None,
 ) -> str:
     now = issued_at or datetime.now(timezone.utc)
+    org = org_id or settings.default_org_id
     payload = {
         "email": email.lower(),
         "client_id": client_id,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=ttl_minutes)).timestamp()),
+        "org_id": str(org),
     }
     body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
     signature = hmac.new(secret.encode(), body, hashlib.sha256).digest()
@@ -68,11 +74,17 @@ def verify_magic_token(token: str, *, secret: str) -> TokenResult:
     if expires_at < datetime.now(timezone.utc):
         raise ValueError("token_expired")
 
+    try:
+        org_id = uuid.UUID(payload.get("org_id"))
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("token_invalid_org") from exc
+
     return TokenResult(
         email=payload["email"],
         client_id=payload["client_id"],
         issued_at=issued_at,
         expires_at=expires_at,
+        org_id=org_id,
     )
 
 

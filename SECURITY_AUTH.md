@@ -39,6 +39,11 @@ This document summarizes the authentication changes shipped in Sprint 11.
 ## Worker portal sessions
 - Worker sessions are HMAC-signed and now embed an expiry timestamp derived from `SESSION_TTL_MINUTES_WORKER`. Legacy tokens without expiry will be rejected, prompting a re-login.
 
+## Client portal token scope/TTL
+- Client portal magic links are HMAC tokens signed with `CLIENT_PORTAL_SECRET` and include `email`, `client_id`, `org_id`, `iat`, and `exp` claims. Tokens are valid only for the organization that issued them and set the org context on every request.
+- TTL is controlled by `CLIENT_PORTAL_TOKEN_TTL_MINUTES`; expired, cross-org, or tampered tokens return Problem+JSON `401/403` responses and do not leak token contents.
+- Token transport must use the `client_session` HTTP-only cookie (set by `/client/login/callback`) or `Authorization: Bearer` headers; avoid logging tokens and rotate the secret on suspicion of compromise.
+
 ## Legacy Basic Auth
 - Legacy admin Basic Auth remains supported for backward compatibility but is **deprecated**. Prefer SaaS identities with MFA enforced (`ADMIN_MFA_REQUIRED=true`) for all operators.
 - In production (`APP_ENV=prod`), legacy Basic Auth is disabled by default; operators must explicitly set `LEGACY_BASIC_AUTH_ENABLED=true` to allow it. This reduces the attack surface when environment configuration is missing or typoed.

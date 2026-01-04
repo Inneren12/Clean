@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api import entitlements
+from app.api.problem_details import PROBLEM_TYPE_RATE_LIMIT, problem_details
 from app.api.photo_tokens import build_signed_photo_response, normalize_variant
 from app.dependencies import get_db_session
 from app.domain.bookings.db_models import Booking, OrderPhoto
@@ -26,6 +27,7 @@ from app.domain.subscriptions import schemas as subscription_schemas
 from app.domain.subscriptions import service as subscription_service
 from app.domain.subscriptions.db_models import Subscription
 from app.settings import settings
+from app.infra.security import resolve_client_key
 from app.infra.storage import resolve_storage_backend
 from app.infra.org_context import set_current_org_id
 from app.infra.email import resolve_app_email_adapter
@@ -40,16 +42,53 @@ def _storage_backend(request: Request):
     return resolve_storage_backend(request.app.state)
 
 
-async def _get_identity_from_token(token: str | None) -> client_schemas.ClientIdentity:
+async def _enforce_client_rate_limit(
+    request: Request, identity: client_schemas.ClientIdentity | None = None, key_hint: str | None = None
+) -> JSONResponse | None:
+    limiter = getattr(request.app.state, "rate_limiter", None)
+    if not limiter:
+        return None
+
+    app_settings = getattr(request.app.state, "app_settings", settings)
+    client_host = resolve_client_key(
+        request,
+        app_settings.trust_proxy_headers,
+        app_settings.trusted_proxy_ips,
+        app_settings.trusted_proxy_cidrs,
+    )
+    key_parts = ["client-portal", client_host]
+    if identity:
+        key_parts.append(identity.client_id)
+    if key_hint:
+        key_parts.append(key_hint)
+    allowed = await limiter.allow(":".join(key_parts))
+    if allowed:
+        return None
+
+    return problem_details(
+        request=request,
+        status=status.HTTP_429_TOO_MANY_REQUESTS,
+        title="Too Many Requests",
+        detail="Client portal rate limit exceeded",
+        type_=PROBLEM_TYPE_RATE_LIMIT,
+    )
+
+
+async def _get_identity_from_token(token: str | None, request: Request) -> client_schemas.ClientIdentity:
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     try:
         result = client_service.verify_magic_token(token, secret=settings.client_portal_secret)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token") from exc
 
+    request.state.current_org_id = result.org_id
+    set_current_org_id(result.org_id)
     return client_schemas.ClientIdentity(
-        client_id=result.client_id, email=result.email, issued_at=result.issued_at
+        client_id=result.client_id,
+        email=result.email,
+        issued_at=result.issued_at,
+        org_id=result.org_id,
     )
 
 
@@ -57,9 +96,7 @@ async def require_identity(request: Request) -> client_schemas.ClientIdentity:
     token = request.cookies.get(SESSION_COOKIE_NAME) or request.headers.get("Authorization")
     if token and token.startswith("Bearer "):
         token = token.split(" ", 1)[1]
-    identity = await _get_identity_from_token(token)
-    request.state.current_org_id = getattr(request.state, "current_org_id", None) or settings.default_org_id
-    set_current_org_id(request.state.current_org_id)
+    identity = await _get_identity_from_token(token, request)
     return identity
 
 
@@ -99,6 +136,10 @@ def _render_dashboard(orders: Iterable[client_schemas.ClientOrderSummary]) -> st
 async def request_login(
     payload: client_schemas.LoginRequest, request: Request, session: AsyncSession = Depends(get_db_session)
 ) -> JSONResponse:
+    org_id = entitlements.resolve_org_id(request)
+    rate_limited = await _enforce_client_rate_limit(request, key_hint=payload.email.lower())
+    if rate_limited:
+        return rate_limited
     client = await client_service.get_or_create_client(
         session, payload.email, commit=False
     )
@@ -110,6 +151,7 @@ async def request_login(
         client_id=client.client_id,
         secret=settings.client_portal_secret,
         ttl_minutes=settings.client_portal_token_ttl_minutes,
+        org_id=org_id,
     )
     callback_url = f"{_magic_link_destination(request)}?" + urlencode({"token": token})
     link_body = (
@@ -133,7 +175,7 @@ async def request_login(
 
 @router.get("/client/login/callback")
 async def login_callback(token: str, request: Request) -> HTMLResponse:
-    identity = await _get_identity_from_token(token)
+    identity = await _get_identity_from_token(token, request)
     secure = settings.app_env != "dev" or request.url.scheme == "https"
     response = HTMLResponse(
         "<html><body><p>Login successful. Continue to <a href='/client'>your dashboard</a>.</p></body></html>"
@@ -157,16 +199,23 @@ async def dashboard(
     identity: client_schemas.ClientIdentity = Depends(require_identity),
     session: AsyncSession = Depends(get_db_session),
 ) -> HTMLResponse:
-    orders = await _list_orders(session, identity.client_id)
+    orders = await _list_orders(session, identity.client_id, identity.org_id)
     return HTMLResponse(_render_dashboard(orders))
 
 
-async def _list_orders(session: AsyncSession, client_id: str) -> list[client_schemas.ClientOrderSummary]:
+async def _list_orders(
+    session: AsyncSession, client_id: str, org_id: uuid.UUID, upcoming_only: bool = False
+) -> list[client_schemas.ClientOrderSummary]:
     stmt = (
         select(Booking)
         .where(Booking.client_id == client_id)
-        .order_by(Booking.starts_at.desc())
+        .where(Booking.org_id == org_id)
     )
+    if upcoming_only:
+        stmt = stmt.where(Booking.starts_at >= datetime.now(timezone.utc))
+        stmt = stmt.order_by(Booking.starts_at.asc())
+    else:
+        stmt = stmt.order_by(Booking.starts_at.desc())
     result = await session.execute(stmt)
     bookings = result.scalars().all()
     return [
@@ -192,9 +241,11 @@ async def _list_client_invoices(
     session: AsyncSession, identity: client_schemas.ClientIdentity, org_id: uuid.UUID
 ) -> list[client_schemas.ClientInvoiceListItem]:
     matching_customer_ids = select(Lead.lead_id).where(
-        func.lower(Lead.email) == identity.email.lower()
+        func.lower(Lead.email) == identity.email.lower(), Lead.org_id == org_id
     )
-    matching_orders = select(Booking.booking_id).where(Booking.client_id == identity.client_id)
+    matching_orders = select(Booking.booking_id).where(
+        Booking.client_id == identity.client_id, Booking.org_id == org_id
+    )
 
     stmt = (
         select(Invoice)
@@ -266,10 +317,14 @@ def _client_booking_response(model: Booking) -> booking_schemas.ClientBookingRes
 
 
 async def _get_client_subscription(
-    session: AsyncSession, subscription_id: str, client_id: str
+    session: AsyncSession, subscription_id: str, client_id: str, org_id: uuid.UUID
 ) -> Subscription:
     subscription = await session.get(Subscription, subscription_id)
-    if not subscription or subscription.client_id != client_id:
+    if (
+        not subscription
+        or subscription.client_id != client_id
+        or subscription.org_id != org_id
+    ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscription not found")
     return subscription
 
@@ -313,7 +368,9 @@ async def update_subscription_status(
     identity: client_schemas.ClientIdentity = Depends(require_identity),
     session: AsyncSession = Depends(get_db_session),
 ) -> subscription_schemas.SubscriptionResponse:
-    subscription = await _get_client_subscription(session, subscription_id, identity.client_id)
+    subscription = await _get_client_subscription(
+        session, subscription_id, identity.client_id, identity.org_id
+    )
     await subscription_service.update_subscription_status(
         session, subscription, payload.status, reason=payload.status_reason
     )
@@ -324,11 +381,18 @@ async def update_subscription_status(
 
 @router.get("/client/orders")
 async def list_orders(
+    request: Request,
     identity: client_schemas.ClientIdentity = Depends(require_identity),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[client_schemas.ClientOrderSummary]:
-    logger.info("client_portal_access", extra={"extra": {"client_id": identity.client_id, "path": "/client/orders"}})
-    return await _list_orders(session, identity.client_id)
+    rate_limited = await _enforce_client_rate_limit(request, identity)
+    if rate_limited:
+        return rate_limited
+    logger.info(
+        "client_portal_access",
+        extra={"extra": {"client_id": identity.client_id, "path": "/client/orders"}},
+    )
+    return await _list_orders(session, identity.client_id, identity.org_id)
 
 
 @router.get("/client/invoices", response_model=list[client_schemas.ClientInvoiceListItem])
@@ -337,6 +401,9 @@ async def list_invoices(
     identity: client_schemas.ClientIdentity = Depends(require_identity),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[client_schemas.ClientInvoiceListItem]:
+    rate_limited = await _enforce_client_rate_limit(request, identity)
+    if rate_limited:
+        return rate_limited
     org_id = entitlements.resolve_org_id(request)
     logger.info(
         "client_portal_access",
@@ -345,9 +412,109 @@ async def list_invoices(
     return await _list_client_invoices(session, identity, org_id)
 
 
-async def _get_client_booking(session: AsyncSession, order_id: str, client_id: str) -> Booking:
+@router.get("/v1/client/portal/bookings", response_model=list[client_schemas.ClientOrderSummary])
+async def v1_list_bookings(
+    request: Request,
+    identity: client_schemas.ClientIdentity = Depends(require_identity),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[client_schemas.ClientOrderSummary]:
+    rate_limited = await _enforce_client_rate_limit(request, identity)
+    if rate_limited:
+        return rate_limited
+    return await _list_orders(session, identity.client_id, identity.org_id, upcoming_only=True)
+
+
+@router.get(
+    "/v1/client/portal/bookings/{booking_id}",
+    response_model=client_schemas.ClientOrderDetail,
+)
+async def v1_booking_detail(
+    booking_id: str,
+    request: Request,
+    identity: client_schemas.ClientIdentity = Depends(require_identity),
+    session: AsyncSession = Depends(get_db_session),
+) -> client_schemas.ClientOrderDetail:
+    rate_limited = await _enforce_client_rate_limit(request, identity)
+    if rate_limited:
+        return rate_limited
+    booking = await _get_client_booking(session, booking_id, identity.client_id, identity.org_id)
+    photos_count = await session.scalar(
+        select(func.count(OrderPhoto.photo_id)).where(OrderPhoto.order_id == booking.booking_id)
+    )
+    return client_schemas.ClientOrderDetail(
+        order_id=booking.booking_id,
+        status=booking.status,
+        starts_at=booking.starts_at,
+        duration_minutes=booking.duration_minutes,
+        deposit_required=booking.deposit_required,
+        deposit_status=booking.deposit_status,
+        pay_link=f"{(settings.client_portal_base_url or settings.public_base_url or '').rstrip('/')}/orders/{booking.booking_id}",
+        photos_available=bool(booking.consent_photos),
+        photos_count=photos_count or 0,
+    )
+
+
+@router.get(
+    "/v1/client/portal/bookings/{order_id}/photos/{photo_id}/signed-url",
+    response_model=booking_schemas.SignedUrlResponse,
+)
+async def v1_client_photo_signed_url(
+    order_id: str,
+    photo_id: str,
+    request: Request,
+    variant: str | None = Query(None),
+    identity: client_schemas.ClientIdentity = Depends(require_identity),
+    session: AsyncSession = Depends(get_db_session),
+) -> booking_schemas.SignedUrlResponse:
+    rate_limited = await _enforce_client_rate_limit(request, identity)
+    if rate_limited:
+        return rate_limited
+    booking = await _get_client_booking(session, order_id, identity.client_id, identity.org_id)
+    if not booking.consent_photos:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Photo access not granted")
+    photo = await photos_service.get_photo(session, order_id, photo_id, identity.org_id)
+    if photo.order_id != booking.booking_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
+    storage = _storage_backend(request)
+    normalized_variant = normalize_variant(variant)
+    return await build_signed_photo_response(
+        photo, request, storage, identity.org_id, variant=normalized_variant
+    )
+
+
+@router.get("/v1/client/portal/invoices", response_model=list[client_schemas.ClientInvoiceListItem])
+async def v1_list_invoices(
+    request: Request,
+    identity: client_schemas.ClientIdentity = Depends(require_identity),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[client_schemas.ClientInvoiceListItem]:
+    rate_limited = await _enforce_client_rate_limit(request, identity)
+    if rate_limited:
+        return rate_limited
+    return await _list_client_invoices(session, identity, identity.org_id)
+
+
+@router.get(
+    "/v1/client/portal/invoices/{invoice_id}",
+    response_model=client_schemas.ClientInvoiceResponse,
+)
+async def v1_invoice_detail(
+    invoice_id: str,
+    request: Request,
+    identity: client_schemas.ClientIdentity = Depends(require_identity),
+    session: AsyncSession = Depends(get_db_session),
+) -> client_schemas.ClientInvoiceResponse:
+    rate_limited = await _enforce_client_rate_limit(request, identity)
+    if rate_limited:
+        return rate_limited
+    return await _invoice_response(session, identity, identity.org_id, invoice_id)
+
+
+async def _get_client_booking(
+    session: AsyncSession, order_id: str, client_id: str, org_id: uuid.UUID
+) -> Booking:
     booking = await session.get(Booking, order_id)
-    if not booking or booking.client_id != client_id:
+    if not booking or booking.client_id != client_id or booking.org_id != org_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
     return booking
 
@@ -356,7 +523,7 @@ async def _get_owned_booking(
     session: AsyncSession, booking_id: str, identity: client_schemas.ClientIdentity
 ) -> Booking:
     booking = await session.get(Booking, booking_id)
-    if booking is None:
+    if booking is None or booking.org_id != identity.org_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
 
     if booking.client_id:
@@ -377,10 +544,16 @@ async def _get_owned_booking(
 @router.get("/client/orders/{order_id}")
 async def order_detail(
     order_id: str,
+    request: Request,
     identity: client_schemas.ClientIdentity = Depends(require_identity),
     session: AsyncSession = Depends(get_db_session),
 ) -> client_schemas.ClientOrderDetail:
-    booking = await _get_client_booking(session, order_id, identity.client_id)
+    rate_limited = await _enforce_client_rate_limit(request, identity)
+    if rate_limited:
+        return rate_limited
+    booking = await _get_client_booking(
+        session, order_id, identity.client_id, identity.org_id
+    )
     photos_count = await session.scalar(
         select(func.count(OrderPhoto.photo_id)).where(OrderPhoto.order_id == booking.booking_id)
     )
@@ -409,34 +582,39 @@ async def client_photo_signed_url(
     identity: client_schemas.ClientIdentity = Depends(require_identity),
     session: AsyncSession = Depends(get_db_session),
 ) -> booking_schemas.SignedUrlResponse:
-    booking = await _get_client_booking(session, order_id, identity.client_id)
+    rate_limited = await _enforce_client_rate_limit(request, identity)
+    if rate_limited:
+        return rate_limited
+    booking = await _get_client_booking(
+        session, order_id, identity.client_id, identity.org_id
+    )
     if not booking.consent_photos:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Photo access not granted")
-    photo = await photos_service.get_photo(session, order_id, photo_id)
+    photo = await photos_service.get_photo(session, order_id, photo_id, identity.org_id)
     if photo.order_id != booking.booking_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
     storage = _storage_backend(request)
-    org_id = entitlements.resolve_org_id(request)
     normalized_variant = normalize_variant(variant)
     return await build_signed_photo_response(
-        photo, request, storage, org_id, variant=normalized_variant
+        photo, request, storage, identity.org_id, variant=normalized_variant
     )
 
 
-@router.get("/client/invoices/{invoice_id}")
-async def invoice_detail(
+async def _invoice_response(
+    session: AsyncSession,
+    identity: client_schemas.ClientIdentity,
+    org_id: uuid.UUID,
     invoice_id: str,
-    request: Request,
-    identity: client_schemas.ClientIdentity = Depends(require_identity),
-    session: AsyncSession = Depends(get_db_session),
 ) -> client_schemas.ClientInvoiceResponse:
-    org_id = entitlements.resolve_org_id(request)
+    set_current_org_id(org_id)
     invoice = await session.get(Invoice, invoice_id)
     if not invoice or invoice.org_id != org_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
 
     if invoice.order_id:
-        booking = await _get_client_booking(session, invoice.order_id, identity.client_id)
+        booking = await _get_client_booking(
+            session, invoice.order_id, identity.client_id, identity.org_id
+        )
         order_id = booking.booking_id
     elif invoice.customer_id:
         lead = await session.get(Lead, invoice.customer_id)
@@ -457,6 +635,20 @@ async def invoice_detail(
     )
 
 
+@router.get("/client/invoices/{invoice_id}")
+async def invoice_detail(
+    invoice_id: str,
+    request: Request,
+    identity: client_schemas.ClientIdentity = Depends(require_identity),
+    session: AsyncSession = Depends(get_db_session),
+) -> client_schemas.ClientInvoiceResponse:
+    rate_limited = await _enforce_client_rate_limit(request, identity)
+    if rate_limited:
+        return rate_limited
+    org_id = entitlements.resolve_org_id(request)
+    return await _invoice_response(session, identity, org_id, invoice_id)
+
+
 @router.post("/client/orders/{order_id}/repeat", status_code=status.HTTP_201_CREATED)
 async def repeat_order(
     order_id: str,
@@ -464,7 +656,9 @@ async def repeat_order(
     identity: client_schemas.ClientIdentity = Depends(require_identity),
     session: AsyncSession = Depends(get_db_session),
 ) -> client_schemas.ClientOrderSummary:
-    original = await _get_client_booking(session, order_id, identity.client_id)
+    original = await _get_client_booking(
+        session, order_id, identity.client_id, identity.org_id
+    )
     new_start = original.starts_at + timedelta(days=7)
 
     # Fetch the lead to evaluate deposit policy for the new booking date
@@ -515,7 +709,7 @@ async def submit_review(
     identity: client_schemas.ClientIdentity = Depends(require_identity),
     session: AsyncSession = Depends(get_db_session),
 ) -> JSONResponse:
-    await _get_client_booking(session, order_id, identity.client_id)
+    await _get_client_booking(session, order_id, identity.client_id, identity.org_id)
     logger.info(
         "client_review_submitted",
         extra={
