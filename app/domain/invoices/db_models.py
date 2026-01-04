@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -167,6 +168,11 @@ class StripeEvent(Base):
     event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     payload_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    event_type: Mapped[str | None] = mapped_column(String(128))
+    event_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    invoice_id: Mapped[str | None] = mapped_column(String(64))
+    booking_id: Mapped[str | None] = mapped_column(String(64))
+    last_error: Mapped[str | None] = mapped_column(Text())
     org_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID_TYPE,
         ForeignKey("organizations.org_id", ondelete="CASCADE"),
@@ -181,6 +187,8 @@ class StripeEvent(Base):
     __table_args__ = (
         Index("ix_stripe_events_payload_hash", "payload_hash"),
         Index("ix_stripe_events_org_id", "org_id"),
+        Index("ix_stripe_events_invoice_id", "invoice_id"),
+        Index("ix_stripe_events_booking_id", "booking_id"),
     )
 
 

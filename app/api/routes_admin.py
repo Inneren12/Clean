@@ -1724,6 +1724,38 @@ async def list_invoice_reconcile_items(
     return invoice_schemas.InvoiceReconcileListResponse(items=cases)
 
 
+@router.get(
+    "/v1/admin/finance/reconcile/stripe-events",
+    response_model=invoice_schemas.StripeEventListResponse,
+)
+async def list_stripe_events(
+    request: Request,
+    invoice_id: str | None = Query(default=None),
+    booking_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_finance),
+) -> invoice_schemas.StripeEventListResponse:
+    org_id = entitlements.resolve_org_id(request)
+    items, total = await invoice_service.list_stripe_events(
+        session,
+        org_id,
+        invoice_id=invoice_id,
+        booking_id=booking_id,
+        status=status,
+        limit=limit,
+        offset=offset,
+    )
+    return invoice_schemas.StripeEventListResponse(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
 @router.get("/v1/admin/exports/sales-ledger.csv")
 async def export_sales_ledger(
     request: Request,

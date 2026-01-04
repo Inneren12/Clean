@@ -47,6 +47,7 @@
 ## Data access and privacy
 - **Photos/files**: access via signed URLs or tokenized download endpoints; TTL and MIME/size limits enforced (`app/api/photo_tokens.py`, `app/infra/storage/backends.py`).
 - **Invoices and payments**: invoice tokens HMAC-signed and scoped to invoice ID/org (`app/api/routes_payments.py`).
+- **Stripe events view**: `/v1/admin/finance/reconcile/stripe-events` exposes only metadata (event id/type, org, invoice/booking references, status, error text) and omits raw webhook payloads to avoid leaking cardholder details or PII embedded in Stripe objects.
 - **Exports**: outbound webhooks restricted by allowlist and optional HTTPS enforcement (`app/infra/export.py`).
 - **PII**: avoid logging PII; request logging uses request_id/paths without body dumps by default. Structured logs automatically redact emails, phone numbers, street addresses, Authorization headers, bearer tokens, and signed URL/query tokens.
 

@@ -43,6 +43,11 @@
 - Org isolation: requests are scoped by the resolved org (`X-Test-Org` in dev/tests) and will not surface invoices from other tenants.
 - Response fields include payment counts, last payment timestamp, and quick action placeholders pointing at `/v1/admin/finance/reconcile/invoices/{invoice_id}` for future remediation workflows.
 
+## Stripe events view (read-only)
+- Finance-only endpoint: `GET /v1/admin/finance/reconcile/stripe-events` lists recent Stripe webhook events for the caller's org. Requires FINANCE credentials (admin/accountant/owner) or SaaS FINANCE tokens.
+- Filters: `invoice_id`, `booking_id`, `status` plus `limit`/`offset` pagination. Results are ordered by event creation/processing time, newest first.
+- Response fields: `event_id`, `type`, `created_at`, `org_id`, optional `invoice_id`/`booking_id`, `processed_status`, and `last_error`. Raw webhook payloads are **not** returned; only metadata captured during processing is surfaced.
+
 ## Incident read-only + break-glass procedure
 1. **Enable admin read-only:** set `ADMIN_READ_ONLY=true` (config/env and restart) to block POST/PUT/PATCH/DELETE on `/v1/admin/*` and `/v1/iam/*` with 409 Problem+JSON while investigations run. IP allowlists remain enforced.
 2. **Start a break-glass session:** an OWNER/ADMIN calls `POST /v1/admin/break-glass/start` with `{"reason": "<incident summary>", "ttl_minutes": <minutes>}`. The API returns a one-time token and expiry; store it securely and never log it. The token is hashed at rest and scoped to the caller's org.
