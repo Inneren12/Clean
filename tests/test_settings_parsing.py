@@ -39,6 +39,20 @@ def test_dev_defaults_allow_placeholders():
     assert settings.auth_secret_key == "dev-auth-secret"
 
 
+def test_defaults_to_prod_when_env_missing(monkeypatch):
+    monkeypatch.delenv("APP_ENV", raising=False)
+
+    settings = Settings(
+        auth_secret_key="super-secret",
+        client_portal_secret="client-secret",
+        worker_portal_secret="worker-secret",
+        metrics_enabled=False,
+        _env_file=None,
+    )
+
+    assert settings.app_env == "prod"
+
+
 def test_prod_requires_non_default_secrets():
     with pytest.raises(ValidationError, match="AUTH_SECRET_KEY"):
         Settings(app_env="prod", _env_file=None)

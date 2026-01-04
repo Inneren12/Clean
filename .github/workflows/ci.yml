@@ -205,6 +205,8 @@ jobs:
           PY
 
       - name: Run migration invariants
+        env:
+          APP_ENV: dev
         run: pytest -q -m migrations tests/test_postgres_migrations.py
 
   web:
