@@ -62,6 +62,15 @@
 
 - Storage backends: verify bucket access and signed URL keys; for local storage, include `order_upload_root` volume in backups.
 
+## Operator productivity queues (release-grade hardened)
+- **Photos queue** (`GET /v1/admin/queue/photos`): requires dispatcher credentials or higher; lists photos awaiting review or retake. Filter by `status=pending|needs_retake|all`.
+- **Invoices queue** (`GET /v1/admin/queue/invoices`): requires finance credentials or higher; lists overdue/unpaid invoices. Filter by `status=overdue|unpaid|all`.
+- **Assignments queue** (`GET /v1/admin/queue/assignments`): requires dispatcher credentials or higher; lists unassigned bookings in next N days (default 7, max 30). Shows urgency indicator for bookings within 24h.
+- **DLQ queue** (`GET /v1/admin/queue/dlq`): requires admin credentials only; lists failed outbox/export events. Filter by `kind=outbox|export|all`. Uses SQL-level pagination for scalability.
+- **Timeline endpoints** (`GET /v1/admin/timeline/booking/{id}`, `/invoice/{id}`): requires viewer credentials or higher; PII is masked for viewer role. Shows unified audit logs, email events, payments, photo reviews, NPS, support tickets, and outbox events.
+- **Role requirements**: dispatcher for photos/assignments, finance for invoices, admin for DLQ, viewer for timeline (with PII masking).
+- **Performance notes**: DLQ uses SQL UNION ALL for combined queries; timeline limits each event type (100 audit logs, 100 emails, 50 payments, etc.) to prevent unbounded queries. Timeline queries avoid dangerous `LIKE %id%` patterns; outbox events use structured prefix patterns like `:booking:{id}` or `:invoice:{id}`.
+
 ## Config viewer and redaction
 - `GET /v1/admin/config` surfaces a read-only snapshot of operational settings with secrets redacted (`<redacted>`). Only whitelisted keys are returned; secrets (tokens/keys/passwords) are never echoed.
 - Keep config viewer behind admin Basic Auth and avoid piping responses into logs to prevent metadata leaks.

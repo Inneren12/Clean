@@ -43,11 +43,23 @@ async def list_photo_queue(
     Returns:
         (items, total, counts) where counts = {pending, needs_retake}
     """
-    # Build base query
+    # Build base query with explicit org_id constraints on all joins
     stmt = (
         select(OrderPhoto, Booking, Worker)
-        .join(Booking, OrderPhoto.order_id == Booking.booking_id)
-        .outerjoin(Worker, Booking.assigned_worker_id == Worker.worker_id)
+        .join(
+            Booking,
+            and_(
+                OrderPhoto.order_id == Booking.booking_id,
+                Booking.org_id == org_id,
+            ),
+        )
+        .outerjoin(
+            Worker,
+            and_(
+                Booking.assigned_worker_id == Worker.worker_id,
+                Worker.org_id == org_id,
+            ),
+        )
         .where(OrderPhoto.org_id == org_id)
     )
 
@@ -88,7 +100,7 @@ async def list_photo_queue(
                 photo_id=photo.photo_id,
                 order_id=photo.order_id,
                 booking_ref=booking.booking_id if booking else None,
-                worker_name=f"{worker.first_name} {worker.last_name}" if worker else None,
+                worker_name=worker.name if worker else None,
                 phase=photo.phase,
                 review_status=photo.review_status,
                 needs_retake=photo.needs_retake,
@@ -123,10 +135,16 @@ async def list_invoice_queue(
     """
     today = datetime.now(timezone.utc).date()
 
-    # Build base query
+    # Build base query with explicit org_id constraints on joins
     stmt = (
         select(Invoice, Lead)
-        .outerjoin(Lead, Invoice.customer_id == Lead.lead_id)
+        .outerjoin(
+            Lead,
+            and_(
+                Invoice.customer_id == Lead.lead_id,
+                Lead.org_id == org_id,
+            ),
+        )
         .where(Invoice.org_id == org_id)
     )
 
@@ -220,11 +238,23 @@ async def list_assignment_queue(
     cutoff = now + timedelta(days=days_ahead)
     urgent_cutoff = now + timedelta(hours=24)
 
-    # Build base query - unassigned bookings
+    # Build base query - unassigned bookings with explicit org_id constraints on joins
     stmt = (
         select(Booking, Lead, Team)
-        .outerjoin(Lead, Booking.lead_id == Lead.lead_id)
-        .join(Team, Booking.team_id == Team.team_id)
+        .outerjoin(
+            Lead,
+            and_(
+                Booking.lead_id == Lead.lead_id,
+                Lead.org_id == org_id,
+            ),
+        )
+        .join(
+            Team,
+            and_(
+                Booking.team_id == Team.team_id,
+                Team.org_id == org_id,
+            ),
+        )
         .where(
             Booking.org_id == org_id,
             Booking.assigned_worker_id.is_(None),
@@ -295,24 +325,42 @@ async def list_dlq(
 ) -> tuple[list[DLQItem], int, dict[str, int]]:
     """Fetch dead letter queue items (failed outbox + export events).
 
+    Uses SQL-level pagination with UNION ALL for scalability.
+
     Returns:
         (items, total, counts) where counts = {outbox_dead, export_dead}
     """
+    # Get counts first (always fetch both for display)
+    outbox_count_stmt = (
+        select(func.count())
+        .select_from(OutboxEvent)
+        .where(OutboxEvent.org_id == org_id, OutboxEvent.status == "dead")
+    )
+    outbox_dead_count = (await session.execute(outbox_count_stmt)).scalar_one()
+
+    export_count_stmt = (
+        select(func.count())
+        .select_from(ExportEvent)
+        .where(
+            ExportEvent.org_id == org_id,
+            ExportEvent.last_error_code.is_not(None),
+        )
+    )
+    export_dead_count = (await session.execute(export_count_stmt)).scalar_one()
+
     items = []
 
-    # Fetch outbox dead letters
-    outbox_dead_count = 0
-    if kind_filter in ("outbox", "all"):
+    # Handle single-kind filters with SQL pagination
+    if kind_filter == "outbox":
         outbox_stmt = (
             select(OutboxEvent)
             .where(OutboxEvent.org_id == org_id, OutboxEvent.status == "dead")
             .order_by(OutboxEvent.created_at.desc())
+            .limit(limit)
+            .offset(offset)
         )
-        if kind_filter == "outbox":
-            outbox_stmt = outbox_stmt.limit(limit).offset(offset)
         outbox_result = await session.execute(outbox_stmt)
         outbox_events = outbox_result.scalars().all()
-        outbox_dead_count = len(outbox_events)
 
         for event in outbox_events:
             payload_summary = _summarize_payload(event.kind, event.payload_json)
@@ -333,10 +381,9 @@ async def list_dlq(
                     ],
                 )
             )
+        total = outbox_dead_count
 
-    # Fetch export dead letters (events with errors)
-    export_dead_count = 0
-    if kind_filter in ("export", "all"):
+    elif kind_filter == "export":
         export_stmt = (
             select(ExportEvent)
             .where(
@@ -344,12 +391,11 @@ async def list_dlq(
                 ExportEvent.last_error_code.is_not(None),
             )
             .order_by(ExportEvent.created_at.desc())
+            .limit(limit)
+            .offset(offset)
         )
-        if kind_filter == "export":
-            export_stmt = export_stmt.limit(limit).offset(offset)
         export_result = await session.execute(export_stmt)
         export_events = export_result.scalars().all()
-        export_dead_count = len(export_events)
 
         for event in export_events:
             payload_summary = f"Lead export ({event.mode}): {event.target_url_host or 'unknown'}"
@@ -370,13 +416,109 @@ async def list_dlq(
                     ],
                 )
             )
+        total = export_dead_count
 
-    # Sort combined items by created_at desc
-    items.sort(key=lambda x: x.created_at, reverse=True)
+    else:
+        # kind_filter == "all": Use SQL UNION ALL for combined pagination
+        # Create aligned subqueries for UNION ALL
+        from sqlalchemy import literal, union_all
 
-    # Apply pagination to combined list
-    total = len(items)
-    items = items[offset : offset + limit]
+        # Outbox subquery: select needed fields + discriminator
+        outbox_subq = (
+            select(
+                OutboxEvent.event_id.label("event_id"),
+                literal("outbox").label("kind"),
+                OutboxEvent.kind.label("event_type"),
+                OutboxEvent.org_id.label("org_id"),
+                OutboxEvent.status.label("status"),
+                OutboxEvent.attempts.label("attempts"),
+                OutboxEvent.last_error.label("last_error"),
+                OutboxEvent.created_at.label("created_at"),
+                OutboxEvent.payload_json.label("payload_json"),
+                literal(None).label("mode"),
+                literal(None).label("target_url_host"),
+            )
+            .where(OutboxEvent.org_id == org_id, OutboxEvent.status == "dead")
+        )
+
+        # Export subquery: select aligned fields
+        export_subq = (
+            select(
+                ExportEvent.event_id.label("event_id"),
+                literal("export").label("kind"),
+                ExportEvent.mode.label("event_type"),
+                ExportEvent.org_id.label("org_id"),
+                literal("failed").label("status"),
+                ExportEvent.attempts.label("attempts"),
+                ExportEvent.last_error_code.label("last_error"),
+                ExportEvent.created_at.label("created_at"),
+                literal(None).label("payload_json"),
+                ExportEvent.mode.label("mode"),
+                ExportEvent.target_url_host.label("target_url_host"),
+            )
+            .where(
+                ExportEvent.org_id == org_id,
+                ExportEvent.last_error_code.is_not(None),
+            )
+        )
+
+        # UNION ALL and apply ordering + pagination at SQL level
+        combined_stmt = (
+            union_all(outbox_subq, export_subq)
+            .subquery()
+        )
+
+        paginated_stmt = (
+            select(combined_stmt)
+            .order_by(combined_stmt.c.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+
+        result = await session.execute(paginated_stmt)
+        rows = result.all()
+
+        for row in rows:
+            if row.kind == "outbox":
+                payload_summary = _summarize_payload(row.event_type, row.payload_json or {})
+                items.append(
+                    DLQItem(
+                        event_id=row.event_id,
+                        kind="outbox",
+                        event_type=row.event_type,
+                        org_id=str(row.org_id),
+                        status=row.status,
+                        attempts=row.attempts,
+                        last_error=row.last_error,
+                        created_at=row.created_at,
+                        payload_summary=payload_summary,
+                        quick_actions=[
+                            QuickActionItem(label="Replay", target=f"/v1/admin/outbox/{row.event_id}/replay", method="POST"),
+                            QuickActionItem(label="View Details", target=f"/v1/admin/outbox/{row.event_id}"),
+                        ],
+                    )
+                )
+            else:  # export
+                payload_summary = f"Lead export ({row.mode}): {row.target_url_host or 'unknown'}"
+                items.append(
+                    DLQItem(
+                        event_id=row.event_id,
+                        kind="export",
+                        event_type=row.event_type,
+                        org_id=str(row.org_id),
+                        status=f"error_{row.last_error}" if row.last_error else "failed",
+                        attempts=row.attempts,
+                        last_error=row.last_error,
+                        created_at=row.created_at,
+                        payload_summary=payload_summary,
+                        quick_actions=[
+                            QuickActionItem(label="Replay", target=f"/v1/admin/export-dead-letter/{row.event_id}/replay", method="POST"),
+                            QuickActionItem(label="View Details", target=f"/v1/admin/export-dead-letter/{row.event_id}"),
+                        ],
+                    )
+                )
+
+        total = outbox_dead_count + export_dead_count
 
     counts = {"outbox_dead": outbox_dead_count, "export_dead": export_dead_count}
     return items, total, counts
