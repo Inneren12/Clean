@@ -5,7 +5,7 @@ import asyncio
 import hmac
 import logging
 from datetime import date, datetime, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import secrets
 import uuid
 
@@ -44,6 +44,15 @@ def _calculate_tax(line_total_cents: int, tax_rate: Decimal | float | None) -> i
     rate_decimal = Decimal(str(tax_rate))
     quantized = (Decimal(line_total_cents) * rate_decimal).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     return int(quantized)
+
+
+def _is_taxable_rate(tax_rate: Decimal | float | None) -> bool:
+    if tax_rate is None:
+        return False
+    try:
+        return Decimal(str(tax_rate)) > 0
+    except (InvalidOperation, TypeError, ValueError):
+        return False
 
 
 async def generate_invoice_number(session: AsyncSession, issue_date: date) -> str:
@@ -93,6 +102,7 @@ async def create_invoice_from_order(
 
     subtotal = 0
     tax_total = 0
+    taxable_subtotal = 0
     invoice_items: list[InvoiceItem] = []
     for payload in items:
         if payload.qty <= 0:
@@ -103,6 +113,8 @@ async def create_invoice_from_order(
         line_tax = _calculate_tax(line_total, payload.tax_rate)
         subtotal += line_total
         tax_total += line_tax
+        if _is_taxable_rate(payload.tax_rate):
+            taxable_subtotal += line_total
         invoice_items.append(
             InvoiceItem(
                 description=payload.description,
@@ -113,6 +125,13 @@ async def create_invoice_from_order(
             )
         )
 
+    tax_rate_basis = (
+        (Decimal(tax_total) / Decimal(taxable_subtotal))
+        .quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+        if taxable_subtotal > 0
+        else None
+    )
+
     invoice = Invoice(
         invoice_number=invoice_number,
         order_id=order.booking_id,
@@ -122,7 +141,9 @@ async def create_invoice_from_order(
         due_date=due_date,
         currency=currency.upper(),
         subtotal_cents=subtotal,
+        taxable_subtotal_cents=taxable_subtotal,
         tax_cents=tax_total,
+        tax_rate_basis=tax_rate_basis,
         total_cents=subtotal + tax_total,
         notes=notes,
         created_by=created_by,
@@ -165,13 +186,23 @@ def _reconcile_snapshot(invoice: Invoice) -> dict:
 def recalculate_totals(invoice: Invoice) -> None:
     subtotal = 0
     tax_total = 0
+    taxable_subtotal = 0
     for item in invoice.items:
         subtotal += item.line_total_cents
         tax_total += _calculate_tax(item.line_total_cents, item.tax_rate)
+        if _is_taxable_rate(item.tax_rate):
+            taxable_subtotal += item.line_total_cents
 
     invoice.subtotal_cents = subtotal
+    invoice.taxable_subtotal_cents = taxable_subtotal
     invoice.tax_cents = tax_total
     invoice.total_cents = subtotal + tax_total
+    invoice.tax_rate_basis = (
+        (Decimal(tax_total) / Decimal(taxable_subtotal))
+        .quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+        if taxable_subtotal > 0
+        else None
+    )
 
 
 async def _refresh_invoice_payment_status(session: AsyncSession, invoice: Invoice) -> int:

@@ -2,11 +2,13 @@ import asyncio
 import base64
 import csv
 import io
+from decimal import Decimal
 from datetime import date, datetime, timezone
 
 from app.domain.bookings.db_models import Booking
 from app.domain.invoices import service as invoice_service
 from app.domain.invoices import statuses
+from app.domain.invoices.schemas import InvoiceItemCreate
 from app.domain.invoices.db_models import Invoice, Payment
 from app.domain.leads.db_models import Lead
 from app.domain.workers.db_models import Worker
@@ -69,7 +71,9 @@ def test_gst_and_exports(client, async_session_maker):
                 issue_date=date(2024, 1, 5),
                 currency="CAD",
                 subtotal_cents=10000,
+                taxable_subtotal_cents=10000,
                 tax_cents=500,
+                tax_rate_basis=Decimal("0.05"),
                 total_cents=10500,
             )
             session.add(invoice_one)
@@ -109,6 +113,7 @@ def test_gst_and_exports(client, async_session_maker):
                 issue_date=date(2024, 2, 1),
                 currency="CAD",
                 subtotal_cents=20000,
+                taxable_subtotal_cents=0,
                 tax_cents=0,
                 total_cents=20000,
             )
@@ -137,7 +142,9 @@ def test_gst_and_exports(client, async_session_maker):
                 issue_date=date(2024, 3, 1),
                 currency="CAD",
                 subtotal_cents=3000,
+                taxable_subtotal_cents=3000,
                 tax_cents=390,
+                tax_rate_basis=Decimal("0.13"),
                 total_cents=3390,
             )
             session.add(void_invoice)
@@ -155,7 +162,7 @@ def test_gst_and_exports(client, async_session_maker):
     assert gst_resp.status_code == 200
     gst_payload = gst_resp.json()
     assert gst_payload["invoice_count"] == 2
-    assert gst_payload["taxable_subtotal_cents"] == 30000
+    assert gst_payload["taxable_subtotal_cents"] == 10000
     assert gst_payload["tax_cents"] == 500
 
     sales_resp = client.get(
@@ -189,6 +196,76 @@ def test_gst_and_exports(client, async_session_maker):
     assert len(deposit_rows) == 1
     assert deposit_rows[0]["booking_id"] == deposit_payment.booking_id
     assert deposit_rows[0]["amount_cents"] == str(deposit_payment.amount_cents)
+
+
+def test_gst_report_uses_tax_snapshot(client, async_session_maker):
+    settings.admin_basic_username = "admin"
+    settings.admin_basic_password = "secret"
+
+    async def seed_invoice() -> str:
+        async with async_session_maker() as session:
+            lead = Lead(**_lead_payload("Snapshot Lead"))
+            session.add(lead)
+            await session.flush()
+
+            booking = Booking(
+                team_id=1,
+                lead_id=lead.lead_id,
+                starts_at=datetime(2024, 5, 1, 12, 0, tzinfo=timezone.utc),
+                duration_minutes=90,
+                status="DONE",
+            )
+            session.add(booking)
+            await session.flush()
+
+            invoice = await invoice_service.create_invoice_from_order(
+                session=session,
+                order=booking,
+                items=[
+                    InvoiceItemCreate(
+                        description="Taxed",
+                        qty=1,
+                        unit_price_cents=10000,
+                        tax_rate=Decimal("0.05"),
+                    ),
+                    InvoiceItemCreate(
+                        description="Non-taxed",
+                        qty=1,
+                        unit_price_cents=5000,
+                        tax_rate=None,
+                    ),
+                ],
+                issue_date=date(2024, 5, 1),
+                currency="CAD",
+            )
+            invoice.status = statuses.INVOICE_STATUS_SENT
+            lead.estimate_snapshot = {"tax_rate": "0.10"}
+            await session.commit()
+            return invoice.invoice_id
+
+    invoice_id = asyncio.run(seed_invoice())
+    headers = _auth_headers("admin", "secret")
+
+    resp = client.get(
+        "/v1/admin/reports/gst?from=2024-05-01&to=2024-05-31",
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["invoice_count"] == 1
+    assert payload["taxable_subtotal_cents"] == 10000
+    assert payload["tax_cents"] == 500
+
+    async def load_invoice() -> Invoice:
+        async with async_session_maker() as session:
+            invoice = await session.get(Invoice, invoice_id)
+            assert invoice is not None
+            return invoice
+
+    stored_invoice = asyncio.run(load_invoice())
+    assert stored_invoice.taxable_subtotal_cents == 10000
+    assert stored_invoice.tax_cents == 500
+    assert stored_invoice.tax_rate_basis == Decimal("0.05")
 
 
 def test_pnl_report(client, async_session_maker):
@@ -226,7 +303,9 @@ def test_pnl_report(client, async_session_maker):
                 issue_date=date(2024, 4, 10),
                 currency="CAD",
                 subtotal_cents=12000,
+                taxable_subtotal_cents=12000,
                 tax_cents=600,
+                tax_rate_basis=Decimal("0.05"),
                 total_cents=12600,
             )
             session.add(invoice)
