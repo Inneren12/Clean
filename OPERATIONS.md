@@ -82,6 +82,7 @@
 
 ## Backups and restores
 - Postgres backups should capture tenant-scoped tables (`org_id` columns). Use `scripts/backup_pg.sh` (custom format, no `--create`) and `scripts/restore_pg.sh` (supports `ALLOW_CREATE_IN_DUMP=1` when the dump was made with `--create`). Validate restore before releases; ensure `alembic_version` matches after restore.
+- Run the quarterly/local drill described in `docs/runbook_backup_restore_drill.md` to practice backup → restore → verification on a fresh database.
 
 - Storage backends: verify bucket access and signed URL keys; for local storage, include `order_upload_root` volume in backups.
 
