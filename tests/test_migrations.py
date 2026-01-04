@@ -101,3 +101,157 @@ def test_default_team_dedupe_is_fk_safe(tmp_path):
 
         booking_teams = conn.execute(sa.text("SELECT booking_id, team_id FROM bookings ORDER BY booking_id")).fetchall()
         assert booking_teams == [("b1", 1), ("b2", 3)]
+
+
+def test_invoice_tax_backfill_preserves_zero_tax_invoices(tmp_path):
+    db_path = tmp_path / "tax_backfill.db"
+    config = Config("alembic.ini")
+    original_database_url = settings.database_url
+
+    try:
+        settings.database_url = f"sqlite+aiosqlite:///{db_path}"
+        command.upgrade(config, "0048_admin_totp_mfa")
+
+        engine = create_engine(f"sqlite:///{db_path}")
+        default_org_id = str(settings.default_org_id)
+
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    """
+                    INSERT INTO invoices (
+                        invoice_id,
+                        invoice_number,
+                        order_id,
+                        customer_id,
+                        status,
+                        issue_date,
+                        due_date,
+                        currency,
+                        subtotal_cents,
+                        tax_cents,
+                        total_cents,
+                        notes,
+                        created_by,
+                        org_id
+                    ) VALUES (
+                        :invoice_id,
+                        :invoice_number,
+                        NULL,
+                        NULL,
+                        'PAID',
+                        '2025-01-01',
+                        '2025-01-15',
+                        'USD',
+                        :subtotal_cents,
+                        :tax_cents,
+                        :total_cents,
+                        NULL,
+                        'tester',
+                        :org_id
+                    )
+                    """
+                ),
+                {
+                    "invoice_id": "inv-no-tax",
+                    "invoice_number": "INV-001",
+                    "subtotal_cents": 10000,
+                    "tax_cents": 0,
+                    "total_cents": 10000,
+                    "org_id": default_org_id,
+                },
+            )
+            conn.execute(
+                sa.text(
+                    """
+                    INSERT INTO invoices (
+                        invoice_id,
+                        invoice_number,
+                        order_id,
+                        customer_id,
+                        status,
+                        issue_date,
+                        due_date,
+                        currency,
+                        subtotal_cents,
+                        tax_cents,
+                        total_cents,
+                        notes,
+                        created_by,
+                        org_id
+                    ) VALUES (
+                        :invoice_id,
+                        :invoice_number,
+                        NULL,
+                        NULL,
+                        'PAID',
+                        '2025-01-01',
+                        '2025-01-15',
+                        'USD',
+                        :subtotal_cents,
+                        :tax_cents,
+                        :total_cents,
+                        NULL,
+                        'tester',
+                        :org_id
+                    )
+                    """
+                ),
+                {
+                    "invoice_id": "inv-with-tax",
+                    "invoice_number": "INV-002",
+                    "subtotal_cents": 10000,
+                    "tax_cents": 500,
+                    "total_cents": 10500,
+                    "org_id": default_org_id,
+                },
+            )
+
+            for invoice_id in ["inv-no-tax", "inv-with-tax"]:
+                conn.execute(
+                    sa.text(
+                        """
+                        INSERT INTO invoice_items (
+                            invoice_id,
+                            description,
+                            qty,
+                            unit_price_cents,
+                            line_total_cents,
+                            tax_rate
+                        ) VALUES (
+                            :invoice_id,
+                            'Line item',
+                            1,
+                            10000,
+                            10000,
+                            NULL
+                        )
+                        """
+                    ),
+                    {"invoice_id": invoice_id},
+                )
+
+        command.upgrade(config, "head")
+    finally:
+        settings.database_url = original_database_url
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.connect() as conn:
+        rows = conn.execute(
+            sa.text(
+                """
+                SELECT invoice_id, taxable_subtotal_cents, tax_rate_basis
+                FROM invoices
+                WHERE invoice_id IN ('inv-no-tax', 'inv-with-tax')
+                ORDER BY invoice_id
+                """
+            )
+        ).fetchall()
+
+    assert rows[0].invoice_id == "inv-no-tax"
+    assert rows[0].taxable_subtotal_cents == 0
+    assert rows[0].tax_rate_basis is None
+
+    assert rows[1].invoice_id == "inv-with-tax"
+    assert rows[1].taxable_subtotal_cents == 10000
+    assert float(rows[1].tax_rate_basis) == pytest.approx(0.05)

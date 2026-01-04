@@ -45,6 +45,7 @@
 
 ## Invoice tax snapshots and reporting
 - Invoices store tax snapshots at creation time: `taxable_subtotal_cents` (sum of line totals with a positive tax rate), `tax_cents`, and `tax_rate_basis` (effective rate derived from the stored amounts). These values are persisted alongside `subtotal_cents` and are not recomputed from current org tax configs.
+- Backfill never treats zero-tax invoices as taxable; only invoices with `tax_cents > 0` infer `taxable_subtotal_cents` from the subtotal during historical migrations.
 - GST and P&L reports read the stored invoice snapshots, so changing org tax settings or estimate snapshots after issuing an invoice will not mutate historical tax totals. When editing invoice items, call `recalculate_totals` to refresh the stored snapshot fields from the invoice items.
 ### How to reconcile an invoice safely
 - Use finance credentials and call `POST /v1/admin/finance/invoices/{invoice_id}/reconcile` in the correct org context. The action locks the invoice row, recomputes succeeded manual/Stripe payments, and updates invoice status accordingly (PAID when succeeded funds cover total, PARTIAL when some funds exist, or SENT/OVERDUE when a PAID invoice has no settled funds and the due date has passed).
