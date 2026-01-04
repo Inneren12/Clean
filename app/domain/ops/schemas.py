@@ -69,6 +69,36 @@ class BlockSlotRequest(BaseModel):
     team_id: int | None = None
 
 
+class SuggestedTeam(BaseModel):
+    team_id: int
+    name: str
+
+
+class SuggestedWorker(BaseModel):
+    worker_id: int
+    name: str
+    team_id: int
+    team_name: str
+
+
+class ScheduleSuggestions(BaseModel):
+    teams: list[SuggestedTeam]
+    workers: list[SuggestedWorker]
+
+
+class ConflictDetail(BaseModel):
+    kind: str
+    reference: str
+    starts_at: datetime
+    ends_at: datetime
+    note: str | None = None
+
+
+class ConflictCheckResponse(BaseModel):
+    has_conflict: bool
+    conflicts: list[ConflictDetail]
+
+
 class BulkBookingsRequest(BaseModel):
     booking_ids: list[str]
     team_id: int | None = None

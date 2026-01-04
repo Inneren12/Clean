@@ -86,11 +86,14 @@ from app.domain.ops.schemas import (
     BulkBookingsRequest,
     BulkBookingsResponse,
     GlobalSearchResult,
+    ConflictCheckResponse,
+    ConflictDetail,
     JobStatusResponse,
     MoveBookingRequest,
     QuickActionModel,
     ScheduleBlackout,
     ScheduleBooking,
+    ScheduleSuggestions,
     ScheduleResponse,
     TemplatePreviewRequest,
     TemplatePreviewResponse,
@@ -835,6 +838,67 @@ async def list_schedule(
     org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
     payload = await ops_service.list_schedule(session, org_id, day, team_id)
     return ScheduleResponse(**payload)
+
+
+@router.get("/v1/admin/schedule/suggestions", response_model=ScheduleSuggestions)
+async def suggest_schedule(
+    request: Request,
+    starts_at: datetime,
+    ends_at: datetime,
+    skill_tags: list[str] | None = Query(None),
+    booking_id: str | None = None,
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_dispatch),
+) -> ScheduleSuggestions:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    try:
+        suggestions = await ops_service.suggest_schedule_resources(
+            session,
+            org_id,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            skill_tags=skill_tags,
+            exclude_booking_id=booking_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    return ScheduleSuggestions(**suggestions)
+
+
+@router.get("/v1/admin/schedule/conflicts", response_model=ConflictCheckResponse)
+async def check_schedule_conflicts(
+    request: Request,
+    starts_at: datetime,
+    ends_at: datetime,
+    team_id: int | None = None,
+    booking_id: str | None = None,
+    worker_id: int | None = None,
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_dispatch),
+) -> ConflictCheckResponse:
+    org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    try:
+        conflicts = await ops_service.check_schedule_conflicts(
+            session,
+            org_id,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            team_id=team_id,
+            booking_id=booking_id,
+            worker_id=worker_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    return ConflictCheckResponse(
+        has_conflict=bool(conflicts),
+        conflicts=[ConflictDetail(**conflict) for conflict in conflicts],
+    )
 
 
 @router.post("/v1/admin/schedule/{booking_id}/move", response_model=booking_schemas.AdminBookingListItem)
