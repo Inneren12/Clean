@@ -47,7 +47,7 @@ jobs:
 
     env:
       PRICING_CONFIG_PATH: pricing/economy_v1.json
-      APP_ENV: prod
+      APP_ENV: dev
       STRICT_CORS: "true"
       CORS_ORIGINS: https://example.com
       EXPORT_MODE: off
@@ -116,18 +116,12 @@ jobs:
           PY
 
       - name: Run migrations
-        env:
-          APP_ENV: dev
         run: alembic upgrade head
 
       - name: Run tests
-        env:
-          APP_ENV: dev
         run: pytest -q -m "not smoke and not migrations"
 
       - name: Run smoke marker
-        env:
-          APP_ENV: dev
         run: pytest -m smoke -vv
 
   migrations:
@@ -211,8 +205,6 @@ jobs:
           PY
 
       - name: Run migration invariants
-        env:
-          APP_ENV: dev
         run: pytest -q -m migrations tests/test_postgres_migrations.py
 
   web:
