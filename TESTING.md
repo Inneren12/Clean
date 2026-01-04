@@ -30,6 +30,7 @@ Defined in `pytest.ini`:
 - `.github/workflows/ci.yml` runs lint/unit/integration and migration checks; ensure new tests are deterministic.
 - `load-smoke.yml` provides load/smoke guidance; avoid adding long-running benchmarks.
 - Migration guardrails: `pytest -m "migrations"` enforces a single Alembic head (`test_alembic_has_single_head`) and upgradeability.
+- Migration hygiene: Alembic revision IDs must be unique; if two scripts declare the same `revision`, delete or merge the duplicate before running CI.
 
 ## Troubleshooting
 - If rate limiter blocks tests, set `RATE_LIMIT_PER_MINUTE` high or disable Redis to use in-memory limiter (`app/infra/security.py`).
