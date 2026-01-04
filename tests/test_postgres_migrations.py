@@ -48,7 +48,7 @@ def _temporary_postgres_database(base_url: str):
         pytest.skip(f"PostgreSQL unavailable for migration invariants: {exc}")
 
     try:
-        yield str(url.set(database=database_name))
+        yield url.set(database=database_name).render_as_string(hide_password=False)
     finally:
         with admin_engine.connect() as conn:
             conn.execute(
