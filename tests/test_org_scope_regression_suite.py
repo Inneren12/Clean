@@ -220,7 +220,7 @@ async def test_signed_photo_urls_are_org_scoped(client, async_session_maker, org
     fetch = client.get(signed_url)
     assert fetch.status_code == 200
 
-    stored_files = list(Path(upload_root / "org" / str(org_a) / "bookings" / booking_id).glob("*"))
+    stored_files = list(Path(upload_root / "orders" / str(org_a) / booking_id).glob("*"))
     assert stored_files, "file should be stored under the org namespace"
 
     settings.default_org_id = original_default_org

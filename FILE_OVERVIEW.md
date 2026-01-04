@@ -9,7 +9,7 @@
 ## Auth, identity, and org scoping
 - `app/api/saas_auth.py` – SaaS JWT auth, session validation, `TenantSessionMiddleware`, password-change gate, admin role mapping.
 - `app/api/org_context.py` – Resolves `org_id` from SaaS identity or defaults; raises 401 when required.
-- `app/api/entitlements.py` – Enforces per-org plan limits (workers/bookings/storage), records usage, supports `X-Test-Org` in testing.
+- `app/api/entitlements.py` – Enforces per-org plan limits (workers/bookings/storage), records usage, supports `X-Test-Org` only when running in testing or dev environments.
 - `app/api/admin_auth.py` – Basic Auth roles (owner/admin/dispatcher/finance/viewer), admin auditing middleware, permission helpers.
 - `app/api/worker_auth.py` – Worker token issuance/verification, portal session TTLs, and worker access middleware.
 - `app/api/routes_auth.py` – SaaS login/refresh/logout/me/password change endpoints and session lifecycle.

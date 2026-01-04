@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Callable, Tuple
 
@@ -26,20 +27,24 @@ def resolve_org_id(request: Request) -> uuid.UUID:
         set_current_org_id(resolved)
         return resolved
 
-    if settings.testing:
-        header_value = request.headers.get("X-Test-Org")
-        if header_value:
-            try:
-                org_uuid = uuid.UUID(header_value)
-            except Exception as exc:  # noqa: BLE001
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Invalid X-Test-Org header",
-                ) from exc
-            request.state.current_org_id = org_uuid
-            set_current_org_id(org_uuid)
-            return org_uuid
+    header_value = request.headers.get("X-Test-Org")
+    allow_test_header = settings.testing or settings.app_env == "dev"
+    if allow_test_header and header_value:
+        try:
+            org_uuid = uuid.UUID(header_value)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid X-Test-Org header",
+            ) from exc
+        request.state.current_org_id = org_uuid
+        set_current_org_id(org_uuid)
+        return org_uuid
+    if header_value and not allow_test_header:
+        logger = logging.getLogger(__name__)
+        logger.debug("ignored_test_org_header", extra={"extra": {"reason": "disabled"}})
     set_current_org_id(settings.default_org_id)
+    request.state.current_org_id = settings.default_org_id
     return settings.default_org_id
 
 

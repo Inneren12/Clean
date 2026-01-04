@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.export_events.db_models import ExportEvent
 from app.domain.outbox.db_models import OutboxEvent
 from app.infra.email import EmailAdapter
+from app.infra.logging import clear_log_context
 from app.settings import settings
 
 PENDING_STATUSES = {"pending", "retry"}
@@ -183,25 +184,28 @@ async def process_outbox(session: AsyncSession, adapters: OutboxAdapters, *, lim
     sent = 0
     dead = 0
     for event in events:
-        attempts = (event.attempts or 0) + 1
-        event.attempts = attempts
-        delivered, error = await _deliver_event(event, adapters)
-        if delivered:
-            event.status = "sent"
-            event.next_attempt_at = None
-            event.last_error = None
-            sent += 1
-        else:
-            event.last_error = error or "failed"
-            if attempts >= settings.outbox_max_attempts:
-                event.status = "dead"
+        try:
+            attempts = (event.attempts or 0) + 1
+            event.attempts = attempts
+            delivered, error = await _deliver_event(event, adapters)
+            if delivered:
+                event.status = "sent"
                 event.next_attempt_at = None
-                dead += 1
-                if event.kind == "export":
-                    session.add(_build_export_event(event))
+                event.last_error = None
+                sent += 1
             else:
-                event.status = "retry"
-                event.next_attempt_at = _next_attempt(attempts)
+                event.last_error = error or "failed"
+                if attempts >= settings.outbox_max_attempts:
+                    event.status = "dead"
+                    event.next_attempt_at = None
+                    dead += 1
+                    if event.kind == "export":
+                        session.add(_build_export_event(event))
+                else:
+                    event.status = "retry"
+                    event.next_attempt_at = _next_attempt(attempts)
+        finally:
+            clear_log_context()
     if events:
         await session.commit()
     return {"sent": sent, "dead": dead, "pending": len(events)}
