@@ -1,0 +1,26 @@
+# Example crontab for scheduled maintenance calls
+# Exported environment variables (edit to match your deployment):
+# API_BASE=https://api.example.com
+# ADMIN_BASIC_USERNAME=admin
+# ADMIN_BASIC_PASSWORD=changeme
+
+# Cleanup orphaned data daily at 04:00 UTC
+0 4 * * * curl -u "$ADMIN_BASIC_USERNAME:$ADMIN_BASIC_PASSWORD" -X POST "$API_BASE/v1/admin/cleanup"
+
+# Data retention cleanup daily at 02:00 UTC
+0 2 * * * curl -u "$ADMIN_BASIC_USERNAME:$ADMIN_BASIC_PASSWORD" -X POST "$API_BASE/v1/admin/retention/cleanup"
+
+# Email inbound scan every 5 minutes
+*/5 * * * * curl -u "$ADMIN_BASIC_USERNAME:$ADMIN_BASIC_PASSWORD" -X POST "$API_BASE/v1/admin/email-scan"
+
+# Replay export dead letters every 15 minutes
+*/15 * * * * curl -u "$ADMIN_BASIC_USERNAME:$ADMIN_BASIC_PASSWORD" -X POST "$API_BASE/v1/admin/export-dead-letter"
+
+# Replay outbox dead letters every 15 minutes
+*/15 * * * * curl -u "$ADMIN_BASIC_USERNAME:$ADMIN_BASIC_PASSWORD" -X POST "$API_BASE/v1/admin/outbox/dead-letter"
+
+# Optional: run storage janitor once daily via the job runner
+0 3 * * * cd /app && python -m app.jobs.run --job storage_janitor --once
+
+# Optional: run outbox delivery loop every minute (when not using another scheduler)
+* * * * * cd /app && python -m app.jobs.run --job outbox-delivery --once
