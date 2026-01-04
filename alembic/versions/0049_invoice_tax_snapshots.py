@@ -79,8 +79,9 @@ def upgrade() -> None:
     connection.execute(
         invoices.update()
         .where(invoices.c.taxable_subtotal_cents == 0)
+        .where(invoices.c.tax_cents > 0)
         .values(taxable_subtotal_cents=invoices.c.subtotal_cents)
-    )
+    )  # only infer taxable subtotal when tax was actually charged
 
     connection.execute(
         invoices.update()
