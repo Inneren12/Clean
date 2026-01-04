@@ -81,7 +81,7 @@ async def test_iam_reset_revokes_sessions(async_session_maker, client):
     reset_resp = client.post(
         f"/v1/iam/users/{worker.user_id}/reset-temp-password",
         json={"reason": "support"},
-        headers={"Authorization": f"Bearer {admin_token}"},
+        headers={"Authorization": f"Bearer {admin_token}", "Idempotency-Key": "reset-temp"},
     )
     assert reset_resp.status_code == 200
     new_temp = reset_resp.json()["temp_password"]
@@ -122,7 +122,7 @@ async def test_iam_org_scope_forbidden(async_session_maker, client):
     reset = client.post(
         f"/v1/iam/users/{user_b.user_id}/reset-temp-password",
         json={"reason": "cross"},
-        headers={"Authorization": f"Bearer {admin_a_token}"},
+        headers={"Authorization": f"Bearer {admin_a_token}", "Idempotency-Key": "cross-reset"},
     )
     assert reset.status_code == 403
 

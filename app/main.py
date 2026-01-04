@@ -273,6 +273,9 @@ def create_app(app_settings) -> FastAPI:
         app.state.services = state_services
 
         app.state.rate_limiter = getattr(app.state, "rate_limiter", None) or state_services.rate_limiter
+        app.state.action_rate_limiter = (
+            getattr(app.state, "action_rate_limiter", None) or state_services.action_rate_limiter
+        )
         app.state.metrics = getattr(app.state, "metrics", None) or state_services.metrics
         app.state.storage_backend = getattr(app.state, "storage_backend", None) or state_services.storage
         app.state.app_settings = getattr(app.state, "app_settings", app_settings)
@@ -283,6 +286,7 @@ def create_app(app_settings) -> FastAPI:
         app.state.stripe_client = getattr(app.state, "stripe_client", None) or state_services.stripe_client
         yield
         await app.state.rate_limiter.close()
+        await app.state.action_rate_limiter.close()
 
     app = FastAPI(title="Cleaning Economy Bot", version="1.0.0", lifespan=lifespan)
 

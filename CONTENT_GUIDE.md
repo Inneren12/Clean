@@ -29,6 +29,7 @@
 - **Photo/URL safety**: signed photo URLs must remain scoped/time-limited (`app/api/photo_tokens.py`, `app/infra/storage/backends.py`); do not expose raw storage paths.
 - **CSV/exports**: ensure CSV outputs are escaped and gated by auth; export webhooks must enforce allowlists (`app/infra/export.py`).
 - **Scheduling/bulk ops**: bulk assignment/status/reminder endpoints must stay org-scoped, record admin audits when changing states, and reuse booking service conflict rules/buffers when moving bookings or blocking time.
+- **Dangerous admin actions**: payment recording, email resends/replays, export/outbox replays, bulk booking updates, and IAM temp-password resets must be org-scoped, emit admin audit logs, and require an `Idempotency-Key` header backed by persistent request hashing.
 - **CSV injection prevention**: prefix cells beginning with `= + - @` or tabs to neutralize Excel formula execution and strip/normalize values before writing.
 - **Input validation**: keep Turnstile verification when `captcha_mode` is on; validate MIME/size for uploads.
 

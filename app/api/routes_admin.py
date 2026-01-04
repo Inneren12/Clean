@@ -19,6 +19,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import entitlements
+from app.api.idempotency import enforce_org_action_rate_limit, require_idempotency
 from app.api.admin_auth import (
     AdminIdentity,
     AdminPermission,
@@ -750,9 +751,17 @@ async def resend_last_email(
     booking_id: str,
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity = Depends(require_dispatch),
+    identity: AdminIdentity = Depends(require_dispatch),
 ) -> dict[str, str]:
     org_id = getattr(http_request.state, "org_id", None) or entitlements.resolve_org_id(http_request)
+    rate_limited = await enforce_org_action_rate_limit(http_request, org_id, "resend_email")
+    if rate_limited:
+        return rate_limited
+    idempotency = await require_idempotency(http_request, session, org_id, "resend_last_email")
+    if isinstance(idempotency, Response):
+        return idempotency
+    if idempotency.existing_response:
+        return idempotency.existing_response
     booking_result = await session.execute(
         select(Booking).where(Booking.booking_id == booking_id, Booking.org_id == org_id)
     )
@@ -762,11 +771,29 @@ async def resend_last_email(
 
     adapter = resolve_app_email_adapter(http_request.app)
     try:
-        return await email_service.resend_last_email(session, adapter, booking_id)
+        result = await email_service.resend_last_email(session, adapter, booking_id)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No prior email for booking") from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Email send failed") from exc
+
+    http_request.state.explicit_admin_audit = True
+    await audit_service.record_action(
+        session,
+        identity=identity,
+        action="booking_resend_email",
+        resource_type="booking",
+        resource_id=booking_id,
+        before=None,
+        after=result,
+    )
+    await idempotency.save_response(
+        session,
+        status_code=status.HTTP_202_ACCEPTED,
+        body=result,
+    )
+    await session.commit()
+    return result
 
 
 def _serialize_hit(hit) -> GlobalSearchResult:
@@ -872,9 +899,14 @@ async def bulk_update_bookings(
     request: Request,
     payload: BulkBookingsRequest,
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity = Depends(require_dispatch),
+    identity: AdminIdentity = Depends(require_dispatch),
 ) -> BulkBookingsResponse:
     org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    idempotency = await require_idempotency(request, session, org_id, "bulk_update_bookings")
+    if isinstance(idempotency, Response):
+        return idempotency
+    if idempotency.existing_response:
+        return idempotency.existing_response
     adapter = _email_adapter(request)
     result = await ops_service.bulk_update_bookings(
         session,
@@ -885,7 +917,24 @@ async def bulk_update_bookings(
         send_reminder=payload.send_reminder,
         adapter=adapter,
     )
-    return BulkBookingsResponse(**result)
+    response_body = BulkBookingsResponse(**result)
+    request.state.explicit_admin_audit = True
+    await audit_service.record_action(
+        session,
+        identity=identity,
+        action="bulk_update_bookings",
+        resource_type="booking",
+        resource_id=",".join(payload.booking_ids),
+        before=None,
+        after=response_body.model_dump(mode="json"),
+    )
+    await idempotency.save_response(
+        session,
+        status_code=status.HTTP_200_OK,
+        body=response_body.model_dump(mode="json"),
+    )
+    await session.commit()
+    return response_body
 
 
 async def _load_lead(session: AsyncSession, org_id, lead_id: str | None) -> Lead | None:
@@ -1000,14 +1049,40 @@ async def resend_email_event(
     event_id: str,
     request: Request,
     session: AsyncSession = Depends(get_db_session),
-    _identity: AdminIdentity = Depends(require_dispatch),
+    identity: AdminIdentity = Depends(require_dispatch),
 ) -> dict[str, str]:
     org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    rate_limited = await enforce_org_action_rate_limit(request, org_id, "resend_email")
+    if rate_limited:
+        return rate_limited
+    idempotency = await require_idempotency(request, session, org_id, "resend_email_event")
+    if isinstance(idempotency, Response):
+        return idempotency
+    if idempotency.existing_response:
+        return idempotency.existing_response
     adapter = _email_adapter(request)
     try:
-        return await ops_service.resend_email_event(session, adapter, org_id, event_id)
+        result = await ops_service.resend_email_event(session, adapter, org_id, event_id)
     except LookupError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email event not found")
+
+    request.state.explicit_admin_audit = True
+    await audit_service.record_action(
+        session,
+        identity=identity,
+        action="messaging_resend_email",
+        resource_type="email_event",
+        resource_id=str(event_id),
+        before=None,
+        after=result,
+    )
+    await idempotency.save_response(
+        session,
+        status_code=status.HTTP_202_ACCEPTED,
+        body=result,
+    )
+    await session.commit()
+    return result
 
 
 def _job_status_response(record: JobHeartbeat) -> JobStatusResponse:
@@ -1097,6 +1172,14 @@ async def replay_export_dead_letter(
     identity: AdminIdentity = Depends(require_admin),
 ) -> ExportReplayResponse:
     org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    rate_limited = await enforce_org_action_rate_limit(request, org_id, "export_replay")
+    if rate_limited:
+        return rate_limited
+    idempotency = await require_idempotency(request, session, org_id, "export_replay")
+    if isinstance(idempotency, Response):
+        return idempotency
+    if idempotency.existing_response:
+        return idempotency.existing_response
     org_uuid = uuid.UUID(str(org_id)) if org_id else None
     result = await session.execute(
         select(ExportEvent).where(ExportEvent.event_id == event_id, *_org_scope_filters(org_uuid, ExportEvent))
@@ -1130,7 +1213,7 @@ async def replay_export_dead_letter(
     event.last_replayed_by = identity.username
     await session.commit()
 
-    return ExportReplayResponse(
+    response_body = ExportReplayResponse(
         event_id=event.event_id,
         success=success,
         attempts=attempts,
@@ -1138,6 +1221,23 @@ async def replay_export_dead_letter(
         last_replayed_at=event.last_replayed_at,
         last_replayed_by=event.last_replayed_by or identity.username,
     )
+    request.state.explicit_admin_audit = True
+    await audit_service.record_action(
+        session,
+        identity=identity,
+        action="export_replay",
+        resource_type="export_event",
+        resource_id=event_id,
+        before=None,
+        after=response_body.model_dump(mode="json"),
+    )
+    await idempotency.save_response(
+        session,
+        status_code=status.HTTP_202_ACCEPTED,
+        body=response_body.model_dump(mode="json"),
+    )
+    await session.commit()
+    return response_body
 
 
 @router.get("/v1/admin/outbox/dead-letter", response_model=List[OutboxEventResponse])
@@ -1180,9 +1280,17 @@ async def replay_outbox_dead_letter(
     event_id: str,
     request: Request,
     session: AsyncSession = Depends(get_db_session),
-    _admin: AdminIdentity = Depends(require_admin),
+    admin: AdminIdentity = Depends(require_admin),
 ) -> OutboxReplayResponse:
     org_id = getattr(request.state, "org_id", None) or entitlements.resolve_org_id(request)
+    rate_limited = await enforce_org_action_rate_limit(request, org_id, "outbox_replay")
+    if rate_limited:
+        return rate_limited
+    idempotency = await require_idempotency(request, session, org_id, "outbox_replay")
+    if isinstance(idempotency, Response):
+        return idempotency
+    if idempotency.existing_response:
+        return idempotency.existing_response
     org_uuid = uuid.UUID(str(org_id)) if org_id else None
     result = await session.execute(
         select(OutboxEvent).where(OutboxEvent.event_id == event_id, *_org_scope_filters(org_uuid, OutboxEvent))
@@ -1191,13 +1299,30 @@ async def replay_outbox_dead_letter(
     if event is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Outbox event not found")
     await replay_outbox_event(session, event)
-    return OutboxReplayResponse(
+    response_body = OutboxReplayResponse(
         event_id=event.event_id,
         status=event.status,
         next_attempt_at=event.next_attempt_at,
         attempts=event.attempts,
         last_error=event.last_error,
     )
+    request.state.explicit_admin_audit = True
+    await audit_service.record_action(
+        session,
+        identity=admin,
+        action="outbox_replay",
+        resource_type="outbox_event",
+        resource_id=str(event_id),
+        before=None,
+        after=response_body.model_dump(mode="json"),
+    )
+    await idempotency.save_response(
+        session,
+        status_code=status.HTTP_202_ACCEPTED,
+        body=response_body.model_dump(mode="json"),
+    )
+    await session.commit()
+    return response_body
 
 
 @router.post("/v1/admin/retention/cleanup")
@@ -3463,10 +3588,10 @@ async def mark_invoice_paid(
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
     _csrf: None = Depends(require_csrf),
-    _admin: AdminIdentity = Depends(require_finance),
+    admin: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.ManualPaymentResult:
     org_id = entitlements.resolve_org_id(http_request)
-    return await _record_manual_invoice_payment(invoice_id, request, session, org_id)
+    return await _record_manual_invoice_payment(invoice_id, request, session, org_id, admin)
 
 
 @router.post(
@@ -3480,10 +3605,22 @@ async def record_manual_invoice_payment(
     http_request: Request,
     session: AsyncSession = Depends(get_db_session),
     _csrf: None = Depends(require_csrf),
-    _admin: AdminIdentity = Depends(require_finance),
+    admin: AdminIdentity = Depends(require_finance),
 ) -> invoice_schemas.ManualPaymentResult:
     org_id = entitlements.resolve_org_id(http_request)
-    return await _record_manual_invoice_payment(invoice_id, request, session, org_id)
+    idempotency = await require_idempotency(http_request, session, org_id, "record_payment")
+    if isinstance(idempotency, Response):
+        return idempotency
+    if idempotency.existing_response:
+        return idempotency.existing_response
+    result = await _record_manual_invoice_payment(invoice_id, request, session, org_id, admin)
+    await idempotency.save_response(
+        session,
+        status_code=status.HTTP_201_CREATED,
+        body=result.model_dump(mode="json"),
+    )
+    await session.commit()
+    return result
 
 
 async def _record_manual_invoice_payment(
@@ -3491,6 +3628,7 @@ async def _record_manual_invoice_payment(
     request: invoice_schemas.ManualPaymentRequest,
     session: AsyncSession,
     org_id: uuid.UUID,
+    admin_identity: AdminIdentity | None = None,
 ) -> invoice_schemas.ManualPaymentResult:
     invoice = await _get_org_invoice(
         session,
@@ -3500,6 +3638,11 @@ async def _record_manual_invoice_payment(
     )
     if invoice is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
+
+    before_snapshot = {
+        "status": invoice.status,
+        "payments": [payment.payment_id for payment in invoice.payments],
+    }
 
     try:
         payment = await invoice_service.record_manual_payment(
@@ -3534,10 +3677,21 @@ async def _record_manual_invoice_payment(
         reference=payment.reference,
         created_at=payment.created_at,
     )
-    return invoice_schemas.ManualPaymentResult(
+    response_body = invoice_schemas.ManualPaymentResult(
         invoice=_invoice_response(refreshed_invoice),
         payment=payment_data,
     )
+    if admin_identity:
+        await audit_service.record_action(
+            session,
+            identity=admin_identity,
+            action="invoice_record_payment",
+            resource_type="invoice",
+            resource_id=invoice_id,
+            before=before_snapshot,
+            after=response_body.model_dump(mode="json"),
+        )
+    return response_body
 
 
 @router.get("/api/admin/tickets", response_model=nps_schemas.TicketListResponse)

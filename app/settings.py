@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     )
     redis_url: str | None = Field(None)
     rate_limit_per_minute: int = Field(30)
+    admin_action_rate_limit_per_minute: int = Field(5)
     rate_limit_cleanup_minutes: int = Field(10)
     rate_limit_fail_open_seconds: int = Field(300)
     rate_limit_redis_probe_seconds: float = Field(5.0)
