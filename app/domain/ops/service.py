@@ -290,10 +290,89 @@ async def _team_for_org(session: AsyncSession, org_id, team_id: int | None) -> T
     if team_id:
         team = await session.get(Team, team_id)
     if team is None:
-        team = await ensure_default_team(session)
+        team = await ensure_default_team(session, org_id)
     if getattr(team, "org_id", None) != org_id:
         raise PermissionError("Team does not belong to org")
     return team
+
+
+async def _team_conflicts(
+    session: AsyncSession,
+    team: Team,
+    window_start: datetime,
+    window_end: datetime,
+    *,
+    exclude_booking_id: str | None = None,
+) -> list[dict[str, object]]:
+    conflicts: list[dict[str, object]] = []
+    for booking in await _blocking_bookings(
+        session, team.team_id, window_start, window_end, exclude_booking_id=exclude_booking_id
+    ):
+        if _conflicts(
+            _normalize(booking.starts_at), booking.duration_minutes, window_start, (window_end - window_start).seconds // 60
+        ):
+            conflicts.append(
+                {
+                    "kind": "booking",
+                    "reference": booking.booking_id,
+                    "starts_at": _normalize(booking.starts_at),
+                    "ends_at": _normalize(booking.starts_at) + timedelta(minutes=booking.duration_minutes),
+                    "note": "existing booking",
+                }
+            )
+
+    blackout_stmt = select(TeamBlackout).where(
+        TeamBlackout.team_id == team.team_id,
+        TeamBlackout.starts_at < window_end,
+        TeamBlackout.ends_at > window_start,
+    )
+    for blackout in (await session.execute(blackout_stmt)).scalars().all():
+        conflicts.append(
+            {
+                "kind": "blackout",
+                "reference": str(blackout.id),
+                "starts_at": _normalize(blackout.starts_at),
+                "ends_at": _normalize(blackout.ends_at),
+                "note": blackout.reason,
+            }
+        )
+
+    return conflicts
+
+
+async def _worker_conflicts(
+    session: AsyncSession,
+    worker: Worker,
+    window_start: datetime,
+    window_end: datetime,
+    *,
+    exclude_booking_id: str | None = None,
+) -> list[dict[str, object]]:
+    conflicts: list[dict[str, object]] = []
+    stmt = select(Booking).where(
+        Booking.org_id == worker.org_id,
+        Booking.assigned_worker_id == worker.worker_id,
+        Booking.starts_at < window_end + timedelta(minutes=BUFFER_MINUTES),
+        Booking.starts_at > window_start - timedelta(minutes=BUFFER_MINUTES),
+        Booking.status.in_(BLOCKING_STATUSES),
+    )
+    if exclude_booking_id:
+        stmt = stmt.where(Booking.booking_id != exclude_booking_id)
+
+    for booking in (await session.execute(stmt)).scalars().all():
+        if _conflicts(
+            _normalize(booking.starts_at), booking.duration_minutes, window_start, (window_end - window_start).seconds // 60
+        ):
+            conflicts.append(
+                {
+                    "kind": "worker_booking",
+                    "reference": booking.booking_id,
+                    "starts_at": _normalize(booking.starts_at),
+                    "ends_at": _normalize(booking.starts_at) + timedelta(minutes=booking.duration_minutes),
+                    "note": "worker has a conflicting booking",
+                }
+            )
+    return conflicts
 
 
 async def list_schedule(
@@ -343,6 +422,103 @@ async def list_schedule(
         ],
         "available_slots": [_normalize(slot) for slot in slots],
     }
+
+
+async def suggest_schedule_resources(
+    session: AsyncSession,
+    org_id,
+    *,
+    starts_at: datetime,
+    ends_at: datetime,
+    skill_tags: list[str] | None = None,
+    exclude_booking_id: str | None = None,
+) -> dict[str, list[dict[str, object]]]:
+    normalized_start = _normalize(starts_at)
+    normalized_end = _normalize(ends_at)
+    if normalized_end <= normalized_start:
+        raise ValueError("invalid_window")
+
+    stmt = select(Team).where(Team.org_id == org_id).order_by(Team.team_id)
+    teams = (await session.execute(stmt)).scalars().all()
+    if not teams:
+        teams = [await ensure_default_team(session, org_id)]
+
+    skill_terms = [tag.lower().strip() for tag in (skill_tags or []) if tag]
+    available_teams: list[dict[str, object]] = []
+    team_conflicts: dict[int, list[dict[str, object]]] = {}
+
+    for team in teams:
+        conflicts = await _team_conflicts(
+            session, team, normalized_start, normalized_end, exclude_booking_id=exclude_booking_id
+        )
+        team_conflicts[team.team_id] = conflicts
+        if not conflicts:
+            available_teams.append({"team_id": team.team_id, "name": team.name})
+
+    worker_stmt: Select = (
+        select(Worker, Team.name)
+        .join(Team, Worker.team_id == Team.team_id)
+        .where(Team.org_id == org_id)
+        .where(Worker.is_active.is_(True))
+        .order_by(Worker.worker_id)
+    )
+    available_workers: list[dict[str, object]] = []
+    for worker, team_name in (await session.execute(worker_stmt)).all():
+        role_text = (worker.role or "").lower()
+        if skill_terms and not all(term in role_text for term in skill_terms):
+            continue
+
+        team_conflict = team_conflicts.get(worker.team_id, [])
+        worker_conflict = await _worker_conflicts(
+            session, worker, normalized_start, normalized_end, exclude_booking_id=exclude_booking_id
+        )
+        if team_conflict or worker_conflict:
+            continue
+
+        available_workers.append(
+            {
+                "worker_id": worker.worker_id,
+                "name": worker.name,
+                "team_id": worker.team_id,
+                "team_name": team_name,
+            }
+        )
+
+    return {"teams": available_teams, "workers": available_workers}
+
+
+async def check_schedule_conflicts(
+    session: AsyncSession,
+    org_id,
+    *,
+    starts_at: datetime,
+    ends_at: datetime,
+    team_id: int | None = None,
+    booking_id: str | None = None,
+    worker_id: int | None = None,
+) -> list[dict[str, object]]:
+    normalized_start = _normalize(starts_at)
+    normalized_end = _normalize(ends_at)
+    if normalized_end <= normalized_start:
+        raise ValueError("invalid_window")
+
+    team = await _team_for_org(session, org_id, team_id)
+    conflicts = await _team_conflicts(
+        session, team, normalized_start, normalized_end, exclude_booking_id=booking_id
+    )
+
+    if worker_id is not None:
+        worker = await session.get(Worker, worker_id)
+        if worker is None:
+            raise LookupError("worker_not_found")
+        if worker.org_id != org_id:
+            raise PermissionError("Cross-org worker access blocked")
+        worker_conflicts = await _worker_conflicts(
+            session, worker, normalized_start, normalized_end, exclude_booking_id=booking_id
+        )
+        conflicts.extend(worker_conflicts)
+
+    return conflicts
 
 
 async def move_booking(

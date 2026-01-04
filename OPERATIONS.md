@@ -11,6 +11,10 @@
 ## Scheduler templates
 - Cron and Cloudflare Scheduler examples live in `scripts/cron_examples/` with a runbook in `docs/runbook_scheduler.md`.
 
+## Scheduling v2 endpoints & usage
+- **Suggestions:** `GET /v1/admin/schedule/suggestions` (dispatcher credentials required) returns available teams and workers for a start/end window. Optional `skill_tags` filter workers by matching role text and `booking_id` excludes the in-flight booking from overlap calculations. Responses are org-scoped and omit workers whose teams are blocked by bookings/blackouts.
+- **Conflict checks:** `GET /v1/admin/schedule/conflicts` (dispatcher credentials required) surfaces blocking bookings, blackouts, or worker conflicts for the provided window. Supports optional `team_id`, `booking_id` (to ignore the current booking), and `worker_id` to validate an assignment. Returns Problem+JSON 403 for cross-org access attempts and 422 for invalid windows.
+
 ## Accounting export v1
 - Finance-only CSV export is available at `/v1/admin/exports/accounting.csv` with optional `from`, `to`, and repeated `status` query parameters. Totals come from stored invoice snapshots (taxable_subtotal_cents, tax_cents, total_cents) plus succeeded payments and balances; CSV cells are injection-hardened.
 - Schedule monthly exports by adding `--job accounting-export` to the jobs runner (defaults to the previous calendar month). When `EXPORT_MODE=webhook` and `EXPORT_WEBHOOK_URL` is set the job enqueues an outbox export webhook; otherwise the CSV artifact is stored in `export_events` with `mode=accounting_csv` for review.
