@@ -273,10 +273,21 @@ async def _blocking_bookings(
     *,
     exclude_booking_id: str | None = None,
 ) -> Iterable[Booking]:
+    bind = session.get_bind()
+    booking_end = Booking.ends_at if hasattr(Booking, "ends_at") else None
+    if booking_end is None:
+        if bind and bind.dialect.name == "sqlite":
+            booking_end = func.datetime(
+                Booking.starts_at, func.printf("+%d minutes", Booking.duration_minutes)
+            )
+        else:
+            booking_end = Booking.starts_at + func.make_interval(mins=Booking.duration_minutes)
+
+    buffer_delta = timedelta(minutes=BUFFER_MINUTES)
     stmt = select(Booking).where(
         Booking.team_id == team_id,
-        Booking.starts_at < window_end + timedelta(minutes=BUFFER_MINUTES),
-        Booking.starts_at > window_start - timedelta(minutes=BUFFER_MINUTES),
+        Booking.starts_at < window_end + buffer_delta,
+        booking_end > window_start - buffer_delta,
         Booking.status.in_(BLOCKING_STATUSES),
     )
     if exclude_booking_id:
@@ -349,11 +360,22 @@ async def _worker_conflicts(
     exclude_booking_id: str | None = None,
 ) -> list[dict[str, object]]:
     conflicts: list[dict[str, object]] = []
+    bind = session.get_bind()
+    booking_end = Booking.ends_at if hasattr(Booking, "ends_at") else None
+    if booking_end is None:
+        if bind and bind.dialect.name == "sqlite":
+            booking_end = func.datetime(
+                Booking.starts_at, func.printf("+%d minutes", Booking.duration_minutes)
+            )
+        else:
+            booking_end = Booking.starts_at + func.make_interval(mins=Booking.duration_minutes)
+
+    buffer_delta = timedelta(minutes=BUFFER_MINUTES)
     stmt = select(Booking).where(
         Booking.org_id == worker.org_id,
         Booking.assigned_worker_id == worker.worker_id,
-        Booking.starts_at < window_end + timedelta(minutes=BUFFER_MINUTES),
-        Booking.starts_at > window_start - timedelta(minutes=BUFFER_MINUTES),
+        Booking.starts_at < window_end + buffer_delta,
+        booking_end > window_start - buffer_delta,
         Booking.status.in_(BLOCKING_STATUSES),
     )
     if exclude_booking_id:

@@ -12,6 +12,7 @@ from app.domain.analytics.db_models import EventLog
 from app.domain.bookings.db_models import Booking
 from app.domain.leads.db_models import Lead
 from app.domain.nps.db_models import NpsResponse
+from app.domain.invoices import statuses as invoice_statuses
 from app.domain.invoices.db_models import Payment
 
 
@@ -190,7 +191,7 @@ async def funnel_summary(
     )
     paid_stmt = select(func.count()).select_from(Payment).where(
         Payment.org_id == org_id,
-        Payment.status.in_(["succeeded", "paid", "succeeded_pending", "succeeded_with_delay"]),
+        Payment.status == invoice_statuses.PAYMENT_STATUS_SUCCEEDED,
         Payment.received_at.isnot(None),
         Payment.received_at >= start,
         Payment.received_at <= end,

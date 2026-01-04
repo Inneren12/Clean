@@ -7,6 +7,7 @@ from app.settings import settings
 from app.domain.saas.db_models import Organization
 from app.domain.bookings.db_models import Booking, Team
 from app.domain.leads.db_models import Lead
+from app.domain.invoices import statuses as invoice_statuses
 from app.domain.invoices.db_models import Payment
 from app.domain.nps.db_models import NpsResponse
 from app.domain.clients.db_models import ClientUser
@@ -92,11 +93,31 @@ def test_funnel_analytics_are_org_scoped_and_private(client, async_session_maker
                 method="card",
                 amount_cents=1000,
                 currency="USD",
-                status="succeeded",
+                status=invoice_statuses.PAYMENT_STATUS_SUCCEEDED,
                 received_at=now - timedelta(hours=1),
                 org_id=org_a,
             )
-            session.add(payment_a)
+            payment_b = Payment(
+                booking_id=booking_b.booking_id,
+                provider="test",
+                method="card",
+                amount_cents=2000,
+                currency="USD",
+                status=invoice_statuses.PAYMENT_STATUS_SUCCEEDED,
+                received_at=now - timedelta(hours=2),
+                org_id=org_b,
+            )
+            pending_payment = Payment(
+                booking_id=booking_a.booking_id,
+                provider="test",
+                method="card",
+                amount_cents=500,
+                currency="USD",
+                status=invoice_statuses.PAYMENT_STATUS_PENDING,
+                received_at=now - timedelta(hours=3),
+                org_id=org_a,
+            )
+            session.add_all([payment_a, payment_b, pending_payment])
             await session.commit()
 
     asyncio.run(_seed())
@@ -114,7 +135,9 @@ def test_funnel_analytics_are_org_scoped_and_private(client, async_session_maker
     assert body["counts"]["bookings"] == 1
     assert body["counts"]["completed"] == 1
     assert body["counts"]["paid"] == 1
+    assert body["counts"]["paid"] > 0
     assert body["conversion_rates"]["lead_to_booking"] == 1.0
+    assert body["counts"]["paid"] != 2  # org B payment should not be counted
     serialized = json.dumps(body)
     assert "Lead A" not in serialized
     assert "a@example.com" not in serialized
