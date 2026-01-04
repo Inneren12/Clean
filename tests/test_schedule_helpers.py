@@ -5,7 +5,7 @@ import uuid
 import pytest
 
 from app.domain.bookings.db_models import Booking, TeamBlackout, Team
-from app.domain.bookings.service import ensure_default_team
+from app.domain.bookings.service import BUFFER_MINUTES, ensure_default_team
 from app.domain.saas.db_models import Organization
 from app.domain.workers.db_models import Worker
 from app.settings import settings
@@ -61,6 +61,44 @@ async def test_conflict_check_catches_overlap(client, async_session_maker):
     assert body["has_conflict"] is True
     kinds = {item["kind"] for item in body["conflicts"]}
     assert {"booking", "blackout"}.issubset(kinds)
+
+
+@pytest.mark.anyio
+async def test_conflict_check_includes_spanning_bookings(client, async_session_maker):
+    async with async_session_maker() as session:
+        team = await ensure_default_team(session)
+        window_start = dt.datetime.now(tz=dt.timezone.utc) + dt.timedelta(days=1)
+        window_end = window_start + dt.timedelta(minutes=60)
+        spanning_start = window_start - dt.timedelta(minutes=45)
+
+        overlapping_booking = Booking(
+            team_id=team.team_id,
+            starts_at=spanning_start,
+            duration_minutes=120,
+            status="CONFIRMED",
+        )
+        outside_booking = Booking(
+            team_id=team.team_id,
+            starts_at=window_end + dt.timedelta(minutes=BUFFER_MINUTES + 30),
+            duration_minutes=45,
+            status="CONFIRMED",
+        )
+        session.add_all([overlapping_booking, outside_booking])
+        await session.commit()
+
+    headers = _basic_auth("dispatch", "secret")
+    params = {
+        "starts_at": window_start.isoformat(),
+        "ends_at": window_end.isoformat(),
+        "team_id": team.team_id,
+    }
+    resp = client.get("/v1/admin/schedule/conflicts", headers=headers, params=params)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["has_conflict"] is True
+    references = {conflict["reference"] for conflict in body["conflicts"]}
+    assert overlapping_booking.booking_id in references
+    assert outside_booking.booking_id not in references
 
 
 @pytest.mark.anyio
