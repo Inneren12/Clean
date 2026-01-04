@@ -113,12 +113,18 @@ jobs:
           PY
 
       - name: Run migrations
+        env:
+          APP_ENV: dev
         run: alembic upgrade head
 
       - name: Run tests
+        env:
+          APP_ENV: dev
         run: pytest -q -m "not smoke and not migrations"
 
       - name: Run smoke marker
+        env:
+          APP_ENV: dev
         run: pytest -m smoke -vv
 
   migrations:
