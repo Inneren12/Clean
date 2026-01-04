@@ -35,17 +35,16 @@ async def get_booking_timeline(
     """
     events: list[TimelineEvent] = []
 
-    # Fetch admin audit logs for this booking
+    # Fetch admin audit logs for this booking (exact match only for safety)
+    # Limit to prevent unbounded queries
     audit_stmt = (
         select(AdminAuditLog)
         .where(
             AdminAuditLog.org_id == org_id,
-            or_(
-                AdminAuditLog.resource_id == booking_id,
-                AdminAuditLog.resource_id.like(f"%{booking_id}%"),  # For related resources
-            ),
+            AdminAuditLog.resource_id == booking_id,
         )
         .order_by(AdminAuditLog.created_at.desc())
+        .limit(100)  # Cap audit log entries
     )
     audit_logs = (await session.execute(audit_stmt)).scalars().all()
     for audit in audit_logs:
@@ -69,6 +68,7 @@ async def get_booking_timeline(
         select(EmailEvent)
         .where(EmailEvent.org_id == org_id, EmailEvent.booking_id == booking_id)
         .order_by(EmailEvent.created_at.desc())
+        .limit(100)  # Cap email events
     )
     email_events = (await session.execute(email_stmt)).scalars().all()
     for email in email_events:
@@ -78,7 +78,7 @@ async def get_booking_timeline(
                 event_type="email_sent",
                 timestamp=email.created_at,
                 actor="system",
-                action=f"Sent {email.email_type} email to {email.recipient}",
+                action=f"Sent {email.email_type} email",
                 resource_type="booking",
                 resource_id=booking_id,
                 metadata={
@@ -94,6 +94,7 @@ async def get_booking_timeline(
         select(Payment)
         .where(Payment.org_id == org_id, Payment.booking_id == booking_id)
         .order_by(Payment.created_at.desc())
+        .limit(50)  # Cap payment events
     )
     payments = (await session.execute(payment_stmt)).scalars().all()
     for payment in payments:
@@ -121,6 +122,7 @@ async def get_booking_timeline(
         select(OrderPhoto)
         .where(OrderPhoto.org_id == org_id, OrderPhoto.order_id == booking_id)
         .order_by(OrderPhoto.created_at.desc())
+        .limit(100)  # Cap photo events
     )
     photos = (await session.execute(photo_stmt)).scalars().all()
     for photo in photos:
@@ -162,12 +164,23 @@ async def get_booking_timeline(
             )
 
     # Fetch NPS responses for this booking
-    nps_stmt = (
-        select(NpsResponse)
-        .where(NpsResponse.order_id == booking_id)
-        .order_by(NpsResponse.created_at.desc())
+    # NpsResponse doesn't have org_id, but order_id is unique and FK to bookings
+    # Verify booking belongs to org before querying NPS
+    booking_check = (
+        select(Booking.booking_id)
+        .where(Booking.booking_id == booking_id, Booking.org_id == org_id)
     )
-    nps_responses = (await session.execute(nps_stmt)).scalars().all()
+    booking_exists = (await session.execute(booking_check)).scalar_one_or_none()
+
+    nps_responses = []
+    if booking_exists:
+        nps_stmt = (
+            select(NpsResponse)
+            .where(NpsResponse.order_id == booking_id)
+            .order_by(NpsResponse.created_at.desc())
+            .limit(10)  # Cap NPS responses (should be max 1 per booking anyway)
+        )
+        nps_responses = (await session.execute(nps_stmt)).scalars().all()
     for nps in nps_responses:
         events.append(
             TimelineEvent(
@@ -186,12 +199,17 @@ async def get_booking_timeline(
         )
 
     # Fetch support tickets for this booking
-    ticket_stmt = (
-        select(SupportTicket)
-        .where(SupportTicket.order_id == booking_id)
-        .order_by(SupportTicket.created_at.desc())
-    )
-    tickets = (await session.execute(ticket_stmt)).scalars().all()
+    # SupportTicket doesn't have org_id, but order_id is FK to bookings
+    # Already verified booking belongs to org above
+    tickets = []
+    if booking_exists:
+        ticket_stmt = (
+            select(SupportTicket)
+            .where(SupportTicket.order_id == booking_id)
+            .order_by(SupportTicket.created_at.desc())
+            .limit(50)  # Cap support tickets
+        )
+        tickets = (await session.execute(ticket_stmt)).scalars().all()
     for ticket in tickets:
         events.append(
             TimelineEvent(
@@ -212,11 +230,20 @@ async def get_booking_timeline(
         )
 
     # Fetch outbox events related to this booking
+    # Use exact match on dedupe_key where possible, or structured prefix pattern
+    # Dedupe keys follow pattern: {kind}:{org_id}:{resource_type}:{resource_id}
+    # For booking-related events, look for exact resource_id match only
     outbox_stmt = (
         select(OutboxEvent)
-        .where(OutboxEvent.org_id == org_id, OutboxEvent.dedupe_key.like(f"%{booking_id}%"))
+        .where(
+            OutboxEvent.org_id == org_id,
+            or_(
+                OutboxEvent.dedupe_key.like(f"%:booking:{booking_id}"),
+                OutboxEvent.dedupe_key.like(f"%:order:{booking_id}"),
+            ),
+        )
         .order_by(OutboxEvent.created_at.desc())
-        .limit(20)  # Limit outbox events to avoid too many
+        .limit(50)  # Cap outbox events
     )
     outbox_events = (await session.execute(outbox_stmt)).scalars().all()
     for outbox in outbox_events:
@@ -256,17 +283,15 @@ async def get_invoice_timeline(
     """
     events: list[TimelineEvent] = []
 
-    # Fetch admin audit logs for this invoice
+    # Fetch admin audit logs for this invoice (exact match only for safety)
     audit_stmt = (
         select(AdminAuditLog)
         .where(
             AdminAuditLog.org_id == org_id,
-            or_(
-                AdminAuditLog.resource_id == invoice_id,
-                AdminAuditLog.resource_id.like(f"%{invoice_id}%"),
-            ),
+            AdminAuditLog.resource_id == invoice_id,
         )
         .order_by(AdminAuditLog.created_at.desc())
+        .limit(100)  # Cap audit log entries
     )
     audit_logs = (await session.execute(audit_stmt)).scalars().all()
     for audit in audit_logs:
@@ -290,6 +315,7 @@ async def get_invoice_timeline(
         select(EmailEvent)
         .where(EmailEvent.org_id == org_id, EmailEvent.invoice_id == invoice_id)
         .order_by(EmailEvent.created_at.desc())
+        .limit(100)  # Cap email events
     )
     email_events = (await session.execute(email_stmt)).scalars().all()
     for email in email_events:
@@ -299,7 +325,7 @@ async def get_invoice_timeline(
                 event_type="email_sent",
                 timestamp=email.created_at,
                 actor="system",
-                action=f"Sent {email.email_type} email to {email.recipient}",
+                action=f"Sent {email.email_type} email",
                 resource_type="invoice",
                 resource_id=invoice_id,
                 metadata={
@@ -315,6 +341,7 @@ async def get_invoice_timeline(
         select(Payment)
         .where(Payment.org_id == org_id, Payment.invoice_id == invoice_id)
         .order_by(Payment.created_at.desc())
+        .limit(50)  # Cap payment events
     )
     payments = (await session.execute(payment_stmt)).scalars().all()
     for payment in payments:
@@ -338,11 +365,15 @@ async def get_invoice_timeline(
         )
 
     # Fetch outbox events related to this invoice
+    # Use structured prefix pattern instead of arbitrary substring match
     outbox_stmt = (
         select(OutboxEvent)
-        .where(OutboxEvent.org_id == org_id, OutboxEvent.dedupe_key.like(f"%{invoice_id}%"))
+        .where(
+            OutboxEvent.org_id == org_id,
+            OutboxEvent.dedupe_key.like(f"%:invoice:{invoice_id}"),
+        )
         .order_by(OutboxEvent.created_at.desc())
-        .limit(20)
+        .limit(50)  # Cap outbox events
     )
     outbox_events = (await session.execute(outbox_stmt)).scalars().all()
     for outbox in outbox_events:
