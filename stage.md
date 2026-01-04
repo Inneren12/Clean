@@ -48,7 +48,7 @@
 - [ ] Configure secrets: auth/portal/photo/metrics secrets, admin credentials, Stripe keys + webhook secret, email/SMTP or SendGrid keys.
 - [ ] Run DB: apply migrations via `make migrate`; verify `alembic_version` matches `alembic heads`.
 - [ ] Seed pricing config and verify estimator response.
-- [ ] Start jobs: schedule cleanup/email/retention/export tasks; enable `job_heartbeat_required` if monitoring heartbeats.
+- [ ] Start jobs: schedule cleanup/email/retention/export tasks **and** outbox DLQ handling (`/v1/admin/outbox/dead-letter` or the `outbox-delivery` loop); enable `job_heartbeat_required` if monitoring heartbeats.
 - [ ] Verify health: `/healthz` returns ok; `/readyz` shows DB+migrations OK and job heartbeat fresh.
 - [ ] Exercise smokes: lead intake with captcha (if enabled), booking with deposit to Stripe webhook, admin metrics CSV, worker photo upload + signed URL access.
 - [ ] Confirm backups/restore runbook executed.
