@@ -76,7 +76,7 @@
 - `.github/workflows/ci.yml` – Test pipeline running lint/tests/migrations; `load-smoke.yml` for load smoke; `deploy_cloudflare.yml` for deployment.
 - `ops/prometheus/alerts.yml` – Prometheus alert examples for latency/errors/health/jobs/DLQ.
 - `scripts/backup_pg.sh` / `scripts/restore_pg.sh` – Postgres backup/restore helpers (custom-format dumps, no `--create` by default; `ALLOW_CREATE_IN_DUMP` gate for create-in-dump restores).
-- Runbooks: `docs/runbook_monitoring.md`, `docs/runbook_incidents.md`, `docs/runbook_backup_restore.md` for ops procedures.
+- Runbooks: `docs/runbook_monitoring.md`, `docs/runbook_incidents.md`, `docs/runbook_backup_restore.md`, `docs/runbook_backup_restore_drill.md` for ops procedures.
 
 ## Frontend
 - `web/app/page.tsx` – Chat UI entry.
