@@ -15,7 +15,7 @@
 ## Authorization & RBAC
 - **Admin roles**: OWNER/ADMIN/DISPATCHER/FINANCE/VIEWER map to permissions in `admin_auth.py` and SaaS membership roles in `saas_auth.py`.
 - **SaaS entitlements**: per-plan limits for workers/bookings/storage enforced via dependencies in `app/api/entitlements.py` backed by `app/domain/saas/billing_service.py`.
-- **Org scoping**: `request.state.current_org_id` populated by SaaS tokens or `default_org_id`; DB queries filter by `org_id` on every joined table. Admin finance/report/export endpoints (`/v1/admin/reports/*`, `/v1/admin/exports/*`, `/v1/admin/export-dead-letter`) and payments are constrained to the caller's org via `_org_scope_filters` and `resolve_org_id`.
+- **Org scoping**: `request.state.current_org_id` populated by SaaS tokens or `default_org_id`; DB queries filter by `org_id` on every joined table. Admin finance/report/export/reconciliation endpoints (`/v1/admin/reports/*`, `/v1/admin/exports/*`, `/v1/admin/export-dead-letter`, `/v1/admin/finance/reconcile/*`) and payments are constrained to the caller's org via `_org_scope_filters` and `resolve_org_id`.
 - **Postgres row-level security**: As a safety net, RLS is enabled for org-owned tables (leads, bookings, invoices, invoice_payments, workers, teams, order_photos, export_events, email_events). Each request sets a context var-backed `app.current_org_id` and `SET LOCAL app.current_org_id = '<uuid>'` runs at transaction start for Postgres connections. Queries must continue to include explicit `org_id` filters; RLS blocks cross-org access if a filter is missed. SQLite runs without RLS for local testing.
 
 ## Session and token handling

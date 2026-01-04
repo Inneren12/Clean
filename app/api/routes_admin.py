@@ -1707,6 +1707,23 @@ async def admin_gst_report(
     )
 
 
+@router.get(
+    "/v1/admin/finance/reconcile/invoices",
+    response_model=invoice_schemas.InvoiceReconcileListResponse,
+)
+async def list_invoice_reconcile_items(
+    request: Request,
+    status: Literal["mismatch", "all"] = Query("mismatch"),
+    session: AsyncSession = Depends(get_db_session),
+    _identity: AdminIdentity = Depends(require_finance),
+) -> invoice_schemas.InvoiceReconcileListResponse:
+    org_id = entitlements.resolve_org_id(request)
+    cases = await invoice_service.list_invoice_reconcile_items(
+        session, org_id, include_all=status == "all"
+    )
+    return invoice_schemas.InvoiceReconcileListResponse(items=cases)
+
+
 @router.get("/v1/admin/exports/sales-ledger.csv")
 async def export_sales_ledger(
     request: Request,

@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import asyncio
 import hmac
 import logging
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
-import hashlib
 import secrets
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +25,9 @@ from app.domain.invoices.db_models import (
     InvoicePublicToken,
     Payment,
 )
+from app.domain.invoices import schemas as invoice_schemas
 from app.domain.invoices.schemas import InvoiceItemCreate
+from app.domain.queues.schemas import QuickActionItem
 from app.domain.leads.db_models import Lead
 from app.settings import settings
 
@@ -460,3 +462,79 @@ def build_public_invoice_view(invoice: Invoice, lead: Lead | None) -> dict:
         "address": getattr(lead, "address", None),
     }
     return {"invoice": invoice_data, "customer": customer}
+
+
+async def list_invoice_reconcile_items(
+    session: AsyncSession, org_id: uuid.UUID, *, include_all: bool = False
+) -> list[invoice_schemas.InvoiceReconcileItem]:
+    payments_subquery = (
+        select(
+            Payment.invoice_id.label("invoice_id"),
+            func.count(Payment.payment_id)
+            .filter(Payment.status == statuses.PAYMENT_STATUS_SUCCEEDED)
+            .label("succeeded_payments_count"),
+            func.coalesce(
+                func.sum(Payment.amount_cents)
+                .filter(Payment.status == statuses.PAYMENT_STATUS_SUCCEEDED),
+                0,
+            ).label("succeeded_amount_cents"),
+            func.max(Payment.received_at).label("last_payment_at"),
+        )
+        .where(Payment.invoice_id.is_not(None), Payment.org_id == org_id)
+        .group_by(Payment.invoice_id)
+    ).subquery()
+
+    succeeded_count = func.coalesce(payments_subquery.c.succeeded_payments_count, 0)
+    succeeded_amount = func.coalesce(payments_subquery.c.succeeded_amount_cents, 0)
+    outstanding_expr = case(
+        (Invoice.total_cents - succeeded_amount < 0, 0),
+        else_=Invoice.total_cents - succeeded_amount,
+    ).label("outstanding_cents")
+
+    stmt = (
+        select(
+            Invoice.invoice_id,
+            Invoice.invoice_number,
+            Invoice.status,
+            Invoice.total_cents,
+            outstanding_expr,
+            succeeded_count.label("succeeded_payments_count"),
+            payments_subquery.c.last_payment_at,
+        )
+        .outerjoin(payments_subquery, payments_subquery.c.invoice_id == Invoice.invoice_id)
+        .where(Invoice.org_id == org_id)
+        .order_by(Invoice.created_at.desc())
+    )
+
+    mismatch_condition = or_(
+        and_(Invoice.status != statuses.INVOICE_STATUS_PAID, succeeded_count >= 1),
+        and_(Invoice.status == statuses.INVOICE_STATUS_PAID, succeeded_count == 0),
+        succeeded_count > 1,
+    )
+
+    if not include_all:
+        stmt = stmt.where(mismatch_condition)
+
+    result = await session.execute(stmt)
+    cases: list[invoice_schemas.InvoiceReconcileItem] = []
+    for row in result.all():
+        cases.append(
+            invoice_schemas.InvoiceReconcileItem(
+                invoice_id=row.invoice_id,
+                invoice_number=row.invoice_number,
+                status=row.status,
+                total_cents=int(row.total_cents),
+                outstanding_cents=int(row.outstanding_cents or 0),
+                succeeded_payments_count=int(row.succeeded_payments_count or 0),
+                last_payment_at=row.last_payment_at,
+                quick_actions=[
+                    QuickActionItem(
+                        label="Reconcile",
+                        target=f"/v1/admin/finance/reconcile/invoices/{row.invoice_id}",
+                        method="POST",
+                    )
+                ],
+            )
+        )
+
+    return cases

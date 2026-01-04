@@ -5,6 +5,7 @@ from typing import List
 from pydantic import BaseModel, Field, field_validator
 
 from app.domain.invoices import statuses
+from app.domain.queues.schemas import QuickActionItem
 
 
 class InvoiceItemCreate(BaseModel):
@@ -186,3 +187,18 @@ class PnlReportResponse(BaseModel):
     range_start: date
     range_end: date
     rows: list[PnlRow]
+
+
+class InvoiceReconcileItem(BaseModel):
+    invoice_id: str
+    invoice_number: str
+    status: str
+    total_cents: int
+    outstanding_cents: int
+    succeeded_payments_count: int
+    last_payment_at: datetime | None = None
+    quick_actions: list[QuickActionItem] = Field(default_factory=list)
+
+
+class InvoiceReconcileListResponse(BaseModel):
+    items: list[InvoiceReconcileItem]

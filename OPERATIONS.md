@@ -38,6 +38,11 @@
 - Metrics middleware records HTTP latency/5xx counts (`app/main.py`, `app/infra/metrics.py`). When metrics are enabled, `/v1/metrics` router exposes admin-protected metrics export.
 - Job metrics: `job_last_heartbeat_timestamp`, `job_last_success_timestamp`, and `job_errors_total` track scheduler health. View aggregated status via `/v1/admin/jobs/status`.
 
+## How to detect invoice mismatches
+- Finance-only read endpoint: `GET /v1/admin/finance/reconcile/invoices?status=mismatch` (or `status=all` to include clean invoices) returns invoices where payments and invoice status disagree. Basic Auth finance roles or SaaS FINANCE tokens are required.
+- Org isolation: requests are scoped by the resolved org (`X-Test-Org` in dev/tests) and will not surface invoices from other tenants.
+- Response fields include payment counts, last payment timestamp, and quick action placeholders pointing at `/v1/admin/finance/reconcile/invoices/{invoice_id}` for future remediation workflows.
+
 ## Incident read-only + break-glass procedure
 1. **Enable admin read-only:** set `ADMIN_READ_ONLY=true` (config/env and restart) to block POST/PUT/PATCH/DELETE on `/v1/admin/*` and `/v1/iam/*` with 409 Problem+JSON while investigations run. IP allowlists remain enforced.
 2. **Start a break-glass session:** an OWNER/ADMIN calls `POST /v1/admin/break-glass/start` with `{"reason": "<incident summary>", "ttl_minutes": <minutes>}`. The API returns a one-time token and expiry; store it securely and never log it. The token is hashed at rest and scoped to the caller's org.
